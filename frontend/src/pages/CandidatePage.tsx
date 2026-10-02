@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import {
+  DepthCurve,
   EmptyState,
   ErrorBanner,
   JsonDetails,
@@ -201,6 +202,21 @@ export function CandidatePage({
   const stability = rowsByWorkload.map((row) => row["throughput.cv"]).find(
     (value): value is number => typeof value === "number"
   );
+  const decodeCurve = rowsByWorkload
+    .filter(
+      (row) =>
+        row.workload_kind === "microbench-decode" &&
+        typeof row.depth_tokens === "number" &&
+        typeof row["throughput.median"] === "number"
+    )
+    .map((row) => ({
+      depth: row.depth_tokens as number,
+      throughput: row["throughput.median"] as number,
+      label: workloadLabel(
+        experiment.workload_suite.cases[row.suite_case_index],
+        row.suite_case_index
+      )
+    }));
 
   return (
     <main className="page">
@@ -341,6 +357,18 @@ export function CandidatePage({
           ) : (
             <EmptyState title="No completed microbenchmarks for this Candidate." />
           )}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-body">
+          <div className="eyebrow">Decode scaling</div>
+          <h2>Throughput by active context depth</h2>
+          <p className="section-copy">
+            The curve uses only measured decode workloads for this Candidate; no
+            synthetic depth points are inserted.
+          </p>
+          <DepthCurve points={decodeCurve} />
         </div>
       </section>
 

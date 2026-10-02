@@ -1037,3 +1037,71 @@ select:disabled {
     max-width: none;
   }
 }
+
+.curve-line {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.comparison-metric {
+  max-width: 360px;
+  margin-bottom: 16px;
+}
+
+.comparison-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 9px;
+}
+
+.comparison-candidate {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfe;
+  cursor: pointer;
+}
+
+.comparison-candidate.is-selected {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.comparison-candidate.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.comparison-candidate input {
+  width: 17px;
+  min-height: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.comparison-candidate strong,
+.comparison-candidate small {
+  display: block;
+}
+
+.comparison-candidate small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.comparison-table td strong,
+.comparison-table td small {
+  display: block;
+}
+
+.comparison-delta {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}

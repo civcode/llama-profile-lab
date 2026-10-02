@@ -276,6 +276,9 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
         actions={
           <>
             <StatusBadge status={progress.experiment_status} />
+            <a className="button" href={"#/experiments/" + experiment.id + "/compare"}>
+              Compare Candidates
+            </a>
             <a className="button" href="#/">
               All experiments
             </a>
@@ -305,9 +308,21 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
           note={"System " + numberMetric(latest, "telemetry.cpu_system_avg_pct") + "%"}
         />
         <MetricCard
-          label="GPU / VRAM"
+          label="GPU utilization"
           value={numberMetric(latest, "telemetry.gpu_utilization_avg_pct") + "%"}
-          note={bytes(latest["telemetry.gpu_vram_used_peak_bytes"])}
+          note={
+            "Power " +
+            numberMetric(latest, "telemetry.gpu_power_avg_w") +
+            " W"
+          }
+        />
+        <MetricCard
+          label="Memory"
+          value={bytes(latest["telemetry.gpu_vram_used_peak_bytes"])}
+          note={
+            "RAM " +
+            bytes(latest["telemetry.ram_used_peak_bytes"])
+          }
         />
         <MetricCard
           label="Thermals"

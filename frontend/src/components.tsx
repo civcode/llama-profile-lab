@@ -197,6 +197,68 @@ export function ParetoPlot({ result }: { result: ParetoResult }) {
   );
 }
 
+export function DepthCurve({
+  points
+}: {
+  points: { depth: number; throughput: number; label: string }[];
+}) {
+  if (points.length < 2) {
+    return <EmptyState title="Decode depth curve needs at least two depth observations." />;
+  }
+  const sorted = points.slice().sort((a, b) => a.depth - b.depth);
+  const depths = sorted.map((item) => item.depth);
+  const throughputs = sorted.map((item) => item.throughput);
+  const minDepth = Math.min(...depths);
+  const maxDepth = Math.max(...depths);
+  const minThroughput = Math.min(...throughputs);
+  const maxThroughput = Math.max(...throughputs);
+  const scale = (
+    value: number,
+    min: number,
+    max: number,
+    start: number,
+    end: number
+  ) => (max === min ? (start + end) / 2 : start + ((value - min) / (max - min)) * (end - start));
+  const coordinates = sorted.map((item) => ({
+    ...item,
+    x: scale(item.depth, minDepth, maxDepth, 58, 492),
+    y: scale(item.throughput, minThroughput, maxThroughput, 238, 34)
+  }));
+  const path = coordinates
+    .map((item, index) => (index === 0 ? "M" : "L") + item.x + " " + item.y)
+    .join(" ");
+
+  return (
+    <div className="pareto-plot">
+      <svg viewBox="0 0 520 290" role="img" aria-label="Decode throughput by active context depth">
+        <line x1="52" y1="244" x2="498" y2="244" className="axis" />
+        <line x1="52" y1="24" x2="52" y2="244" className="axis" />
+        <path d={path} className="curve-line" />
+        {coordinates.map((item) => (
+          <g key={item.depth + ":" + item.label}>
+            <circle cx={item.x} cy={item.y} r="6" className="pareto-point" />
+            <text x={item.x + 8} y={item.y - 8} className="point-label">
+              {item.throughput.toFixed(1)}
+            </text>
+          </g>
+        ))}
+        <text x="275" y="280" textAnchor="middle" className="axis-label">
+          active context depth (tokens)
+        </text>
+        <text
+          x="16"
+          y="138"
+          textAnchor="middle"
+          className="axis-label"
+          transform="rotate(-90 16 138)"
+        >
+          tokens/s
+        </text>
+      </svg>
+    </div>
+  );
+}
+
 export function JsonDetails({
   label = "Advanced details",
   value

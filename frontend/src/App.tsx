@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CandidatePage } from "./pages/CandidatePage";
+import { ComparisonPage } from "./pages/ComparisonPage";
 import { ExperimentPage } from "./pages/ExperimentPage";
 import { ExperimentsPage } from "./pages/ExperimentsPage";
 import { NewExperimentPage } from "./pages/NewExperimentPage";
@@ -8,6 +9,7 @@ type Route =
   | { kind: "experiments" }
   | { kind: "new" }
   | { kind: "experiment"; experimentId: string }
+  | { kind: "comparison"; experimentId: string }
   | { kind: "candidate"; experimentId: string; candidateId: string };
 
 function parseRoute(hash: string): Route {
@@ -16,6 +18,9 @@ function parseRoute(hash: string): Route {
   if (value === "new") return { kind: "new" };
   const parts = value.split("/").filter(Boolean);
   if (parts[0] === "experiments" && parts[1]) {
+    if (parts[2] === "compare") {
+      return { kind: "comparison", experimentId: parts[1] };
+    }
     if (parts[2] === "candidates" && parts[3]) {
       return {
         kind: "candidate",
@@ -59,6 +64,9 @@ export function App() {
       {route.kind === "new" ? <NewExperimentPage /> : null}
       {route.kind === "experiment" ? (
         <ExperimentPage experimentId={route.experimentId} />
+      ) : null}
+      {route.kind === "comparison" ? (
+        <ComparisonPage experimentId={route.experimentId} />
       ) : null}
       {route.kind === "candidate" ? (
         <CandidatePage

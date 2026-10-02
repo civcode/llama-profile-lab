@@ -9,6 +9,10 @@ describe("hash routing", () => {
       kind: "experiment",
       experimentId: "exp-1"
     });
+    expect(parseRoute("#/experiments/exp-1/compare")).toEqual({
+      kind: "comparison",
+      experimentId: "exp-1"
+    });
     expect(parseRoute("#/experiments/exp-1/candidates/cand-2")).toEqual({
       kind: "candidate",
       experimentId: "exp-1",
