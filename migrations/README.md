@@ -1,6 +1,6 @@
 # SQLite migrations
 
-Numbered SQL migrations will live in this directory beginning with M2.
+Numbered SQL migrations live in this directory.
 
 Naming convention:
 
@@ -10,4 +10,6 @@ Naming convention:
 003_<description>.sql
 ~~~
 
-Schema changes must be forward migrations rather than ad-hoc `CREATE TABLE IF NOT EXISTS` changes.
+The migration runner records each applied migration's version, name, and SHA-256 checksum in the `schema_migration` table. Applied migration files are immutable: changing the contents of an already-applied migration is treated as an error.
+
+Schema changes must therefore be forward migrations rather than ad-hoc `CREATE TABLE IF NOT EXISTS` changes.
