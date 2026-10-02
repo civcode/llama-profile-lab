@@ -18,6 +18,7 @@ from llama_profile_lab.domain import (
 from llama_profile_lab.llama import CapabilitySet
 from llama_profile_lab.llama.bench import (
     LlamaBenchAdapter,
+    LlamaBenchConfigurationError,
     LlamaBenchParseError,
     parse_llama_bench_json,
 )
@@ -122,6 +123,33 @@ def test_parser_rejects_unexpected_sample_count() -> None:
     with pytest.raises(LlamaBenchParseError, match="sample count"):
         parse_llama_bench_json(text, expected_repetitions=5)
 
+
+def test_parser_rejects_malformed_json() -> None:
+    with pytest.raises(LlamaBenchParseError, match="invalid llama-bench JSON"):
+        parse_llama_bench_json("{not-json", expected_repetitions=3)
+
+
+def test_adapter_rejects_binary_missing_required_argument() -> None:
+    missing_batch = CapabilitySet(
+        kind="llama-bench",
+        options=capabilities().options - {"--batch-size"},
+        help_stdout="",
+        help_stderr="",
+        help_exit_code=0,
+    )
+
+    with pytest.raises(
+        LlamaBenchConfigurationError,
+        match="required option --batch-size",
+    ):
+        LlamaBenchAdapter().build_argv(
+            binary_path=Path("/bin/llama-bench"),
+            capabilities=missing_batch,
+            model_path=Path("/models/fake.gguf"),
+            candidate=candidate(),
+            workload=DecodeWorkloadCase(generate_tokens=256, depth_tokens=4096),
+            measurement_policy=MeasurementPolicy(repetitions=3),
+        )
 
 
 def test_resolved_placement_is_authoritative_for_bench_argv() -> None:
