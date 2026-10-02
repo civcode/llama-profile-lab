@@ -9,8 +9,14 @@ from pathlib import Path
 from typing import cast
 
 from llama_profile_lab import __version__
-from llama_profile_lab.db import Database, EnvironmentRepository
+from llama_profile_lab.db import BenchmarkRunRepository, Database, EnvironmentRepository
 from llama_profile_lab.db.records import BinaryRecord
+from llama_profile_lab.execution import (
+    ExecutionError,
+    ExecutionSummary,
+    ExperimentExecutor,
+    HostLockError,
+)
 from llama_profile_lab.llama import (
     BinaryDiscoveryError,
     BinaryKind,
@@ -40,15 +46,19 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command")
     _add_experiment_parser(commands)
     _add_binary_parser(commands)
+    _add_run_parser(commands)
     return parser
 
 
-def _add_experiment_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_experiment_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     experiment = commands.add_parser(
         "experiment",
-        help="Create, plan, and manage experiments.",
+        help="Create, plan, execute, and resume experiments.",
     )
     experiment_commands = experiment.add_subparsers(dest="experiment_command")
+
     plan = experiment_commands.add_parser(
         "plan",
         help="Expand and persist a draft experiment without executing benchmarks.",
@@ -56,8 +66,54 @@ def _add_experiment_parser(commands: argparse._SubParsersAction[argparse.Argumen
     plan.add_argument("experiment_id", help="Persisted experiment ID to plan.")
     _add_database_argument(plan)
 
+    run = experiment_commands.add_parser(
+        "run",
+        help="Execute incomplete planned cases with a registered llama-bench binary.",
+    )
+    _add_execution_arguments(run)
 
-def _add_binary_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    resume = experiment_commands.add_parser(
+        "resume",
+        help="Recover stale attempts and execute only cases without a successful run.",
+    )
+    _add_execution_arguments(resume)
+
+
+def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("experiment_id")
+    parser.add_argument(
+        "--binary",
+        required=True,
+        dest="binary_id",
+        help="Registered llama-bench binary ID.",
+    )
+    parser.add_argument(
+        "--model-path",
+        required=True,
+        type=Path,
+        help=(
+            "Target GGUF path for this M5 execution. "
+            "Model-registry path resolution is introduced later."
+        ),
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=None,
+        help="Optional timeout for each llama-bench case.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Execute at most this many incomplete cases, then pause.",
+    )
+    _add_database_argument(parser)
+
+
+def _add_binary_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     binary = commands.add_parser(
         "binary",
         help="Discover and inspect llama.cpp executables.",
@@ -110,6 +166,27 @@ def _add_binary_parser(commands: argparse._SubParsersAction[argparse.ArgumentPar
     _add_database_argument(compare)
 
 
+def _add_run_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    run = commands.add_parser(
+        "run",
+        help="Inspect persisted benchmark runs.",
+    )
+    run_commands = run.add_subparsers(dest="run_command")
+    show = run_commands.add_parser(
+        "show",
+        help="Show one benchmark attempt with samples and normalized metrics.",
+    )
+    show.add_argument("run_id")
+    show.add_argument(
+        "--logs",
+        action="store_true",
+        help="Include captured stdout/stderr.",
+    )
+    _add_database_argument(show)
+
+
 def _add_database_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--database",
@@ -132,6 +209,92 @@ def _plan_command(database_path: Path, experiment_id: str) -> int:
     return 0
 
 
+def _execute_command(
+    database_path: Path,
+    experiment_id: str,
+    *,
+    binary_id: str,
+    model_path: Path,
+    timeout_seconds: float | None,
+    limit: int | None,
+    resume: bool,
+) -> int:
+    try:
+        summary = ExperimentExecutor(Database(database_path)).execute(
+            experiment_id,
+            binary_id=binary_id,
+            model_path=model_path,
+            timeout_seconds=timeout_seconds,
+            limit=limit,
+            resume=resume,
+        )
+    except (ExecutionError, HostLockError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(_render_execution_summary(summary))
+    if summary.interrupted:
+        return 130
+    if summary.failed and not summary.limited:
+        return 1
+    return 0
+
+
+def _render_execution_summary(summary: ExecutionSummary) -> str:
+    state = "interrupted" if summary.interrupted else "paused" if summary.limited else "done"
+    return "\n".join(
+        (
+            f"Experiment: {summary.experiment_id}",
+            f"Attempted: {summary.attempted}",
+            f"Completed: {summary.completed}",
+            f"Failed: {summary.failed}",
+            f"Remaining: {summary.remaining}",
+            f"State: {state}",
+        )
+    )
+
+
+def _run_show_command(
+    database_path: Path,
+    run_id: str,
+    *,
+    include_logs: bool,
+) -> int:
+    with Database(database_path).session() as connection:
+        repository = BenchmarkRunRepository(connection)
+        record = repository.get(run_id)
+        if record is None:
+            print(f"error: run not found: {run_id}", file=sys.stderr)
+            return 2
+        samples = repository.samples(run_id)
+        metrics = repository.metrics(run_id)
+        logs = repository.logs(run_id) if include_logs else None
+
+    print(f"Run: {record.id}")
+    print(f"Case: {record.benchmark_case_id}")
+    print(f"Status: {record.status}")
+    print(f"Binary: {record.binary_id}")
+    print(f"Host: {record.host_id}")
+    print(f"Started: {record.started_at}")
+    print(f"Finished: {record.finished_at or '-'}")
+    print(f"Duration ns: {record.duration_ns if record.duration_ns is not None else '-'}")
+    print(f"Exit code: {record.exit_code if record.exit_code is not None else '-'}")
+    print(f"Samples: {len(samples)}")
+    for index, elapsed_ns, throughput in samples:
+        print(f"  {index}: {throughput:.6f} t/s ({elapsed_ns} ns)")
+    if metrics:
+        print("Metrics:")
+        for name, value in sorted(metrics.items()):
+            print(f"  {name}: {value}")
+    if logs is not None:
+        stdout, stderr = logs
+        print("Stdout:")
+        print(stdout.rstrip())
+        print("Stderr:")
+        print(stderr.rstrip())
+    return 0
+
+
 def _binary_inspect_command(
     database_path: Path,
     paths: Sequence[Path],
@@ -140,10 +303,7 @@ def _binary_inspect_command(
     explicit_kind = _parse_kind_argument(kind_arg)
     database = Database(database_path)
     try:
-        probes = tuple(
-            probe_binary(path, kind=explicit_kind)
-            for path in paths
-        )
+        probes = tuple(probe_binary(path, kind=explicit_kind) for path in paths)
     except BinaryDiscoveryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -280,8 +440,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "experiment" and args.experiment_command == "plan":
-        return _plan_command(args.database, args.experiment_id)
+    if args.command == "experiment":
+        if args.experiment_command == "plan":
+            return _plan_command(args.database, args.experiment_id)
+        if args.experiment_command in {"run", "resume"}:
+            return _execute_command(
+                args.database,
+                args.experiment_id,
+                binary_id=args.binary_id,
+                model_path=args.model_path,
+                timeout_seconds=args.timeout_seconds,
+                limit=args.limit,
+                resume=args.experiment_command == "resume",
+            )
 
     if args.command == "binary":
         if args.binary_command == "inspect":
@@ -296,5 +467,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _binary_list_command(args.database)
         if args.binary_command == "compare":
             return _binary_compare_command(args.database, args.left_id, args.right_id)
+
+    if args.command == "run" and args.run_command == "show":
+        return _run_show_command(args.database, args.run_id, include_logs=args.logs)
 
     return 0
