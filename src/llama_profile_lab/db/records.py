@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 ExperimentStatus = Literal[
     "draft",
@@ -75,3 +76,22 @@ class BenchmarkRunRecord:
     duration_ns: int | None
     status: RunStatus
     exit_code: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class BinaryRecord:
+    """Persisted identity and discovered capabilities for one executable."""
+
+    id: str
+    sha256: str
+    kind: str
+    path: str
+    size_bytes: int
+    mtime_ns: int
+    git_commit: str | None
+    git_branch: str | None
+    git_dirty: bool | None
+    build_number: str | None
+    build_info: Mapping[str, Any]
+    capabilities: Mapping[str, Any]
+    created_at: str
