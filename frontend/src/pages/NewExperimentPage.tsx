@@ -20,23 +20,35 @@ import type {
 } from "../types";
 
 interface WorkloadDraft {
-  kind: "microbench-prefill" | "microbench-decode" | "microbench-combined";
+  kind:
+    | "microbench-prefill"
+    | "microbench-decode"
+    | "microbench-combined"
+    | "speed-bench";
   label: string;
   prompt: number;
   generate: number;
   depthType: "absolute" | "fraction";
   depthValue: number;
+  bench: string;
+  categories: string;
+  outputTokens: number;
+  concurrency: number;
 }
 
 function toDraft(item: WorkloadSuiteCase): WorkloadDraft {
   if (item.kind === "speed-bench") {
     return {
-      kind: "microbench-decode",
-      label: item.label ?? "TG256",
+      kind: "speed-bench",
+      label: item.label ?? "Server throughput",
       prompt: 0,
-      generate: 256,
+      generate: 0,
       depthType: "absolute",
-      depthValue: 4096
+      depthValue: 0,
+      bench: item.speed_bench.bench,
+      categories: item.speed_bench.categories.join(", "),
+      outputTokens: item.speed_bench.output_tokens,
+      concurrency: item.speed_bench.concurrency
     };
   }
   return {
@@ -52,11 +64,34 @@ function toDraft(item: WorkloadSuiteCase): WorkloadDraft {
         : 0,
     depthType: item.depth.type,
     depthValue:
-      item.depth.type === "absolute" ? item.depth.tokens : item.depth.value
+      item.depth.type === "absolute" ? item.depth.tokens : item.depth.value,
+    bench: "throughput_1k",
+    categories: "all",
+    outputTokens: 256,
+    concurrency: 1
   };
 }
 
 function fromDraft(item: WorkloadDraft): WorkloadSuiteCase {
+  if (item.kind === "speed-bench") {
+    const categories = item.categories
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return {
+      kind: "speed-bench",
+      label: item.label,
+      safety_margin_tokens: 0,
+      speed_bench: {
+        bench: item.bench.trim() || "throughput_1k",
+        categories: categories.length ? categories : ["all"],
+        output_tokens: Math.max(1, Math.round(item.outputTokens)),
+        concurrency: Math.max(1, Math.round(item.concurrency)),
+        limit: null,
+        request: {}
+      }
+    };
+  }
   const depth =
     item.depthType === "absolute"
       ? ({ type: "absolute", tokens: Math.max(0, Math.round(item.depthValue)) } as const)
@@ -269,7 +304,10 @@ export function NewExperimentPage() {
     }
   }
 
-  const microbenchCount = workloads.length;
+  const microbenchCount = workloads.filter(
+    (item) => item.kind !== "speed-bench"
+  ).length;
+  const serverWorkloadCount = workloads.length - microbenchCount;
   const sampleCount = preview.valid * microbenchCount * repetitions;
 
   return (
@@ -420,25 +458,54 @@ export function NewExperimentPage() {
                 at both shallow and realistic active context.
               </p>
             </div>
-            <button
-              className="button"
-              type="button"
-              onClick={() =>
-                setWorkloads((current) => [
-                  ...current,
-                  {
-                    kind: "microbench-decode",
-                    label: "New decode workload",
-                    prompt: 0,
-                    generate: 256,
-                    depthType: "absolute",
-                    depthValue: 4096
-                  }
-                ])
-              }
-            >
-              Add workload
-            </button>
+            <div className="button-row">
+              <button
+                className="button"
+                type="button"
+                onClick={() =>
+                  setWorkloads((current) => [
+                    ...current,
+                    {
+                      kind: "microbench-decode",
+                      label: "New decode workload",
+                      prompt: 0,
+                      generate: 256,
+                      depthType: "absolute",
+                      depthValue: 4096,
+                      bench: "throughput_1k",
+                      categories: "all",
+                      outputTokens: 256,
+                      concurrency: 1
+                    }
+                  ])
+                }
+              >
+                Add microbenchmark
+              </button>
+              <button
+                className="button"
+                type="button"
+                onClick={() =>
+                  setWorkloads((current) => [
+                    ...current,
+                    {
+                      kind: "speed-bench",
+                      label: "Server throughput",
+                      prompt: 0,
+                      generate: 0,
+                      depthType: "absolute",
+                      depthValue: 0,
+                      bench: "throughput_1k",
+                      categories: "all",
+                      outputTokens: 256,
+                      concurrency: 1
+                    }
+                  ])
+                }
+              >
+                Add server validation
+              </button>
+            </div>
           </div>
           <div className="workload-list">
             {workloads.map((item, index) => (
@@ -461,8 +528,58 @@ export function NewExperimentPage() {
                   <option value="microbench-prefill">Prefill</option>
                   <option value="microbench-decode">Decode</option>
                   <option value="microbench-combined">Combined</option>
+                  <option value="speed-bench">SPEED-Bench</option>
                 </select>
-                {item.kind !== "microbench-decode" ? (
+                {item.kind === "speed-bench" ? (
+                  <>
+                    <label className="compact-field">
+                      <span>Bench</span>
+                      <input
+                        value={item.bench}
+                        onChange={(event) =>
+                          updateWorkload(index, { bench: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label className="compact-field">
+                      <span>Output tokens</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.outputTokens}
+                        onChange={(event) =>
+                          updateWorkload(index, {
+                            outputTokens: Number(event.target.value)
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="compact-field">
+                      <span>Concurrency</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.concurrency}
+                        onChange={(event) =>
+                          updateWorkload(index, {
+                            concurrency: Number(event.target.value)
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="compact-field">
+                      <span>Categories</span>
+                      <input
+                        value={item.categories}
+                        onChange={(event) =>
+                          updateWorkload(index, { categories: event.target.value })
+                        }
+                        placeholder="all"
+                      />
+                    </label>
+                  </>
+                ) : null}
+                {item.kind !== "speed-bench" && item.kind !== "microbench-decode" ? (
                   <label className="compact-field">
                     <span>Prompt</span>
                     <input
@@ -475,7 +592,7 @@ export function NewExperimentPage() {
                     />
                   </label>
                 ) : null}
-                {item.kind !== "microbench-prefill" ? (
+                {item.kind !== "speed-bench" && item.kind !== "microbench-prefill" ? (
                   <label className="compact-field">
                     <span>Generate</span>
                     <input
@@ -490,7 +607,8 @@ export function NewExperimentPage() {
                     />
                   </label>
                 ) : null}
-                <label className="compact-field">
+                {item.kind !== "speed-bench" ? (
+                  <label className="compact-field">
                   <span>Depth</span>
                   <div className="inline-inputs">
                     <select
@@ -518,6 +636,7 @@ export function NewExperimentPage() {
                     />
                   </div>
                 </label>
+                ) : null}
                 <button
                   className="icon-button"
                   aria-label={"Remove " + workloadLabel(fromDraft(item), index)}
@@ -605,6 +724,10 @@ export function NewExperimentPage() {
           <div>
             <strong>{sampleCount}</strong>
             <span>timed samples</span>
+          </div>
+          <div>
+            <strong>{serverWorkloadCount}</strong>
+            <span>server workload{serverWorkloadCount === 1 ? "" : "s"}</span>
           </div>
         </div>
       </section>
