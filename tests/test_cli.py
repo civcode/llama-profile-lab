@@ -27,7 +27,7 @@ def test_version(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--version"])
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "llprof 0.1.0"
+    assert capsys.readouterr().out.strip() == "llprof 1.0.0"
 
 
 def test_ui_requires_built_frontend(
