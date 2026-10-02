@@ -104,7 +104,8 @@ def test_server_argv_freezes_placement_and_speculative_configuration() -> None:
     )
 
     assert argv[0] == "/opt/llama-server"
-    assert ("--ctx-size", "8192") == (argv[argv.index("--ctx-size")], argv[argv.index("--ctx-size") + 1])
+    ctx_index = argv.index("--ctx-size")
+    assert argv[ctx_index : ctx_index + 2] == ("--ctx-size", "8192")
     assert "--n-gpu-layers" in argv
     assert argv[argv.index("--n-gpu-layers") + 1] == "42"
     assert argv[argv.index("--spec-type") + 1] == "draft-mtp"

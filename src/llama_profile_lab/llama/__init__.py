@@ -25,6 +25,12 @@ from llama_profile_lab.llama.discovery import (
     probe_binary,
     sha256_file,
 )
+from llama_profile_lab.llama.fit_params import (
+    LlamaFitParamsAdapter,
+    LlamaFitParamsConfigurationError,
+    LlamaFitParamsParseError,
+    LlamaFitParamsResult,
+)
 from llama_profile_lab.llama.server import (
     LlamaServerAdapter,
     LlamaServerConfigurationError,
@@ -36,12 +42,6 @@ from llama_profile_lab.llama.speed_bench import (
     SpeedBenchResult,
     SpeedBenchSummary,
     parse_speed_bench_json,
-)
-from llama_profile_lab.llama.fit_params import (
-    LlamaFitParamsAdapter,
-    LlamaFitParamsConfigurationError,
-    LlamaFitParamsParseError,
-    LlamaFitParamsResult,
 )
 
 __all__ = [
