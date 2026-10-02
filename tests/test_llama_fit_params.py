@@ -91,7 +91,7 @@ def test_fit_argv_pins_full_production_context() -> None:
     assert "--kv-offload" in argv
     assert "--op-offload" in argv
     assert "--repack" in argv
-    assert ("--repack", "1") not in tuple(zip(argv, argv[1:]))
+    assert ("--repack", "1") not in tuple(zip(argv, argv[1:], strict=False))
 
 
 def test_parser_extracts_concrete_placement() -> None:
