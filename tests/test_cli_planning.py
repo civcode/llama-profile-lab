@@ -3,10 +3,10 @@
 from pathlib import Path
 
 import pytest
+from tests.test_planning_persistence import seed_reference_experiment
 
 from llama_profile_lab.cli.main import main
 from llama_profile_lab.db import Database
-from tests.test_planning_persistence import seed_reference_experiment
 
 
 def test_experiment_plan_command(
