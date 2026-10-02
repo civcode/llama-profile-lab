@@ -28,6 +28,7 @@ from llama_profile_lab.api.dto import (
     ExecutionRequest,
     ExecutionSummaryDTO,
     ExperimentCreateRequest,
+    ExperimentPreviewRequest,
     ExperimentDTO,
     ExperimentListResponse,
     ExperimentProgressDTO,
@@ -43,6 +44,7 @@ from llama_profile_lab.api.dto import (
     ParetoRequestDTO,
     PlacementDTO,
     PlacementListResponse,
+    PlanPreviewDTO,
     PlanSummaryDTO,
     ProfileListResponse,
     ResultsResponse,
@@ -91,6 +93,7 @@ from llama_profile_lab.llama import BinaryKind, probe_binary
 from llama_profile_lab.planning import (
     DEFAULT_PARAMETER_REGISTRY,
     PlanSummary,
+    build_plan,
     plan_experiment,
 )
 
@@ -256,6 +259,31 @@ class ApiService:
                     )
                 )
         return ModelListResponse(items=tuple(items))
+
+    def preview_experiment(self, request: ExperimentPreviewRequest) -> PlanPreviewDTO:
+        plan = build_plan(
+            request.base_candidate,
+            request.search_space,
+            request.workload_suite,
+        )
+        workload_counts = {len(candidate.workloads) for candidate in plan.candidates}
+        workloads_per_candidate = (
+            workload_counts.pop() if len(workload_counts) == 1 else None
+        )
+        unique_workloads = {
+            workload.case.content_hash()
+            for candidate in plan.candidates
+            for workload in candidate.workloads
+        }
+        return PlanPreviewDTO(
+            raw_combinations=plan.search.raw_combinations,
+            rejected_by_constraints=plan.search.rejected_by_constraints,
+            duplicate_candidates=plan.search.duplicate_candidates,
+            candidate_count=len(plan.candidates),
+            workloads_per_candidate=workloads_per_candidate,
+            benchmark_case_count=plan.benchmark_case_count,
+            unique_workload_count=len(unique_workloads),
+        )
 
     def create_experiment(self, request: ExperimentCreateRequest) -> ExperimentDTO:
         with self.database.session() as connection:

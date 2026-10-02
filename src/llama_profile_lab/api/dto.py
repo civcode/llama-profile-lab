@@ -128,6 +128,22 @@ class ExperimentCreateRequest(ApiModel):
     baseline: BaselinePolicyDTO = Field(default_factory=BaseCandidateBaseline)
 
 
+class ExperimentPreviewRequest(ApiModel):
+    base_candidate: Candidate
+    search_space: SearchSpace
+    workload_suite: WorkloadSuite
+
+
+class PlanPreviewDTO(ApiModel):
+    raw_combinations: NonNegativeInt
+    rejected_by_constraints: NonNegativeInt
+    duplicate_candidates: NonNegativeInt
+    candidate_count: NonNegativeInt
+    workloads_per_candidate: NonNegativeInt | None
+    benchmark_case_count: NonNegativeInt
+    unique_workload_count: NonNegativeInt
+
+
 class ExperimentCloneRequest(ApiModel):
     name: Annotated[str, Field(min_length=1)] | None = None
 

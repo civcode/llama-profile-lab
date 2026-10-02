@@ -27,6 +27,7 @@ from llama_profile_lab.api.dto import (
     ExecutionRequest,
     ExperimentCloneRequest,
     ExperimentCreateRequest,
+    ExperimentPreviewRequest,
     ExperimentDTO,
     ExperimentListResponse,
     ExperimentProgressDTO,
@@ -38,6 +39,7 @@ from llama_profile_lab.api.dto import (
     ParetoRequestDTO,
     PlacementDTO,
     PlacementListResponse,
+    PlanPreviewDTO,
     PlanSummaryDTO,
     ProfileListResponse,
     ResultsResponse,
@@ -201,6 +203,13 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
     @app.get("/api/models", response_model=ModelListResponse)
     def models() -> ModelListResponse:
         return service.list_models()
+
+    @app.post(
+        "/api/experiments/preview",
+        response_model=PlanPreviewDTO,
+    )
+    def preview_experiment(request: ExperimentPreviewRequest) -> PlanPreviewDTO:
+        return service.preview_experiment(request)
 
     @app.post(
         "/api/experiments",
