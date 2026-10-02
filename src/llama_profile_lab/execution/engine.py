@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -16,8 +17,10 @@ from llama_profile_lab.db import (
     ExperimentRepository,
     MeasurementPolicyRepository,
     PlacementRepository,
+    TelemetryRepository,
     WorkloadCaseRepository,
 )
+from llama_profile_lab.domain.telemetry import TelemetrySample
 from llama_profile_lab.db.records import (
     BinaryRecord,
     ResolvedPlacementRecord,
@@ -31,6 +34,13 @@ from llama_profile_lab.execution.placement import (
     PlacementResolver,
     resolved_placement_from_record,
     validate_fixed_placement,
+)
+from llama_profile_lab.execution.telemetry import (
+    LinuxTelemetryProvider,
+    TelemetryProvider,
+    TelemetrySampler,
+    classify_run_quality,
+    summary_metrics,
 )
 from llama_profile_lab.execution.process import (
     ProcessResult,
@@ -72,10 +82,14 @@ class ExperimentExecutor:
         *,
         process_runner: ProcessRunner | None = None,
         bench_adapter: LlamaBenchAdapter | None = None,
+        telemetry_provider_factory: Callable[[], TelemetryProvider] | None = None,
     ) -> None:
         self.database = database
         self.process_runner = process_runner or ProcessRunner()
         self.bench_adapter = bench_adapter or LlamaBenchAdapter()
+        self.telemetry_provider_factory = (
+            telemetry_provider_factory or LinuxTelemetryProvider
+        )
 
     def execute(
         self,
@@ -88,11 +102,14 @@ class ExperimentExecutor:
         fit_timeout_seconds: float | None = None,
         limit: int | None = None,
         resume: bool = False,
+        telemetry_interval_seconds: float = 1.0,
         cancel_event: Event | None = None,
     ) -> ExecutionSummary:
         """Execute only cases without a successful prior run."""
         if limit is not None and limit <= 0:
             raise ExecutionError("limit must be positive")
+        if telemetry_interval_seconds < 0.5:
+            raise ExecutionError("telemetry interval must be at least 0.5 seconds")
         lock_path = _lock_path(self.database)
         with HostLock(lock_path):
             return self._execute_locked(
@@ -104,6 +121,7 @@ class ExperimentExecutor:
                 fit_timeout_seconds=fit_timeout_seconds,
                 limit=limit,
                 resume=resume,
+                telemetry_interval_seconds=telemetry_interval_seconds,
                 cancel_event=cancel_event,
             )
 
@@ -118,6 +136,7 @@ class ExperimentExecutor:
         fit_timeout_seconds: float | None,
         limit: int | None,
         resume: bool,
+        telemetry_interval_seconds: float,
         cancel_event: Event | None,
     ) -> ExecutionSummary:
         with self.database.session() as connection:
@@ -129,6 +148,7 @@ class ExperimentExecutor:
             candidates = CandidateRepository(connection)
             workloads = WorkloadCaseRepository(connection)
             policies = MeasurementPolicyRepository(connection)
+            telemetry = TelemetryRepository(connection)
 
             experiment = experiments.get(experiment_id)
             definition = experiments.get_definition(experiment_id)
@@ -319,13 +339,29 @@ class ExperimentExecutor:
                     environment=_captured_environment(),
                 )
                 cases.set_status(case.id, "running")
+                sampler = TelemetrySampler(
+                    self.telemetry_provider_factory(),
+                    interval_seconds=telemetry_interval_seconds,
+                )
+                sampler.capture_before()
                 try:
                     process_result = self.process_runner.run(
                         argv,
                         timeout_seconds=timeout_seconds,
                         cancel_event=cancel_event,
+                        on_started=sampler.start,
                     )
                 except ProcessRunnerError as exc:
+                    telemetry_samples = sampler.stop()
+                    _persist_telemetry(
+                        runs=runs,
+                        telemetry=telemetry,
+                        run_id=run_id,
+                        samples=telemetry_samples,
+                        sampler_errors=sampler.errors,
+                        expect_gpu=bool(host.gpus),
+                        interval_seconds=telemetry_interval_seconds,
+                    )
                     runs.finish(
                         run_id,
                         status="benchmark_failed",
@@ -336,6 +372,17 @@ class ExperimentExecutor:
                     cases.set_status(case.id, "benchmark_failed")
                     failed += 1
                     continue
+
+                telemetry_samples = sampler.stop()
+                _persist_telemetry(
+                    runs=runs,
+                    telemetry=telemetry,
+                    run_id=run_id,
+                    samples=telemetry_samples,
+                    sampler_errors=sampler.errors,
+                    expect_gpu=bool(host.gpus),
+                    interval_seconds=telemetry_interval_seconds,
+                )
 
                 terminal_status = _process_failure_status(process_result)
                 if terminal_status is not None:
@@ -421,6 +468,34 @@ class ExperimentExecutor:
                 interrupted=interrupted,
                 limited=limited,
             )
+
+
+def _persist_telemetry(
+    *,
+    runs: BenchmarkRunRepository,
+    telemetry: TelemetryRepository,
+    run_id: str,
+    samples: tuple[TelemetrySample, ...],
+    sampler_errors: tuple[str, ...],
+    expect_gpu: bool,
+    interval_seconds: float,
+) -> None:
+    """Persist raw telemetry, normalized summary metrics, and quality."""
+    telemetry.add_samples(run_id, samples)
+    assessment = classify_run_quality(
+        samples,
+        expect_gpu=expect_gpu,
+        sampler_errors=sampler_errors,
+    )
+    runs.add_metrics(run_id, summary_metrics(assessment.summary))
+    details = assessment.model_dump(mode="json")
+    details["sampling_interval_seconds"] = interval_seconds
+    details["sampler_errors"] = list(sampler_errors)
+    runs.set_quality(
+        run_id,
+        quality=assessment.quality,
+        details=details,
+    )
 
 
 def _verify_binary(binary: BinaryRecord, *, expected_kind: str) -> None:

@@ -14,6 +14,7 @@ from llama_profile_lab.db import (
     Database,
     EnvironmentRepository,
     PlacementRepository,
+    TelemetryRepository,
 )
 from llama_profile_lab.db.records import BinaryRecord
 from llama_profile_lab.execution import (
@@ -122,6 +123,12 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=None,
         help="Optional timeout for each llama-fit-params invocation.",
+    )
+    parser.add_argument(
+        "--telemetry-interval-ms",
+        type=int,
+        default=1000,
+        help="Telemetry sampling interval in milliseconds (minimum 500; default 1000).",
     )
     parser.add_argument(
         "--limit",
@@ -264,6 +271,7 @@ def _execute_command(
     fit_timeout_seconds: float | None,
     limit: int | None,
     resume: bool,
+    telemetry_interval_ms: int,
 ) -> int:
     try:
         summary = ExperimentExecutor(Database(database_path)).execute(
@@ -275,6 +283,7 @@ def _execute_command(
             fit_timeout_seconds=fit_timeout_seconds,
             limit=limit,
             resume=resume,
+            telemetry_interval_seconds=telemetry_interval_ms / 1000.0,
         )
     except (ExecutionError, HostLockError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -316,6 +325,7 @@ def _run_show_command(
             return 2
         samples = repository.samples(run_id)
         metrics = repository.metrics(run_id)
+        telemetry_samples = TelemetryRepository(connection).samples(run_id)
         logs = repository.logs(run_id) if include_logs else None
 
     print(f"Run: {record.id}")
@@ -327,6 +337,14 @@ def _run_show_command(
     print(f"Finished: {record.finished_at or '-'}")
     print(f"Duration ns: {record.duration_ns if record.duration_ns is not None else '-'}")
     print(f"Exit code: {record.exit_code if record.exit_code is not None else '-'}")
+    print(f"Quality: {record.quality or '-'}")
+    print(f"Telemetry samples: {len(telemetry_samples)}")
+    if record.quality_details is not None:
+        reasons = record.quality_details.get("reasons", [])
+        if isinstance(reasons, list) and reasons:
+            print("Quality reasons:")
+            for reason in reasons:
+                print(f"  {reason}")
     print(f"Samples: {len(samples)}")
     for index, elapsed_ns, throughput in samples:
         print(f"  {index}: {throughput:.6f} t/s ({elapsed_ns} ns)")
@@ -553,6 +571,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 fit_timeout_seconds=args.fit_timeout_seconds,
                 limit=args.limit,
                 resume=args.experiment_command == "resume",
+                telemetry_interval_ms=args.telemetry_interval_ms,
             )
 
     if args.command == "binary":
