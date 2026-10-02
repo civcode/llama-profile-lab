@@ -798,6 +798,8 @@ Real-host acceptance remains pending: run a Flash Next decode workload on the wo
 
 ## 12. M8 — Analysis and multidimensional projections
 
+**Status: Complete**
+
 ### Objective
 
 Turn the stored observation set into useful comparisons without changing raw measurements.
@@ -880,29 +882,31 @@ Use PP and TG curves to estimate representative workloads.
 
 ### Work items
 
-- [ ] metric registry
-- [ ] statistical summaries
-- [ ] matrix projector
-- [ ] filter engine
-- [ ] baseline comparison
-- [ ] Pareto frontier
-- [ ] latency interpolation/model
-- [ ] CSV export
-- [ ] JSON export
-- [ ] llprof results matrix
-- [ ] llprof results compare
+- [x] metric registry
+- [x] statistical summaries
+- [x] matrix projector
+- [x] filter engine
+- [x] baseline comparison
+- [x] Pareto frontier
+- [x] latency interpolation/model
+- [x] CSV export
+- [x] JSON export
+- [x] llprof results matrix
+- [x] llprof results compare
 
 ### Acceptance gate
 
-The batch/ubatch reference experiment can be viewed as:
+Automated acceptance is complete. The persisted eleven-Candidate batch/ubatch reference experiment is exercised as five independent sparse projections:
 
-- PP2K matrix
-- PP8K matrix
-- TG4K matrix
-- TG50% matrix
-- process-CPU matrix
+- PP2K median-throughput matrix;
+- PP8K median-throughput matrix;
+- TG256 @ depth 4096 median-throughput matrix;
+- TG256 @ 50% context (depth 65408) median-throughput matrix;
+- process-CPU matrix.
 
-and candidates can be filtered to the Pareto frontier using PP, TG, CPU, and memory objectives.
+Each view contains exactly the eleven valid batch/ubatch coordinates and preserves the intentionally missing invalid grid cell rather than manufacturing a dense matrix.
+
+The same synthetic reference observations are analyzed with explicit PP8K-maximize, TG4K-maximize, process-CPU-minimize, and process-RSS-minimize objectives. The Pareto service returns the expected non-dominated set without assigning an overall score or winner. Baseline deltas, PP/TG latency interpolation, CSV export, JSON export, workload faceting, quality filtering, and ambiguity rejection are covered by automated tests.
 
 ---
 

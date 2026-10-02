@@ -1389,15 +1389,17 @@ clean
 
 A quality label never silently deletes a run and never changes `completed` into a failure state.
 
-## 27. Derived run summaries
+## 27. Derived run summaries and analysis
 
-For each completed run derive and persist or expose:
+Analysis is read-only application logic over the canonical SQLite observation set. It SHALL NOT mutate Candidate identity, workload identity, placement, raw benchmark samples, telemetry, or historical run status.
+
+For each completed run, the analysis layer can derive or expose:
 
 Performance:
 
 - mean tokens/s;
 - median tokens/s;
-- standard deviation;
+- sample standard deviation;
 - coefficient of variation;
 - min;
 - max;
@@ -1406,22 +1408,217 @@ Performance:
 CPU:
 
 - mean/peak system CPU;
-- mean/peak process CPU;
+- mean/peak benchmark-process CPU;
 - CPU user time;
 - CPU system time;
-- average/min CPU frequency;
-- average/max CPU temperature;
-- CPU seconds per 1000 tokens where applicable.
+- CPU seconds per 1000 measured tokens where applicable;
+- CPU temperature and frequency metrics already normalized by telemetry.
 
-GPU:
+GPU and memory:
 
 - mean/peak utilization;
 - peak VRAM;
-- average/max temperature;
-- average power;
-- energy estimate where sampling permits.
+- peak process RSS and RAM;
+- temperature summaries;
+- average/peak power;
+- an energy estimate where run duration and average GPU power are available.
 
-These values are derived from preserved raw samples and can be recomputed.
+These values are derived from preserved raw samples and normalized run metrics and can be recomputed.
+
+### 27.1 Metric registry and repetition semantics
+
+MetricDefinition is the central analysis registry for human-facing metric name, label, unit, source metric, reduction policy, and optional derived calculation.
+
+For throughput statistics, individual timed benchmark repetitions are authoritative. When an identical Candidate/workload coordinate has multiple successful runs, their individual benchmark samples are pooled before calculating mean, median, standard deviation, coefficient of variation, min, max, and sample count.
+
+Resource metrics already normalized per run are combined according to metric semantics. Typical utilization averages use a mean across matching runs, while peak temperature, peak CPU, peak VRAM, and similar maxima retain a maximum reduction.
+
+A persisted scalar metric not yet present in the built-in registry remains analyzable through a generic mean-aggregation fallback. Adding a new normalized telemetry metric therefore does not require a new database schema or block basic analysis.
+
+### 27.2 Analysis coordinates and filters
+
+An analysis observation combines:
+
+~~~text
+Candidate coordinates
+Workload coordinates
+Run/environment coordinates
+Metric values
+~~~
+
+V1 exact-match filters may reference scalar paths such as:
+
+~~~text
+compute.batch_size
+compute.ubatch_size
+context.cache_type_k
+workload.kind
+workload.prompt_tokens
+workload.generate_tokens
+workload.depth_tokens
+workload.suite_case_index
+run.host_id
+run.binary_id
+run.quality
+~~~
+
+Candidate paths may also use an explicit `candidate.` prefix.
+
+Run quality is an explicit filter rather than an implicit deletion rule. For example, a caller may analyze only `clean` runs or may deliberately include noisy historical data.
+
+### 27.3 Sparse matrix, tensor slices, and facets
+
+The database stores observed points; it never stores dense matrices or tensors.
+
+A two-dimensional projection chooses:
+
+~~~text
+X Candidate path
+Y Candidate path
+metric
+filters
+optional facet path
+~~~
+
+and returns a sparse set of cells. Missing invalid, failed, pruned, or unmeasured coordinates remain missing.
+
+The projector SHALL NOT silently average across hidden Candidate or workload dimensions. If an X/Y cell still contains more than one distinct Candidate configuration or more than one workload-suite case, the projection is ambiguous and SHALL fail with an instruction to add a filter or facet.
+
+Repeated successful runs of the same Candidate/workload coordinate may be pooled according to the selected metric's reduction semantics.
+
+Higher-dimensional exploration is therefore represented as:
+
+~~~text
+X × Y
++ exact filters
++ optional facet
+~~~
+
+rather than an attempt to visualize an arbitrary N-dimensional tensor directly.
+
+### 27.4 Baseline comparison
+
+An experiment baseline is either:
+
+- the configured base Candidate; or
+- an explicitly selected Candidate.
+
+Candidate comparison aligns observations by `suite_case_index`, not by concrete WorkloadCase hash. This matters for Candidate-dependent workloads such as fractional context depth, whose concrete token depth can differ when Candidate context size differs.
+
+For each requested metric, comparison returns:
+
+~~~text
+baseline value
+candidate value
+signed absolute delta
+signed percent delta
+~~~
+
+The comparison layer does not select a winner.
+
+### 27.5 Pareto frontier
+
+Pareto analysis accepts one or more explicit user objectives. Every objective defines:
+
+~~~text
+key
+maximize | minimize
+metric
+objective-specific filters
+~~~
+
+Example:
+
+~~~text
+PP8K throughput     maximize
+TG @ 4K throughput maximize
+process CPU         minimize
+process RSS         minimize
+~~~
+
+An objective SHALL resolve to one workload-suite coordinate per Candidate. A broad objective that mixes PP2K and PP8K, or multiple decode depths, is rejected as ambiguous rather than averaged.
+
+A Candidate enters the evaluated set only when all objective values are available. Planned Candidates with incomplete observations remain visible in the result as excluded with a reason.
+
+The frontier contains exactly the non-dominated Candidates under the supplied objectives. The service SHALL NOT produce an overall score, ranking, or universal best Candidate unless a separate future optimization policy explicitly defines such a scalar objective.
+
+### 27.6 Request-latency estimation
+
+V1 estimates compute-only request latency from measured prefill and decode curves.
+
+For prompt length `P`:
+
+~~~text
+T_pp(P) = P / interpolated_PP(P)
+~~~
+
+For `G` generated tokens beginning at active depth `D`:
+
+~~~text
+T_tg(D, G) =
+    sum(i = 0 .. G - 1)
+        1 / interpolated_TG(D + i)
+~~~
+
+Total estimated compute time is:
+
+~~~text
+T_total = T_pp + T_tg
+~~~
+
+Prefill interpolation uses measured d0 prefill points indexed by prompt tokens.
+
+Decode interpolation uses measured decode points indexed by active depth. Linear interpolation is used between measured points. Outside the measured range, V1 clamps to the nearest measured endpoint rather than extrapolating an unbounded trend.
+
+The estimator validates that the requested decode interval fits within the Candidate production context.
+
+This is intentionally a compute model. It excludes tokenization, sampling, HTTP/network overhead, queueing, server concurrency effects, speculative-decoding server behavior, and other end-to-end costs. M9 server validation measures those separately.
+
+### 27.7 Export
+
+Analysis export produces one summarized row per Candidate × workload-suite coordinate, including:
+
+- experiment/Candidate/workload identifiers;
+- Candidate ordinal;
+- suite-case index;
+- concrete prompt/generation/depth fields;
+- run count;
+- observed quality labels;
+- experiment search-space dimensions;
+- requested summary metrics.
+
+V1 supports deterministic JSON and CSV serialization without introducing pandas as a core dependency.
+
+### 27.8 CLI
+
+M8 exposes:
+
+~~~text
+llprof results metrics
+
+llprof results matrix EXPERIMENT \
+  --x compute.batch_size \
+  --y compute.ubatch_size \
+  --metric throughput.median \
+  --filter workload.kind=microbench-prefill \
+  --filter workload.prompt_tokens=8192
+
+llprof results compare EXPERIMENT CANDIDATE \
+  --metric throughput.median
+
+llprof results pareto EXPERIMENT \
+  --objective 'pp8k:max:throughput.median@workload.kind=microbench-prefill;workload.prompt_tokens=8192' \
+  --objective 'tg4k:max:throughput.median@workload.kind=microbench-decode;workload.depth_tokens=4096'
+
+llprof results latency EXPERIMENT \
+  --candidate CANDIDATE \
+  --prompt-tokens 4096 \
+  --generate-tokens 256
+
+llprof results export EXPERIMENT --format csv --output results.csv
+~~~
+
+All result commands operate on completed persisted observations and share the same analysis services intended for the later HTTP API and browser UI.
 
 ## 28. SQLite design principles
 
