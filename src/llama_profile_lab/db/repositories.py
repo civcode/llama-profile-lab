@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 from llama_profile_lab.db.records import (
     BenchmarkCaseRecord,
     BenchmarkRunRecord,
+    BinaryRecord,
     ExperimentRecord,
     ExperimentStatus,
     RunStatus,
@@ -578,7 +579,7 @@ class BenchmarkRunRepository:
 
 
 class EnvironmentRepository:
-    """Minimal host/binary persistence needed by benchmark-run foreign keys."""
+    """Host and exact executable persistence used by discovery and run provenance."""
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
@@ -629,18 +630,34 @@ class EnvironmentRepository:
         path: str,
         size_bytes: int,
         mtime_ns: int,
+        git_commit: str | None = None,
+        git_branch: str | None = None,
+        git_dirty: bool | None = None,
+        build_number: str | None = None,
         build_info: Mapping[str, Any] | None = None,
         capabilities: Mapping[str, Any] | None = None,
     ) -> str:
+        """Register or refresh metadata for one exact executable hash."""
         identifier = _content_id("bin", sha256)
         self.connection.execute(
             """
             INSERT INTO binary(
                 id, sha256, kind, path, size_bytes, mtime_ns,
+                git_commit, git_branch, git_dirty, build_number,
                 build_info_json, capabilities_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(sha256) DO NOTHING
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(sha256) DO UPDATE SET
+                kind = excluded.kind,
+                path = excluded.path,
+                size_bytes = excluded.size_bytes,
+                mtime_ns = excluded.mtime_ns,
+                git_commit = excluded.git_commit,
+                git_branch = excluded.git_branch,
+                git_dirty = excluded.git_dirty,
+                build_number = excluded.build_number,
+                build_info_json = excluded.build_info_json,
+                capabilities_json = excluded.capabilities_json
             """,
             (
                 identifier,
@@ -649,6 +666,10 @@ class EnvironmentRepository:
                 path,
                 size_bytes,
                 mtime_ns,
+                git_commit,
+                git_branch,
+                None if git_dirty is None else int(git_dirty),
+                build_number,
                 canonical_json(dict(build_info or {})),
                 canonical_json(dict(capabilities or {})),
             ),
@@ -660,6 +681,54 @@ class EnvironmentRepository:
         if row is None:
             raise RuntimeError("binary insert did not produce a row")
         return str(row["id"])
+
+    def get_binary(self, identifier: str) -> BinaryRecord | None:
+        """Load one registered executable."""
+        row = self.connection.execute(
+            """
+            SELECT id, sha256, kind, path, size_bytes, mtime_ns,
+                   git_commit, git_branch, git_dirty, build_number,
+                   build_info_json, capabilities_json, created_at
+            FROM binary
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._binary_record(row)
+
+    def list_binaries(self) -> tuple[BinaryRecord, ...]:
+        """List registered executables deterministically."""
+        rows = self.connection.execute(
+            """
+            SELECT id, sha256, kind, path, size_bytes, mtime_ns,
+                   git_commit, git_branch, git_dirty, build_number,
+                   build_info_json, capabilities_json, created_at
+            FROM binary
+            ORDER BY kind, path, sha256
+            """
+        ).fetchall()
+        return tuple(self._binary_record(row) for row in rows)
+
+    @staticmethod
+    def _binary_record(row: sqlite3.Row) -> BinaryRecord:
+        dirty_value = row["git_dirty"]
+        return BinaryRecord(
+            id=str(row["id"]),
+            sha256=str(row["sha256"]),
+            kind=str(row["kind"]),
+            path=str(row["path"]),
+            size_bytes=int(row["size_bytes"]),
+            mtime_ns=int(row["mtime_ns"]),
+            git_commit=row["git_commit"],
+            git_branch=row["git_branch"],
+            git_dirty=None if dirty_value is None else bool(dirty_value),
+            build_number=row["build_number"],
+            build_info=_loads_object(str(row["build_info_json"])),
+            capabilities=_loads_object(str(row["capabilities_json"])),
+            created_at=str(row["created_at"]),
+        )
 
 
 def decode_json_object(value: str) -> dict[str, Any]:
