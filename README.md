@@ -6,12 +6,17 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. **M0–M4, M8 analysis, M10 local HTTP API, M11 browser UI, and M12 launcher promotion/archive/export are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
+V1 implementation is complete through M13. **The automated hardening/release suite is complete; the final primary-workstation acceptance and the `v1.0.0` tag remain intentionally pending until the required Qwen models and target llama.cpp builds are exercised on that workstation.**
 
 Project documents:
 
 - [V1 technical specification](docs/technical-spec-v1.md)
 - [V1 implementation roadmap](docs/implementation-roadmap-v1.md)
+- [V1 architecture](docs/architecture-v1.md)
+- [V1 benchmark workflow](docs/benchmark-workflow-v1.md)
+- [V1 troubleshooting](docs/troubleshooting-v1.md)
+- [V1 known limitations](docs/known-limitations-v1.md)
+- [V1 release checklist](docs/release-checklist-v1.md)
 
 ## Requirements
 
@@ -170,6 +175,14 @@ llprof archive \
   --output experiment-archive.tar.gz \
   --artifact /path/to/optional/artifact \
   --database data/benchmarks.db
+
+llprof archive \
+  --restore experiment-archive.tar.gz \
+  --artifacts-dir restored-artifacts \
+  --database data/restored.db
+
+llprof database check \
+  --database data/benchmarks.db
 ~~~
 
 Binary discovery fingerprints exact executables by SHA-256, captures version/help output, persists parsed supported arguments, and allows native/custom builds to be compared without assuming a global llama.cpp feature set.
@@ -191,6 +204,8 @@ M10 adds a local FastAPI boundary over the same services. Typed HTTP requests ca
 M11 adds the React + TypeScript browser workflow. The Python launcher adapter supplies the typed base Candidate, while the UI builds generic N-dimensional sweeps from backend parameter metadata and asks the real planner for preview counts. It authors microbenchmark and optional SPEED-Bench workloads, controls execution, and visualizes live CPU/GPU/memory/thermal telemetry. Results include sparse matrices/heatmaps with exact higher-dimensional slicing or facets, Pareto frontiers, measured decode-depth curves, baseline-relative Candidate comparison, compute-only latency estimates, and finalist server validation. `llprof ui` serves the production bundle and API from one local origin. The browser never reads SQLite directly and does not silently average hidden search dimensions.
 
 M12 closes the experiment lifecycle without silently editing production configuration. A server-validated Candidate can generate and persist a launcher-profile proposal containing the exact source snapshot, proposed snapshot, argument-level changes, validation provenance, and a unified JSON patch. The Candidate page exposes the same review-first workflow. `llprof experiment export` emits complete experiment provenance, while `llprof archive` checkpoints WAL, takes a consistent SQLite backup, optionally includes artifacts, and writes a SHA-256 manifest.
+
+M13 hardens the V1 boundary. Archive restore now verifies safe member paths, manifest hashes, SQLite integrity, and schema version; promotion rejects source-profile drift after experiment creation; the test suite covers historical migration upgrades, persisted OOM failures, malformed benchmark JSON, unsupported argument surfaces, native/custom capability differences, server startup failure, noisy telemetry, and stale running-state recovery. `llprof database check` reports integrity, foreign keys, database/WAL growth, row counts, and representative SQLite query plans. Release/operator documentation lives under `docs/`.
 
 ## Design principles
 
