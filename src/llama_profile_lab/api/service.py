@@ -32,6 +32,7 @@ from llama_profile_lab.api.dto import (
     ExperimentListResponse,
     ExperimentPreviewRequest,
     ExperimentProgressDTO,
+    LauncherArgChangeDTO,
     LauncherProfileDTO,
     MetricDefinitionDTO,
     MetricListResponse,
@@ -47,6 +48,8 @@ from llama_profile_lab.api.dto import (
     PlanPreviewDTO,
     PlanSummaryDTO,
     ProfileListResponse,
+    PromotionRequest,
+    PromotionResponse,
     ResultsResponse,
     RunDetailDTO,
     RunListResponse,
@@ -96,6 +99,7 @@ from llama_profile_lab.planning import (
     build_plan,
     plan_experiment,
 )
+from llama_profile_lab.promotion import PromotionService
 
 
 class ApiNotFoundError(RuntimeError):
@@ -857,6 +861,36 @@ class ApiService:
             benchmark_ids=summary.benchmark_ids,
             completed=summary.completed,
             speculative=summary.speculative,
+        )
+
+    def promote_candidate(
+        self,
+        candidate_id: str,
+        request: PromotionRequest,
+    ) -> PromotionResponse:
+        proposal = PromotionService(self.database, self.profiles).propose(
+            request.experiment_id,
+            candidate_id,
+            source_profile_id=request.source_profile_id,
+        )
+        return PromotionResponse(
+            id=proposal.id,
+            experiment_id=proposal.experiment_id,
+            candidate_id=proposal.candidate_id,
+            source_profile=proposal.source_profile,
+            changes=tuple(
+                LauncherArgChangeDTO(
+                    path=item.path,
+                    argument=item.argument,
+                    before=item.before,
+                    after=item.after,
+                )
+                for item in proposal.changes
+            ),
+            patch=proposal.patch,
+            source_snapshot=proposal.source_snapshot,
+            proposed_snapshot=proposal.proposed_snapshot,
+            validation=proposal.validation,
         )
 
     def _experiment_dto(
