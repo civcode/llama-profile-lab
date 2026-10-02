@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_placement_parser(commands)
     _add_results_parser(commands)
     _add_server_parser(commands)
+    _add_api_parser(commands)
     return parser
 
 
@@ -413,6 +414,33 @@ def _add_server_parser(
     compare.add_argument("--workload-case", dest="workload_case_id", default=None)
     compare.add_argument("--category", default="all")
     _add_database_argument(compare)
+
+
+def _add_api_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    api = commands.add_parser(
+        "api",
+        help="Serve the local FastAPI application.",
+    )
+    api.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address; defaults to loopback only.",
+    )
+    api.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="HTTP port (default 8000).",
+    )
+    api.add_argument(
+        "--launcher-config",
+        type=Path,
+        default=None,
+        help="Optional llama-profile-launcher host JSON for read-only profile endpoints.",
+    )
+    _add_database_argument(api)
 
 
 def _add_database_argument(parser: argparse.ArgumentParser) -> None:
@@ -899,6 +927,29 @@ def _optional_ratio(value: float | None) -> str:
     return "-" if value is None else f"{value:.4f}x"
 
 
+def _api_command(
+    database_path: Path,
+    *,
+    host: str,
+    port: int,
+    launcher_config: Path | None,
+) -> int:
+    if not 1 <= port <= 65535:
+        print("error: API port must be between 1 and 65535", file=sys.stderr)
+        return 2
+
+    import uvicorn
+
+    from llama_profile_lab.api import create_app
+
+    app = create_app(
+        database_path,
+        launcher_config_path=launcher_config,
+    )
+    uvicorn.run(app, host=host, port=port)
+    return 0
+
+
 def _placement_list_command(database_path: Path) -> int:
     with Database(database_path).session() as connection:
         records = PlacementRepository(connection).list()
@@ -1163,6 +1214,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workload_case_id=args.workload_case_id,
                 category=args.category,
             )
+
+    if args.command == "api":
+        return _api_command(
+            args.database,
+            host=args.host,
+            port=args.port,
+            launcher_config=args.launcher_config,
+        )
 
     if args.command == "results":
         if args.results_command == "metrics":
