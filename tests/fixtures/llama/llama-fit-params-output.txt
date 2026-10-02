@@ -1,0 +1,5 @@
+ggml_cuda_init: found 2 CUDA devices
+build: 9000 (abcdef123) with cc
+llama_params_fit: successfully fit params to free device memory
+llama_fit_params: printing fitted CLI arguments to stdout...
+-c 131072 -ngl 42 -ts 3,1 -ot "blk\\.12\\.ffn_.*=CPU,blk\\.13\\.ffn_.*=CPU"
