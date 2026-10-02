@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal
 
 from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
 
@@ -25,7 +25,7 @@ class FractionalDepth(FrozenModel):
     value: Annotated[float, Field(ge=0.0, le=1.0)]
 
 
-DepthExpression: TypeAlias = Annotated[
+type DepthExpression = Annotated[
     AbsoluteDepth | FractionalDepth,
     Field(discriminator="type"),
 ]
@@ -81,7 +81,7 @@ class SpeedBenchSuiteCase(SuiteCaseBase):
     speed_bench: SpeedBenchConfig
 
 
-SuiteCase: TypeAlias = Annotated[
+type SuiteCase = Annotated[
     PrefillSuiteCase | DecodeSuiteCase | CombinedSuiteCase | SpeedBenchSuiteCase,
     Field(discriminator="kind"),
 ]
@@ -140,7 +140,7 @@ class SpeedBenchWorkloadCase(WorkloadCaseBase):
     speed_bench: SpeedBenchConfig
 
 
-WorkloadCase: TypeAlias = Annotated[
+type WorkloadCase = Annotated[
     PrefillWorkloadCase
     | DecodeWorkloadCase
     | CombinedWorkloadCase
