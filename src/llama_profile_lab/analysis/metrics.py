@@ -23,12 +23,23 @@ DerivedMetric = Literal[
 
 
 class MetricRun(Protocol):
-    """Minimal observation shape consumed by MetricRegistry."""
+    """Minimal read-only observation shape consumed by MetricRegistry."""
 
-    samples: tuple[float, ...]
-    metrics: Mapping[str, int | float]
-    duration_ns: int | None
-    token_count: int
+    @property
+    def samples(self) -> tuple[float, ...]:
+        """Individual throughput samples."""
+
+    @property
+    def metrics(self) -> Mapping[str, int | float]:
+        """Normalized scalar metrics."""
+
+    @property
+    def duration_ns(self) -> int | None:
+        """Wall-clock run duration."""
+
+    @property
+    def token_count(self) -> int:
+        """Prompt plus generated tokens measured by this run."""
 
 
 @dataclass(frozen=True, slots=True)

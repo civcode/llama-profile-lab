@@ -7,7 +7,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from llama_profile_lab import __version__
 from llama_profile_lab.analysis import (
@@ -684,7 +684,7 @@ def _parse_scalar(value: str) -> JsonScalar:
     except json.JSONDecodeError:
         return value
     if parsed is None or isinstance(parsed, (str, int, float, bool)):
-        return cast(JsonScalar, parsed)
+        return parsed
     raise AnalysisError("analysis filter values must be JSON scalars")
 
 
@@ -696,7 +696,7 @@ def _parse_objective(value: str) -> ParetoObjective:
             f"invalid objective {value!r}; expected KEY:DIRECTION:METRIC[@FILTERS]"
         )
     key, raw_direction, metric = parts
-    direction_map = {
+    direction_map: dict[str, Literal["maximize", "minimize"]] = {
         "max": "maximize",
         "maximize": "maximize",
         "min": "minimize",
