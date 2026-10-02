@@ -96,19 +96,6 @@ def test_conditional_dimension_does_not_multiply_when_disabled() -> None:
             ),
         )
     )
-    candidate = base_candidate().model_copy(
-        update={
-            "speculative": {
-                "enabled": False,
-                "type": None,
-                "draft_n_max": None,
-            }
-        }
-    )
-
-    # model_copy does not recursively validate updates, so revalidate the payload.
-    candidate = Candidate.model_validate(candidate.model_dump(mode="python"))
-    expansion = expand_search_space(candidate, search)
-
+    expansion = expand_search_space(base_candidate(), search)\n
     assert expansion.raw_combinations == 4
     assert len(expansion.candidates) == 4
