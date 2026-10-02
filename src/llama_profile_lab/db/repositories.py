@@ -29,7 +29,7 @@ from llama_profile_lab.domain import (
 )
 from llama_profile_lab.domain.workload import WorkloadCase
 
-_WORKLOAD_ADAPTER = TypeAdapter(WorkloadCase)
+_WORKLOAD_ADAPTER: TypeAdapter[WorkloadCase] = TypeAdapter(WorkloadCase)
 
 
 def _event_id(prefix: str) -> str:
