@@ -6,7 +6,6 @@ import {
   defaultWorkloads,
   dimensionSupported,
   parseDimensionValues,
-  previewCandidateCount,
   workloadLabel
 } from "../experiment";
 import type {
@@ -15,6 +14,7 @@ import type {
   LauncherProfile,
   ParameterDefinition,
   Placement,
+  PlanPreview,
   SearchDimension,
   WorkloadSuiteCase
 } from "../types";
@@ -191,16 +191,58 @@ export function NewExperimentPage() {
     return values;
   }, [dimensionInputs, parameters]);
 
-  const preview = useMemo(() => {
-    if (!baseCandidate || dimensions.length === 0) {
-      return { raw: 0, valid: 0, rejected: 0 };
+  const [preview, setPreview] = useState<PlanPreview | null>(null);
+  const [previewError, setPreviewError] = useState<unknown>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  useEffect(() => {
+    if (!baseCandidate || dimensions.length === 0 || workloads.length === 0) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
     }
-    return previewCandidateCount(
-      baseCandidate,
-      dimensions,
-      constraint.trim() ? [constraint.trim()] : []
-    );
-  }, [baseCandidate, dimensions, constraint]);
+
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setPreviewing(true);
+      setPreviewError(null);
+      void api
+        .previewExperiment({
+          base_candidate: baseCandidate,
+          search_space: {
+            schema: "llama-search-space",
+            version: 1,
+            dimensions,
+            constraints: constraint.trim() ? [constraint.trim()] : [],
+            strategy: { type: "grid" }
+          },
+          workload_suite: {
+            schema: "llama-workload-suite",
+            version: 1,
+            id: "ui-preview",
+            description: null,
+            cases: workloads.map(fromDraft)
+          }
+        })
+        .then((value) => {
+          if (active) setPreview(value);
+        })
+        .catch((reason) => {
+          if (active) {
+            setPreview(null);
+            setPreviewError(reason);
+          }
+        })
+        .finally(() => {
+          if (active) setPreviewing(false);
+        });
+    }, 120);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [baseCandidate, dimensions, constraint, workloads]);
 
   function toggleDimension(definition: ParameterDefinition) {
     setDimensionInputs((current) => {
@@ -308,7 +350,7 @@ export function NewExperimentPage() {
     (item) => item.kind !== "speed-bench"
   ).length;
   const serverWorkloadCount = workloads.length - microbenchCount;
-  const sampleCount = preview.valid * microbenchCount * repetitions;
+  const sampleCount = (preview?.benchmark_case_count ?? 0) * repetitions;
 
   return (
     <main className="page narrow-page">
@@ -707,18 +749,21 @@ export function NewExperimentPage() {
         </div>
       </section>
 
+      <ErrorBanner error={previewError} />
       <section className="plan-preview">
         <div>
-          <div className="eyebrow">Plan preview</div>
-          <h2>{preview.valid} valid candidates</h2>
+          <div className="eyebrow">
+            {previewing ? "Checking plan…" : "Plan preview"}
+          </div>
+          <h2>{preview?.candidate_count ?? 0} valid candidates</h2>
           <p>
-            {preview.raw} raw combinations · {preview.rejected} rejected by the
+            {preview?.raw_combinations ?? 0} raw combinations · {preview?.rejected_by_constraints ?? 0} rejected by the
             current constraint
           </p>
         </div>
         <div className="plan-numbers">
           <div>
-            <strong>{preview.valid * microbenchCount}</strong>
+            <strong>{preview?.candidate_count ?? 0 * microbenchCount}</strong>
             <span>benchmark cases</span>
           </div>
           <div>
@@ -741,7 +786,7 @@ export function NewExperimentPage() {
           className="button button-primary button-large"
           disabled={
             saving ||
-            preview.valid === 0 ||
+            preview?.candidate_count ?? 0 === 0 ||
             (placementMode === "fixed" && !fixedPlacementId)
           }
           onClick={saveAndPlan}

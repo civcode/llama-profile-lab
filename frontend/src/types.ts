@@ -212,6 +212,16 @@ export interface Experiment {
   measurement_policy: MeasurementPolicy;
 }
 
+export interface PlanPreview {
+  raw_combinations: number;
+  rejected_by_constraints: number;
+  duplicate_candidates: number;
+  candidate_count: number;
+  workloads_per_candidate: number | null;
+  benchmark_case_count: number;
+  unique_workload_count: number;
+}
+
 export interface PlanSummary {
   experiment_id: string;
   experiment_name: string;

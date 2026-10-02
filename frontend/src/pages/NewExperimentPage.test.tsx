@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   profiles: vi.fn(),
   parameters: vi.fn(),
   binaries: vi.fn(),
-  placements: vi.fn()
+  placements: vi.fn(),
+  previewExperiment: vi.fn()
 }));
 
 vi.mock("../api", () => ({
@@ -17,7 +18,8 @@ vi.mock("../api", () => ({
     profiles: mocks.profiles,
     parameters: mocks.parameters,
     binaries: mocks.binaries,
-    placements: mocks.placements
+    placements: mocks.placements,
+    previewExperiment: mocks.previewExperiment
   }
 }));
 
@@ -138,6 +140,20 @@ describe("NewExperimentPage", () => {
       }
     ]);
     mocks.placements.mockResolvedValue([]);
+    mocks.previewExperiment.mockImplementation((body) => {
+      const speedCases = body.workload_suite.cases.filter(
+        (item: { kind: string }) => item.kind === "speed-bench"
+      ).length;
+      return Promise.resolve({
+        raw_combinations: 12,
+        rejected_by_constraints: 1,
+        duplicate_candidates: 0,
+        candidate_count: 11,
+        workloads_per_candidate: 4 + speedCases,
+        benchmark_case_count: 44,
+        unique_workload_count: 4 + speedCases
+      });
+    });
     mocks.createExperiment.mockResolvedValue({ id: "exp-ui" });
     mocks.planExperiment.mockResolvedValue({ experiment_id: "exp-ui" });
     window.location.hash = "#/new";
@@ -146,6 +162,7 @@ describe("NewExperimentPage", () => {
   it("builds and plans the reference 11 × 4 experiment without JSON editing", async () => {
     render(<NewExperimentPage />);
     expect(await screen.findByText("11 valid candidates")).toBeInTheDocument();
+    expect(mocks.previewExperiment).toHaveBeenCalled();
     expect(screen.getByText("44")).toBeInTheDocument();
     expect(screen.getByText("benchmark cases")).toBeInTheDocument();
 

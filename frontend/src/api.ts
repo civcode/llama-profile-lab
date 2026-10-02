@@ -14,6 +14,7 @@ import type {
   ParetoObjective,
   ParetoResult,
   Placement,
+  PlanPreview,
   PlanSummary,
   ProfileListResponse,
   ResultRow,
@@ -78,6 +79,15 @@ export const api = {
     (await request<{ items: Experiment[] }>("/api/experiments")).items,
   experiment: (id: string) =>
     request<Experiment>("/api/experiments/" + encodeURIComponent(id)),
+  previewExperiment: (body: {
+    base_candidate: unknown;
+    search_space: unknown;
+    workload_suite: unknown;
+  }) =>
+    request<PlanPreview>("/api/experiments/preview", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
   createExperiment: (body: unknown) =>
     request<Experiment>("/api/experiments", {
       method: "POST",
