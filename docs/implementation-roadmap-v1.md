@@ -1271,27 +1271,29 @@ Automated acceptance covers the validated-Candidate promotion endpoint/browser a
 
 ## 17. M13 — V1 hardening and release
 
+**Status: Implementation complete; primary-workstation acceptance and release tag pending**
+
 ### Objective
 
 Validate the complete system against the V1 acceptance scenario and prepare the first tagged release.
 
 ### Hardening work
 
-- run full migration suite
-- test interrupted runs
-- test OOM cases
-- test unsupported arguments
-- test custom Qwen binary capabilities
-- test native binary capabilities
-- test malformed llama-bench JSON
-- test server startup failure
-- test stale/orphaned running state
-- test noisy telemetry classification
-- test profile changes after experiment creation
-- test archive restore
-- review SQL indexes using real query plans
-- measure database growth
-- document troubleshooting
+- [x] run full migration suite
+- [x] test interrupted runs
+- [x] test OOM cases
+- [x] test unsupported arguments
+- [x] test custom Qwen binary capabilities
+- [x] test native binary capabilities
+- [x] test malformed llama-bench JSON
+- [x] test server startup failure
+- [x] test stale/orphaned running state
+- [x] test noisy telemetry classification
+- [x] test profile changes after experiment creation
+- [x] test archive restore
+- [x] review SQL indexes using real query plans
+- [x] measure database growth
+- [x] document troubleshooting
 
 ### Reference V1 acceptance experiment
 
@@ -1349,17 +1351,17 @@ Requirements:
 
 ### Release deliverables
 
-- tagged V1 release
-- README installation/setup
-- architecture summary
-- benchmark workflow tutorial
-- troubleshooting guide
-- schema migration documentation
-- known limitations
+- [ ] tagged V1 release — gated on primary-workstation acceptance
+- [x] README installation/setup
+- [x] architecture summary
+- [x] benchmark workflow tutorial
+- [x] troubleshooting guide
+- [x] schema migration documentation
+- [x] known limitations
 
 ### Acceptance gate
 
-All acceptance criteria in docs/technical-spec-v1.md pass on the primary workstation with both relevant Qwen models available.
+Automated acceptance is complete. The remaining release gate is the documented primary-workstation run with the relevant Qwen models and target llama.cpp builds available; only that exact accepted `main` commit should receive the `v1.0.0` tag. See `docs/release-checklist-v1.md`.
 
 ---
 
