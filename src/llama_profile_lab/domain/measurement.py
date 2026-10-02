@@ -28,7 +28,7 @@ class AdaptiveMeasurementPolicy(FrozenModel):
 class MeasurementPolicy(ContentAddressedModel):
     """How an already-defined workload is measured."""
 
-    schema: Literal["llama-measurement-policy"] = "llama-measurement-policy"
+    schema_name: Literal["llama-measurement-policy"] = Field(\n        default="llama-measurement-policy",\n        alias="schema",\n    )
     version: Literal[1] = 1
     warmup: bool = True
     repetitions: PositiveInt | None = 3

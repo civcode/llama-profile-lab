@@ -50,7 +50,7 @@ class GridStrategy(FrozenModel):
 class SearchSpace(ContentAddressedModel):
     """An immutable N-dimensional candidate search space."""
 
-    schema: Literal["llama-search-space"] = "llama-search-space"
+    schema_name: Literal["llama-search-space"] = Field(\n        default="llama-search-space",\n        alias="schema",\n    )
     version: Literal[1] = 1
     dimensions: Annotated[tuple[SearchDimension, ...], Field(min_length=1)]
     constraints: tuple[SearchConstraint, ...] = ()

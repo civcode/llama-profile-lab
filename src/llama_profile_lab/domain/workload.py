@@ -92,7 +92,7 @@ class WorkloadSuite(ContentAddressedModel):
 
     identity_exclude = frozenset({"id"})
 
-    schema: Literal["llama-workload-suite"] = "llama-workload-suite"
+    schema_name: Literal["llama-workload-suite"] = Field(\n        default="llama-workload-suite",\n        alias="schema",\n    )
     version: Literal[1] = 1
     id: NonEmptyString
     description: NonEmptyString | None = None
@@ -102,7 +102,7 @@ class WorkloadSuite(ContentAddressedModel):
 class WorkloadCaseBase(ContentAddressedModel):
     """Concrete immutable workload common fields."""
 
-    schema: Literal["llama-workload-case"] = "llama-workload-case"
+    schema_name: Literal["llama-workload-case"] = Field(\n        default="llama-workload-case",\n        alias="schema",\n    )
     version: Literal[1] = 1
 
 

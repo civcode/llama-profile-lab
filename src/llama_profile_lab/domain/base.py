@@ -50,7 +50,7 @@ def sha256_json(value: Any) -> str:
 class FrozenModel(BaseModel):
     """Base class for immutable, strict domain values."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(\n        frozen=True,\n        extra="forbid",\n        populate_by_name=True,\n        serialize_by_alias=True,\n    )
 
 
 class ContentAddressedModel(FrozenModel):
@@ -60,7 +60,7 @@ class ContentAddressedModel(FrozenModel):
 
     def identity_payload(self) -> dict[str, Any]:
         """Return the semantic payload used for content identity."""
-        payload = self.model_dump(mode="json", exclude_none=False)
+        payload = self.model_dump(mode="json", exclude_none=False, by_alias=True)
         excluded = _NON_SEMANTIC_KEYS | self.identity_exclude
         stripped = _strip_non_semantic(payload, excluded)
         if not isinstance(stripped, dict):
