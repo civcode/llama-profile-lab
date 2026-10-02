@@ -1265,6 +1265,8 @@ llprof archive should:
 
 Complete. A server-validated Candidate can generate a reproducible launcher-profile patch without mutating the launcher configuration. The proposal records the exact source/proposed launcher snapshots plus supporting validation provenance as an append-only Candidate evaluation. `llprof archive` checkpoints WAL, uses SQLite's online backup API for a consistent snapshot, optionally bundles artifact files, and emits a SHA-256 manifest. `llprof experiment export` emits full experiment provenance including immutable definitions, plan rows, executions, telemetry, placement, validation, binaries, and hosts.
 
+Automated acceptance covers the validated-Candidate promotion endpoint/browser action, the reference 11-Candidate / 44-case / 132-sample full export, archive extraction/hash verification, SQLite integrity of the archived snapshot, CLI surfaces, Python static/tests, frontend type/component tests, and production Vite build.
+
 ---
 
 ## 17. M13 — V1 hardening and release
