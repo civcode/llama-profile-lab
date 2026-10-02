@@ -427,10 +427,19 @@ class ApiService:
             }
             running = connection.execute(
                 """
-                SELECT candidate_id, workload_case_id
-                FROM benchmark_case
-                WHERE experiment_id = ? AND status = 'running'
-                ORDER BY ordinal
+                SELECT bc.candidate_id, bc.workload_case_id,
+                       ec.ordinal AS candidate_ordinal,
+                       ew.suite_case_index
+                FROM benchmark_case AS bc
+                JOIN experiment_candidate AS ec
+                  ON ec.experiment_id = bc.experiment_id
+                 AND ec.candidate_id = bc.candidate_id
+                JOIN experiment_workload AS ew
+                  ON ew.experiment_id = bc.experiment_id
+                 AND ew.candidate_id = bc.candidate_id
+                 AND ew.workload_case_id = bc.workload_case_id
+                WHERE bc.experiment_id = ? AND bc.status = 'running'
+                ORDER BY bc.ordinal, ew.suite_case_index
                 LIMIT 1
                 """,
                 (experiment_id,),
@@ -474,8 +483,14 @@ class ApiService:
             current_candidate_id=(
                 None if running is None else str(running["candidate_id"])
             ),
+            current_candidate_ordinal=(
+                None if running is None else int(running["candidate_ordinal"])
+            ),
             current_workload_case_id=(
                 None if running is None else str(running["workload_case_id"])
+            ),
+            current_suite_case_index=(
+                None if running is None else int(running["suite_case_index"])
             ),
             latest_run_id=latest_run_id,
             latest_tokens_per_second=latest_tokens_per_second,

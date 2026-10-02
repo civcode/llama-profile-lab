@@ -350,9 +350,21 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
             {progress.current_candidate_id ? (
               <div className="current-work">
                 <span>Current candidate</span>
-                <code>{progress.current_candidate_id}</code>
+                <strong>
+                  Candidate #
+                  {(progress.current_candidate_ordinal ?? 0) + 1}
+                </strong>
                 <span>Workload</span>
-                <code>{progress.current_workload_case_id}</code>
+                <strong>
+                  {progress.current_suite_case_index === null
+                    ? "Running"
+                    : workloadLabel(
+                        experiment.workload_suite.cases[
+                          progress.current_suite_case_index
+                        ],
+                        progress.current_suite_case_index
+                      )}
+                </strong>
               </div>
             ) : null}
           </div>
@@ -712,7 +724,11 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
                   .map((run) => (
                     <tr key={run.id}>
                       <td>{new Date(run.started_at).toLocaleTimeString()}</td>
-                      <td><code>{run.candidate_id}</code></td>
+                      <td>
+                        Candidate #
+                        {(candidates.find((item) => item.id === run.candidate_id)
+                          ?.ordinal ?? 0) + 1}
+                      </td>
                       <td>{run.workload_kind}</td>
                       <td><StatusBadge status={run.status} /></td>
                       <td>{run.quality ?? "—"}</td>

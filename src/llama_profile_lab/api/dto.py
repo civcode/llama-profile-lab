@@ -237,7 +237,9 @@ class ExperimentProgressDTO(ApiModel):
     case_status_counts: dict[str, NonNegativeInt]
     operation: OperationDTO | None
     current_candidate_id: str | None = None
+    current_candidate_ordinal: NonNegativeInt | None = None
     current_workload_case_id: str | None = None
+    current_suite_case_index: NonNegativeInt | None = None
     latest_run_id: str | None = None
     latest_tokens_per_second: float | None = None
     latest_metrics: dict[str, int | float] = Field(default_factory=dict)

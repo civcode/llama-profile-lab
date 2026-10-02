@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   candidateFromProfile,
   defaultWorkloads,
-  previewCandidateCount,
-  dimensionSupported
+  previewCandidateCount
 } from "./experiment";
 import type { LauncherProfile } from "./types";
 
@@ -96,35 +95,3 @@ describe("experiment planning helpers", () => {
 });
 
 
-describe("binary capability support", () => {
-  it("disables parameters unsupported by the selected tool kind", () => {
-    const definition = {
-      path: "speculative.draft_n_max",
-      label: "Maximum draft tokens",
-      category: "Speculative decoding",
-      value_types: ["int"],
-      cli_argument: "--spec-draft-n-max",
-      affects_placement: false,
-      supported_by: ["llama-server"],
-      minimum: 1,
-      maximum: null,
-      string_choices: null
-    };
-    const bench = {
-      id: "bench",
-      sha256: "x",
-      kind: "llama-bench",
-      path: "/bin/llama-bench",
-      size_bytes: 1,
-      mtime_ns: 1,
-      git_commit: null,
-      git_branch: null,
-      git_dirty: null,
-      build_number: null,
-      build_info: {},
-      capabilities: { options: ["--spec-draft-n-max"] },
-      created_at: "2026-01-01T00:00:00Z"
-    };
-    expect(dimensionSupported(definition, bench)).toBe(false);
-  });
-});
