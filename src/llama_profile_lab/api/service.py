@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import cast
 
 from llama_profile_lab.analysis import AnalysisFilter, AnalysisService, MatrixProjection
 from llama_profile_lab.api.dto import (
@@ -121,9 +120,7 @@ class ApiService:
         return BinaryListResponse(items=tuple(_binary_dto(record) for record in records))
 
     def inspect_binaries(self, request: BinaryInspectRequest) -> BinaryListResponse:
-        kind: BinaryKind | None = (
-            None if request.kind == "auto" else cast(BinaryKind, request.kind)
-        )
+        kind: BinaryKind | None = None if request.kind == "auto" else request.kind
         records: list[BinaryRecord] = []
         with self.database.session() as connection:
             repository = EnvironmentRepository(connection)
