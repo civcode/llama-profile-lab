@@ -301,7 +301,13 @@ class LlamaBenchAdapter:
         if value is None:
             return
         if isinstance(value, tuple):
-            argv.append(",".join(_scalar_arg(item) for item in value))
+            if any(item is None for item in value):
+                raise LlamaBenchConfigurationError(
+                    f"Candidate extra arg {extra.name} cannot contain null tuple values"
+                )
+            argv.append(
+                ",".join(_scalar_arg(item) for item in value if item is not None)
+            )
             return
         argv.append(_scalar_arg(value))
 
@@ -407,7 +413,7 @@ def _optional_int(record: dict[str, Any], key: str) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise LlamaBenchParseError(f"{key} is not an integer")
-    return value
+    return int(value)
 
 
 def _optional_float(record: dict[str, Any], key: str) -> float | None:
