@@ -270,7 +270,9 @@ export interface ExperimentProgress {
     error: string | null;
   } | null;
   current_candidate_id: string | null;
+  current_candidate_ordinal: number | null;
   current_workload_case_id: string | null;
+  current_suite_case_index: number | null;
   latest_run_id: string | null;
   latest_tokens_per_second: number | null;
   latest_metrics: Record<string, number>;
