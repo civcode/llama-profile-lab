@@ -7,7 +7,7 @@ from llama_profile_lab.execution.engine import (
 )
 from llama_profile_lab.execution.host import BasicHostInfo, detect_basic_host
 from llama_profile_lab.execution.lock import HostLock, HostLockError
-from llama_profile_lab.execution.process import ProcessResult, ProcessRunner
+from llama_profile_lab.execution.process import ProcessResult, ProcessRunner, ProcessRunnerError
 
 __all__ = [
     "BasicHostInfo",
@@ -18,5 +18,6 @@ __all__ = [
     "HostLockError",
     "ProcessResult",
     "ProcessRunner",
+    "ProcessRunnerError",
     "detect_basic_host",
 ]
