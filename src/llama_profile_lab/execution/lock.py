@@ -6,7 +6,7 @@ import fcntl
 import os
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import IO, Self
 
 
 class HostLockError(RuntimeError):
@@ -18,7 +18,7 @@ class HostLock:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._handle: object | None = None
+        self._handle: IO[str] | None = None
 
     def acquire(self) -> None:
         """Acquire the lock without waiting."""
@@ -43,8 +43,6 @@ class HostLock:
         handle = self._handle
         if handle is None:
             return
-        if not hasattr(handle, "fileno") or not hasattr(handle, "close"):
-            raise RuntimeError("invalid host lock handle")
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
         self._handle = None
