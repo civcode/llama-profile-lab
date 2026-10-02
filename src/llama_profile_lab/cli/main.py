@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
 from llama_profile_lab import __version__
+from llama_profile_lab.analysis import (
+    DEFAULT_METRIC_REGISTRY,
+    AnalysisError,
+    AnalysisFilter,
+    AnalysisService,
+    ParetoObjective,
+    serialize_export,
+)
 from llama_profile_lab.db import (
     BenchmarkRunRepository,
     Database,
@@ -17,6 +26,7 @@ from llama_profile_lab.db import (
     TelemetryRepository,
 )
 from llama_profile_lab.db.records import BinaryRecord
+from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     ExecutionError,
     ExecutionSummary,
@@ -54,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_binary_parser(commands)
     _add_run_parser(commands)
     _add_placement_parser(commands)
+    _add_results_parser(commands)
     return parser
 
 
@@ -238,6 +249,118 @@ def _add_placement_parser(
     _add_database_argument(show)
 
 
+def _add_results_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    results = commands.add_parser(
+        "results",
+        help="Analyze completed benchmark observations.",
+    )
+    result_commands = results.add_subparsers(dest="results_command")
+
+    metrics = result_commands.add_parser(
+        "metrics",
+        help="List built-in analysis metrics.",
+    )
+    _add_database_argument(metrics)
+
+    matrix = result_commands.add_parser(
+        "matrix",
+        help="Project one workload slice over two Candidate dimensions.",
+    )
+    matrix.add_argument("experiment_id")
+    matrix.add_argument("--x", required=True, dest="x_path")
+    matrix.add_argument("--y", required=True, dest="y_path")
+    matrix.add_argument("--metric", required=True)
+    matrix.add_argument("--facet", dest="facet_path", default=None)
+    matrix.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_analysis_filters(matrix)
+    _add_database_argument(matrix)
+
+    compare = result_commands.add_parser(
+        "compare",
+        help="Compare one Candidate with the experiment baseline.",
+    )
+    compare.add_argument("experiment_id")
+    compare.add_argument("candidate_id")
+    compare.add_argument("--baseline", dest="baseline_candidate_id", default=None)
+    compare.add_argument(
+        "--metric",
+        action="append",
+        dest="metrics",
+        default=[],
+        help="Metric to compare; may be repeated.",
+    )
+    _add_analysis_filters(compare)
+    _add_database_argument(compare)
+
+    pareto = result_commands.add_parser(
+        "pareto",
+        help="Return the non-dominated set for explicit objectives.",
+    )
+    pareto.add_argument("experiment_id")
+    pareto.add_argument(
+        "--objective",
+        action="append",
+        required=True,
+        help=(
+            "KEY:DIRECTION:METRIC[@PATH=VALUE;PATH=VALUE], where DIRECTION "
+            "is max/min or maximize/minimize."
+        ),
+    )
+    _add_analysis_filters(pareto)
+    _add_database_argument(pareto)
+
+    latency = result_commands.add_parser(
+        "latency",
+        help="Estimate compute-only request latency from PP/TG curves.",
+    )
+    latency.add_argument("experiment_id")
+    latency.add_argument("--candidate", required=True, dest="candidate_id")
+    latency.add_argument("--prompt-tokens", type=int, required=True)
+    latency.add_argument("--generate-tokens", type=int, required=True)
+    latency.add_argument("--decode-start-depth-tokens", type=int, default=None)
+    _add_analysis_filters(latency)
+    _add_database_argument(latency)
+
+    export = result_commands.add_parser(
+        "export",
+        help="Export summarized Candidate × workload observations.",
+    )
+    export.add_argument("experiment_id")
+    export.add_argument("--format", choices=("csv", "json"), required=True, dest="format_name")
+    export.add_argument("--output", type=Path, default=None)
+    export.add_argument(
+        "--metric",
+        action="append",
+        dest="metrics",
+        default=[],
+        help="Metric to include; may be repeated. Defaults to the standard summary set.",
+    )
+    _add_analysis_filters(export)
+    _add_database_argument(export)
+
+
+def _add_analysis_filters(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Exact filter PATH=VALUE; VALUE is parsed as JSON when possible.",
+    )
+    parser.add_argument(
+        "--quality",
+        action="append",
+        default=[],
+        help="Include only this run-quality label; may be repeated.",
+    )
+
+
 def _add_database_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--database",
@@ -359,6 +482,270 @@ def _run_show_command(
         print("Stderr:")
         print(stderr.rstrip())
     return 0
+
+
+def _results_metrics_command() -> int:
+    for definition in DEFAULT_METRIC_REGISTRY.definitions():
+        print(
+            f"{definition.name}\t{definition.label}\t"
+            f"{definition.unit or '-'}"
+        )
+    return 0
+
+
+def _results_matrix_command(
+    database_path: Path,
+    experiment_id: str,
+    *,
+    x_path: str,
+    y_path: str,
+    metric: str,
+    facet_path: str | None,
+    filter_args: Sequence[str],
+    qualities: Sequence[str],
+    format_name: str,
+) -> int:
+    try:
+        filters = _parse_filters(filter_args)
+        projection = AnalysisService(Database(database_path)).matrix(
+            experiment_id,
+            x_path=x_path,
+            y_path=y_path,
+            metric=metric,
+            filters=filters,
+            facet_path=facet_path,
+            qualities=qualities,
+        )
+    except AnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if format_name == "json":
+        print(projection.model_dump_json(indent=2))
+    else:
+        print(_render_matrix(projection))
+    return 0
+
+
+def _results_compare_command(
+    database_path: Path,
+    experiment_id: str,
+    candidate_id: str,
+    *,
+    baseline_candidate_id: str | None,
+    metric_names: Sequence[str],
+    filter_args: Sequence[str],
+    qualities: Sequence[str],
+) -> int:
+    metrics = tuple(metric_names) or ("throughput.median",)
+    try:
+        comparison = AnalysisService(Database(database_path)).compare(
+            experiment_id,
+            candidate_id=candidate_id,
+            baseline_candidate_id=baseline_candidate_id,
+            metric_names=metrics,
+            filters=_parse_filters(filter_args),
+            qualities=qualities,
+        )
+    except AnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Candidate: {comparison.candidate_id}")
+    print(f"Baseline: {comparison.baseline_candidate_id}")
+    for delta in comparison.deltas:
+        current = "-" if delta.candidate_value is None else _format_number(delta.candidate_value)
+        baseline = "-" if delta.baseline_value is None else _format_number(delta.baseline_value)
+        percent = "-" if delta.percent_delta is None else f"{delta.percent_delta:+.2f}%"
+        print(
+            f"[{delta.suite_case_index}] {delta.workload_label}  "
+            f"{delta.metric}: {current} vs {baseline} ({percent})"
+        )
+    return 0
+
+
+def _results_pareto_command(
+    database_path: Path,
+    experiment_id: str,
+    *,
+    objective_args: Sequence[str],
+    filter_args: Sequence[str],
+    qualities: Sequence[str],
+) -> int:
+    try:
+        objectives = tuple(_parse_objective(value) for value in objective_args)
+        result = AnalysisService(Database(database_path)).pareto(
+            experiment_id,
+            objectives=objectives,
+            filters=_parse_filters(filter_args),
+            qualities=qualities,
+        )
+    except (AnalysisError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Evaluated candidates: {result.evaluated_count}")
+    print(f"Pareto frontier: {len(result.frontier)}")
+    for candidate in result.frontier:
+        values = "  ".join(
+            f"{key}={_format_number(candidate.values[key])}"
+            for key in candidate.values
+        )
+        print(f"{candidate.candidate_id}  {values}")
+    if result.excluded:
+        print("Excluded for incomplete objective data:")
+        for candidate_id, reason in sorted(result.excluded.items()):
+            print(f"  {candidate_id}: {reason}")
+    return 0
+
+
+def _results_latency_command(
+    database_path: Path,
+    experiment_id: str,
+    *,
+    candidate_id: str,
+    prompt_tokens: int,
+    generate_tokens: int,
+    decode_start_depth_tokens: int | None,
+    filter_args: Sequence[str],
+    qualities: Sequence[str],
+) -> int:
+    try:
+        estimate = AnalysisService(Database(database_path)).latency(
+            experiment_id,
+            candidate_id=candidate_id,
+            prompt_tokens=prompt_tokens,
+            generate_tokens=generate_tokens,
+            decode_start_depth_tokens=decode_start_depth_tokens,
+            filters=_parse_filters(filter_args),
+            qualities=qualities,
+        )
+    except AnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Candidate: {estimate.candidate_id}")
+    print(f"Prefill: {estimate.prefill_seconds:.6f} s")
+    print(f"Decode: {estimate.decode_seconds:.6f} s")
+    print(f"Total: {estimate.total_seconds:.6f} s")
+    print(f"Interpolated PP: {estimate.prefill_tokens_per_second:.6f} t/s")
+    print(
+        "Average TG over requested interval: "
+        f"{estimate.decode_average_tokens_per_second:.6f} t/s"
+    )
+    return 0
+
+
+def _results_export_command(
+    database_path: Path,
+    experiment_id: str,
+    *,
+    format_name: str,
+    output: Path | None,
+    metric_names: Sequence[str],
+    filter_args: Sequence[str],
+    qualities: Sequence[str],
+) -> int:
+    try:
+        rows = AnalysisService(Database(database_path)).export_rows(
+            experiment_id,
+            filters=_parse_filters(filter_args),
+            qualities=qualities,
+            metric_names=tuple(metric_names) or None,
+        )
+        rendered = serialize_export(rows, format_name=format_name)
+    except AnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if output is None:
+        print(rendered, end="")
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+        print(f"Wrote {len(rows)} rows to {output}")
+    return 0
+
+
+def _parse_filters(values: Sequence[str]) -> tuple[AnalysisFilter, ...]:
+    return tuple(_parse_filter(value) for value in values)
+
+
+def _parse_filter(value: str) -> AnalysisFilter:
+    path, separator, raw_value = value.partition("=")
+    if not separator or not path:
+        raise AnalysisError(f"invalid filter {value!r}; expected PATH=VALUE")
+    return AnalysisFilter(path=path, value=_parse_scalar(raw_value))
+
+
+def _parse_scalar(value: str) -> JsonScalar:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    if parsed is None or isinstance(parsed, (str, int, float, bool)):
+        return cast(JsonScalar, parsed)
+    raise AnalysisError("analysis filter values must be JSON scalars")
+
+
+def _parse_objective(value: str) -> ParetoObjective:
+    head, separator, raw_filters = value.partition("@")
+    parts = head.split(":", 2)
+    if len(parts) != 3 or any(not part for part in parts):
+        raise AnalysisError(
+            f"invalid objective {value!r}; expected KEY:DIRECTION:METRIC[@FILTERS]"
+        )
+    key, raw_direction, metric = parts
+    direction_map = {
+        "max": "maximize",
+        "maximize": "maximize",
+        "min": "minimize",
+        "minimize": "minimize",
+    }
+    direction = direction_map.get(raw_direction)
+    if direction is None:
+        raise AnalysisError(f"invalid Pareto direction: {raw_direction}")
+    objective_filters = (
+        _parse_filters(tuple(item for item in raw_filters.split(";") if item))
+        if separator
+        else ()
+    )
+    return ParetoObjective(
+        key=key,
+        direction=direction,
+        metric=metric,
+        filters=objective_filters,
+    )
+
+
+def _render_matrix(projection: object) -> str:
+    from llama_profile_lab.analysis import MatrixProjection
+
+    if not isinstance(projection, MatrixProjection):
+        raise TypeError("expected MatrixProjection")
+    lines = [
+        f"Experiment: {projection.experiment_id}",
+        f"Metric: {projection.metric}",
+        f"X: {projection.x_path}",
+        f"Y: {projection.y_path}",
+    ]
+    for facet in projection.facets:
+        if projection.facet_path is not None:
+            lines.append(f"Facet {projection.facet_path}={facet.value}")
+        by_coordinate = {(cell.x, cell.y): cell for cell in facet.cells}
+        header = ["Y \\ X", *[str(value) for value in projection.x_values]]
+        lines.append("\t".join(header))
+        for y_value in projection.y_values:
+            row = [str(y_value)]
+            for x_value in projection.x_values:
+                cell = by_coordinate.get((x_value, y_value))
+                row.append("" if cell is None else _format_number(cell.value))
+            lines.append("\t".join(row))
+    return "\n".join(lines)
+
+
+def _format_number(value: float) -> str:
+    return f"{value:.6g}"
 
 
 def _placement_list_command(database_path: Path) -> int:
@@ -596,5 +983,60 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _placement_list_command(args.database)
         if args.placement_command == "show":
             return _placement_show_command(args.database, args.placement_id)
+
+    if args.command == "results":
+        if args.results_command == "metrics":
+            return _results_metrics_command()
+        if args.results_command == "matrix":
+            return _results_matrix_command(
+                args.database,
+                args.experiment_id,
+                x_path=args.x_path,
+                y_path=args.y_path,
+                metric=args.metric,
+                facet_path=args.facet_path,
+                filter_args=args.filter,
+                qualities=args.quality,
+                format_name=args.format_name,
+            )
+        if args.results_command == "compare":
+            return _results_compare_command(
+                args.database,
+                args.experiment_id,
+                args.candidate_id,
+                baseline_candidate_id=args.baseline_candidate_id,
+                metric_names=args.metrics,
+                filter_args=args.filter,
+                qualities=args.quality,
+            )
+        if args.results_command == "pareto":
+            return _results_pareto_command(
+                args.database,
+                args.experiment_id,
+                objective_args=args.objective,
+                filter_args=args.filter,
+                qualities=args.quality,
+            )
+        if args.results_command == "latency":
+            return _results_latency_command(
+                args.database,
+                args.experiment_id,
+                candidate_id=args.candidate_id,
+                prompt_tokens=args.prompt_tokens,
+                generate_tokens=args.generate_tokens,
+                decode_start_depth_tokens=args.decode_start_depth_tokens,
+                filter_args=args.filter,
+                qualities=args.quality,
+            )
+        if args.results_command == "export":
+            return _results_export_command(
+                args.database,
+                args.experiment_id,
+                format_name=args.format_name,
+                output=args.output,
+                metric_names=args.metrics,
+                filter_args=args.filter,
+                qualities=args.quality,
+            )
 
     return 0
