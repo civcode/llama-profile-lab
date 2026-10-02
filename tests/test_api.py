@@ -281,6 +281,14 @@ def test_health_profiles_binary_registration_and_experiment_planning(
     experiment_id = created.json()["id"]
     assert created.json()["status"] == "draft"
 
+    fetched = api_request(app, "GET", f"/api/experiments/{experiment_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["id"] == experiment_id
+
+    listing = api_request(app, "GET", "/api/experiments")
+    assert listing.status_code == 200
+    assert [item["id"] for item in listing.json()["items"]] == [experiment_id]
+
     planned = api_request(
         app,
         "POST",
