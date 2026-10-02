@@ -7,6 +7,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from llama_profile_lab.domain import (
+    Candidate,
+    ComputeConfig,
+    ContextConfig,
+    FitConfig,
+    ModelSelection,
+    PlacementConfig,
+    PlacementConstraints,
+    ServerConfig,
+    SpeculativeConfig,
+)
 from llama_profile_lab.domain.base import JsonScalar
 
 
@@ -24,6 +35,7 @@ class LauncherProfile:
     draft_model_path: str | None
     server_alias: str | None
     args: dict[str, JsonScalar]
+    candidate: Candidate
 
 
 class LauncherProfileProvider:
@@ -139,6 +151,11 @@ class LauncherProfileProvider:
             ),
             server_alias=alias_raw,
             args=effective_args,
+            candidate=_candidate_from_args(
+                model_id=model_id,
+                has_draft_model=draft_raw is not None,
+                args=effective_args,
+            ),
         )
 
 
@@ -172,3 +189,116 @@ def _args(mapping: dict[str, Any], context: str) -> dict[str, JsonScalar]:
             )
         result[key] = value
     return result
+
+
+def _candidate_from_args(
+    *,
+    model_id: str,
+    has_draft_model: bool,
+    args: dict[str, JsonScalar],
+) -> Candidate:
+    """Map launcher performance settings into the canonical Candidate schema."""
+    spec_type = _optional_string_arg(args, "--spec-type")
+    draft_n = _optional_int_arg(args, "--spec-draft-n-max")
+    speculative = spec_type is not None and draft_n is not None
+
+    return Candidate(
+        model=ModelSelection(
+            target_model_id=f"launcher-profile:{model_id}",
+            draft_model_id=(
+                f"launcher-draft:{model_id}" if has_draft_model else None
+            ),
+        ),
+        context=ContextConfig(
+            size=_int_arg(args, "--ctx-size", 4096),
+            cache_type_k=_string_arg(args, "--cache-type-k", "f16"),
+            cache_type_v=_string_arg(args, "--cache-type-v", "f16"),
+            kv_offload=not _truthy_arg(args, "--no-kv-offload"),
+            kv_unified=not _truthy_arg(args, "--no-kv-unified"),
+        ),
+        compute=ComputeConfig(
+            flash_attn=_flash_attn(args),
+            batch_size=_int_arg(args, "--batch-size", 2048),
+            ubatch_size=_int_arg(args, "--ubatch-size", 512),
+            threads=_optional_int_arg(args, "--threads"),
+            load_mode=_string_arg(args, "--load-mode", "auto"),
+            lazy_mode=_string_arg(args, "--lazy-mode", "auto"),
+            repack=not _truthy_arg(args, "--no-repack"),
+            no_host=_truthy_arg(args, "--no-host"),
+            no_op_offload=_truthy_arg(args, "--no-op-offload"),
+        ),
+        placement=PlacementConfig(
+            mode="fit",
+            fit=FitConfig(
+                target_mib=_int_arg(args, "--fit-target", 256),
+                min_context=min(4096, _int_arg(args, "--ctx-size", 4096)),
+            ),
+            constraints=PlacementConstraints(
+                n_gpu_layers=_gpu_layers(args),
+                n_cpu_moe=_int_arg(args, "--n-cpu-moe", 0),
+                split_mode=_string_arg(args, "--split-mode", "layer"),
+                main_gpu=_int_arg(args, "--main-gpu", 0),
+            ),
+        ),
+        server=ServerConfig(parallel=_int_arg(args, "--parallel", 1)),
+        speculative=(
+            SpeculativeConfig(
+                enabled=True,
+                type=spec_type,
+                draft_n_max=draft_n,
+            )
+            if speculative
+            else SpeculativeConfig()
+        ),
+    )
+
+
+def _int_arg(args: dict[str, JsonScalar], name: str, default: int) -> int:
+    value = args.get(name)
+    if isinstance(value, bool):
+        return default
+    return value if isinstance(value, int) else default
+
+
+def _optional_int_arg(args: dict[str, JsonScalar], name: str) -> int | None:
+    value = args.get(name)
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _string_arg(args: dict[str, JsonScalar], name: str, default: str) -> str:
+    value = args.get(name)
+    return value if isinstance(value, str) and value else default
+
+
+def _optional_string_arg(args: dict[str, JsonScalar], name: str) -> str | None:
+    value = args.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _truthy_arg(args: dict[str, JsonScalar], name: str) -> bool:
+    value = args.get(name)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, int | float):
+        return value != 0
+    return False
+
+
+def _flash_attn(args: dict[str, JsonScalar]) -> str:
+    value = _string_arg(args, "--flash-attn", "auto")
+    return value if value in {"on", "off", "auto"} else "auto"
+
+
+def _gpu_layers(args: dict[str, JsonScalar]) -> int | str | None:
+    value = args.get("--n-gpu-layers")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if value in {"auto", "all"}:
+        return str(value)
+    return None
