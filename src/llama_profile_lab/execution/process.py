@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Event
@@ -55,6 +56,7 @@ class ProcessRunner:
         *,
         timeout_seconds: float | None = None,
         cancel_event: Event | None = None,
+        on_started: Callable[[int], None] | None = None,
     ) -> ProcessResult:
         """Execute argv and return captured stdout/stderr and lifecycle metadata."""
         if not argv:
@@ -75,6 +77,15 @@ class ProcessRunner:
             )
         except OSError as exc:
             raise ProcessRunnerError(f"failed to launch {argv[0]}: {exc}") from exc
+
+        if on_started is not None:
+            try:
+                on_started(process.pid)
+            except Exception as exc:
+                self._terminate(process)
+                raise ProcessRunnerError(
+                    f"process-start callback failed for {argv[0]}: {exc}"
+                ) from exc
 
         timed_out = False
         cancelled = False
