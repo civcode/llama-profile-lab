@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import FastAPI
-from starlette.types import Message, Receive, Scope, Send
+from starlette.types import Message, Scope
 
 from llama_profile_lab.api import create_app
 from llama_profile_lab.db import (
@@ -128,7 +128,7 @@ async def _api_request(
         messages.append(message)
 
     await asyncio.wait_for(
-        app(scope, Receive(receive), Send(send)),
+        app(scope, receive, send),
         timeout=timeout,
     )
     starts = [message for message in messages if message["type"] == "http.response.start"]
