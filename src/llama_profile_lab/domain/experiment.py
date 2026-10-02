@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -24,7 +24,7 @@ class FixedPlacementPolicy(FrozenModel):
     placement_id: NonEmptyString
 
 
-PlacementPolicy: TypeAlias = Annotated[
+type PlacementPolicy = Annotated[
     PerCandidatePlacementPolicy | FixedPlacementPolicy,
     Field(discriminator="type"),
 ]
@@ -43,7 +43,7 @@ class CandidateBaseline(FrozenModel):
     candidate_id: NonEmptyString
 
 
-BaselinePolicy: TypeAlias = Annotated[
+type BaselinePolicy = Annotated[
     BaseCandidateBaseline | CandidateBaseline,
     Field(discriminator="type"),
 ]
