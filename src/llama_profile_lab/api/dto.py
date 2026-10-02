@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 
+from llama_profile_lab.analysis import ParetoObjective
 from llama_profile_lab.domain import (
     BaseCandidateBaseline,
     Candidate,
@@ -18,7 +19,6 @@ from llama_profile_lab.domain import (
     TelemetrySample,
     WorkloadSuite,
 )
-from llama_profile_lab.analysis import ParetoObjective
 from llama_profile_lab.domain.base import JsonScalar
 
 
