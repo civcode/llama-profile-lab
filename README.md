@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. **M0–M4 and M8 — analysis and multidimensional projections are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
+V1 is under active development. **M0–M4, M8 analysis, and M10 local HTTP API are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
 
 Project documents:
 
@@ -18,7 +18,7 @@ Project documents:
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
 
-llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs, M7 records CPU/process/RAM/GPU telemetry plus run-quality signals, M8 derives statistics and multidimensional comparisons, and M9 manages finalist `llama-server` sessions plus SPEED-Bench validation including speculative-decoding acceptance metrics.
+llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs, M7 records CPU/process/RAM/GPU telemetry plus run-quality signals, M8 derives statistics and multidimensional comparisons, M9 manages finalist `llama-server` sessions plus SPEED-Bench validation including speculative-decoding acceptance metrics, and M10 exposes those same services through a local FastAPI/SSE interface for the upcoming browser UI.
 
 ## Development setup
 
@@ -135,6 +135,13 @@ llprof server validate EXPERIMENT_ID CANDIDATE_ID \
 llprof server compare EXPERIMENT_ID BASELINE_CANDIDATE_ID SPEC_CANDIDATE_ID \
   --category all \
   --database data/benchmarks.db
+
+
+llprof api \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --launcher-config /path/to/llama-profile-launcher/config/hosts/workstation.json \
+  --database data/benchmarks.db
 ~~~
 
 Binary discovery fingerprints exact executables by SHA-256, captures version/help output, persists parsed supported arguments, and allows native/custom builds to be compared without assuming a global llama.cpp feature set.
@@ -150,6 +157,8 @@ M7 samples telemetry before, during, and after each benchmark. Linux CPU/process
 M8 adds a read-only analysis layer over SQLite. Individual repetitions drive mean/median/stddev/CV throughput statistics; resource metrics can be projected over arbitrary Candidate dimensions; higher dimensions use exact filters and facets; ambiguous hidden coordinates are rejected instead of silently averaged. Baseline comparisons report signed deltas, Pareto analysis returns the non-dominated set for caller-defined maximize/minimize objectives, and PP/TG curves can estimate compute-only request latency. CSV and JSON export use the same services as the CLI and future API/UI.
 
 M9 validates selected finalists under a managed `llama-server`. Exact server and SPEED-Bench executables are fingerprinted and capability-checked, the existing resolved placement is frozen into the server argv, readiness is detected through `/health`, server and benchmark subprocess logs/results are persisted independently, and the server process group is cleaned up on completion or failure. SPEED-Bench normalizes prompt/decode throughput, latency, draft/accepted token counts, and acceptance rate while preserving its raw JSON. Candidate evaluation events record the finalist and server-validated stages append-only.
+
+M10 adds a local FastAPI boundary over the same services. Typed HTTP requests can create and plan experiments, inspect/register binaries, run/pause/resume/cancel benchmark execution, inspect Candidates/runs/telemetry, query M8 results and sparse matrices, and invoke M9 Candidate validation. Server-Sent Events expose changed progress snapshots without introducing a second durable scheduler. The server binds to `127.0.0.1` by default. An optional read-only `--launcher-config` exposes current launcher model/profile settings; launcher mutation/promotion remains a later milestone. Interactive API documentation is served at `/api/docs`.
 
 ## Design principles
 

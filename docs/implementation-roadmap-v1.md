@@ -988,6 +988,8 @@ Real-host acceptance remains pending: validate a selected Qwen MTP Candidate and
 
 ## 14. M10 — Local HTTP API
 
+**Status: Complete**
+
 ### Objective
 
 Expose the domain/service layer for the browser UI without leaking raw database structure.
@@ -1025,6 +1027,12 @@ GET    /api/experiments/{id}/matrix
 
 GET    /api/runs/{id}
 GET    /api/runs/{id}/telemetry
+
+GET    /api/experiments/{id}/progress
+GET    /api/experiments/{id}/events
+
+POST   /api/binaries/inspect
+POST   /api/candidates/{id}/validate
 ~~~
 
 ### Live updates
@@ -1033,18 +1041,34 @@ Prefer Server-Sent Events first unless bidirectional WebSocket behavior is actua
 
 ### Work items
 
-- [ ] FastAPI app
-- [ ] DTO layer
-- [ ] experiment endpoints
-- [ ] result endpoints
-- [ ] matrix endpoint
-- [ ] telemetry endpoint
-- [ ] SSE progress endpoint
-- [ ] API tests
+- [x] FastAPI app
+- [x] DTO layer
+- [x] experiment endpoints
+- [x] result endpoints
+- [x] matrix endpoint
+- [x] telemetry endpoint
+- [x] SSE progress endpoint
+- [x] API tests
 
 ### Acceptance gate
 
-All core experiment actions can be performed using HTTP only, while the CLI continues to call the same application service layer.
+Complete. Automated acceptance drives the application through ASGI/HTTP only and covers:
+
+- health and launcher-profile discovery;
+- binary inspection/registration;
+- nested typed experiment creation;
+- experiment list/get/clone;
+- planning;
+- run, pause, resume, and cancel control;
+- progress and SSE event delivery;
+- Candidate listing;
+- run detail, samples, metrics, logs, and telemetry;
+- M8 result export and matrix projection;
+- M9 Candidate server validation.
+
+The HTTP layer is a DTO/service boundary rather than a second implementation of planning, execution, analysis, or server validation. API-started benchmark execution delegates to `ExperimentExecutor`; server validation delegates to `ServerValidationService`; result endpoints delegate to `AnalysisService`.
+
+The local API binds to `127.0.0.1` by default through `llprof api`. Browser UI work begins in M11.
 
 ---
 

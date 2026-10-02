@@ -2716,42 +2716,292 @@ The CLI may expose IDs, but user-facing listing and lookup should accept friendl
 
 ## 42. Local HTTP API
 
-Initial REST resources:
+M10 exposes a stable FastAPI DTO boundary over the same application/domain services used by the CLI. The frontend SHALL NOT read SQLite directly and HTTP handlers SHALL NOT duplicate planner, executor, analysis, or llama.cpp adapter logic.
+
+### 42.1 Process and binding model
+
+The local server is started with:
 
 ~~~text
-GET    /api/health
-
-GET    /api/profiles
-GET    /api/profiles/{id}
-
-GET    /api/binaries
-GET    /api/models
-
-POST   /api/experiments
-GET    /api/experiments
-GET    /api/experiments/{id}
-POST   /api/experiments/{id}/plan
-POST   /api/experiments/{id}/run
-POST   /api/experiments/{id}/pause
-POST   /api/experiments/{id}/resume
-POST   /api/experiments/{id}/cancel
-POST   /api/experiments/{id}/clone
-
-GET    /api/experiments/{id}/candidates
-GET    /api/experiments/{id}/runs
-GET    /api/experiments/{id}/results
-GET    /api/experiments/{id}/matrix
-
-GET    /api/runs/{id}
-GET    /api/runs/{id}/telemetry
-
-POST   /api/candidates/{id}/validate
-POST   /api/candidates/{id}/promote
+llprof api \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --database data/benchmarks.db \
+  --launcher-config /path/to/launcher/config/hosts/workstation.json
 ~~~
 
-A WebSocket or Server-Sent Events endpoint MAY be added for live progress.
+The default bind address is loopback-only:
 
-The REST database model SHALL not leak directly to the frontend; API DTOs provide a stable boundary.
+~~~text
+127.0.0.1
+~~~
+
+Remote binding requires an explicit `--host` override. M10 does not add remote-user authentication; exposing the API outside a trusted local environment is therefore outside the default security posture.
+
+FastAPI documentation is available at:
+
+~~~text
+/api/docs
+/api/openapi.json
+~~~
+
+Environment-based factory configuration is also supported:
+
+~~~text
+LLPROF_DATABASE
+LLPROF_LAUNCHER_CONFIG
+~~~
+
+### 42.2 Stable DTO boundary
+
+API responses use explicit Pydantic DTOs. They do not expose arbitrary SQLite rows.
+
+DTOs cover:
+
+- launcher profiles;
+- exact binary identities/capabilities;
+- model/model-file registry entries;
+- experiments and definitions;
+- planning summaries;
+- execution operations/progress;
+- Candidates and completion counts;
+- benchmark runs, samples, metrics, and logs;
+- telemetry samples;
+- analysis/export rows;
+- matrix projections;
+- server-validation results.
+
+Domain objects such as Candidate, SearchSpace, WorkloadSuite, MeasurementPolicy, and ExperimentDefinition remain the typed semantic source for nested experiment creation.
+
+### 42.3 Profiles
+
+M10 does not introduce launcher promotion or a second persisted profile registry.
+
+When `--launcher-config` is supplied, these endpoints read the existing llama-profile-launcher host JSON directly:
+
+~~~text
+GET /api/profiles
+GET /api/profiles/{id}
+~~~
+
+Effective arguments are resolved in deterministic precedence order:
+
+~~~text
+defaults.args
+    ↓
+listed profile args, in order
+    ↓
+model args
+~~~
+
+The response also includes the selected binary key/path, target model path, optional draft-model path, profile chain, and server alias.
+
+The provider is read-only. Profile mutation and promotion remain M12 work.
+
+If no launcher config is supplied, the profile list reports `configured=false` with no entries rather than inventing profile state.
+
+### 42.4 Binary and model resources
+
+Implemented resources:
+
+~~~text
+GET  /api/binaries
+POST /api/binaries/inspect
+GET  /api/models
+~~~
+
+Binary inspection reuses the exact M4 probing path: executable SHA-256, path, size/mtime, build metadata, help-derived capabilities, and tool kind are persisted before being returned.
+
+The model endpoint is read-only in M10 and exposes existing `model` / `model_file` registry records. Model-registration workflow remains separate from this milestone.
+
+### 42.5 Experiment creation and inspection
+
+Implemented resources:
+
+~~~text
+POST /api/experiments
+GET  /api/experiments
+GET  /api/experiments/{id}
+POST /api/experiments/{id}/clone
+~~~
+
+Experiment creation accepts one typed request containing:
+
+~~~text
+name
+base_candidate
+search_space
+workload_suite
+measurement_policy
+placement_policy
+baseline
+~~~
+
+The service persists content-addressed Candidate/SearchSpace/WorkloadSuite/MeasurementPolicy records and then creates the draft Experiment in one SQLite transaction.
+
+A fixed placement or explicitly selected Candidate baseline must already exist.
+
+Clone creates a new draft ExperimentDefinition referring to the same immutable component identities. It does not copy run history.
+
+### 42.6 Planning and benchmark execution
+
+Implemented resources:
+
+~~~text
+POST /api/experiments/{id}/plan
+POST /api/experiments/{id}/run
+POST /api/experiments/{id}/pause
+POST /api/experiments/{id}/resume
+POST /api/experiments/{id}/cancel
+
+GET  /api/experiments/{id}/progress
+~~~
+
+Planning calls the existing pure `plan_experiment` application function.
+
+Run/resume requests provide:
+
+~~~text
+binary_id
+model_path
+fit_binary_id
+timeout_seconds
+fit_timeout_seconds
+limit
+telemetry_interval_ms
+~~~
+
+The API operation manager starts the existing `ExperimentExecutor` in an in-process worker thread and returns HTTP 202 immediately. It does not implement a second benchmark scheduler.
+
+Only one API-owned benchmark operation may be active on the host at a time. The executor's existing host lock remains the final cross-process exclusion mechanism.
+
+Pause and cancel are cooperative:
+
+- pause sets the executor cancellation event; the current subprocess is stopped through the existing ProcessRunner behavior and the Experiment ends in `paused`;
+- cancel uses the same cooperative stop, then records the Experiment as `cancelled`;
+- the executor checks the event before starting the next planned case so no additional case begins after a pause/cancel request.
+
+The operation manager's thread/status object is intentionally ephemeral presentation/control state. Durable experiment state, run attempts, failures, samples, placement, and telemetry remain in SQLite.
+
+If the API process disappears during execution, normal resume/orphan recovery semantics apply on the next run.
+
+### 42.7 Progress and Server-Sent Events
+
+Polling:
+
+~~~text
+GET /api/experiments/{id}/progress
+~~~
+
+returns:
+
+- Experiment status;
+- total/completed/incomplete case counts;
+- current case-status counts;
+- current or most recent API operation snapshot when available.
+
+Live progress uses SSE:
+
+~~~text
+GET /api/experiments/{id}/events
+Content-Type: text/event-stream
+~~~
+
+Each changed snapshot is emitted as:
+
+~~~text
+event: progress
+data: <ExperimentProgressDTO JSON>
+~~~
+
+Unchanged snapshots are suppressed. The stream ends when the API operation is absent or terminal:
+
+~~~text
+completed
+paused
+cancelled
+failed
+~~~
+
+SSE is preferred over WebSocket in V1 because progress delivery is one-way.
+
+### 42.8 Candidate, run, result, and telemetry resources
+
+Implemented resources:
+
+~~~text
+GET /api/experiments/{id}/candidates
+GET /api/experiments/{id}/runs
+GET /api/experiments/{id}/results
+GET /api/experiments/{id}/matrix
+
+GET /api/runs/{id}
+GET /api/runs/{id}/telemetry
+~~~
+
+Candidate responses combine the immutable Candidate with generation metadata and counts for workloads, microbenchmark cases, completed cases, and completed server validations.
+
+Run detail returns normalized provenance plus individual benchmark samples, normalized metrics, stdout, and stderr. Telemetry remains a separate endpoint because its sample volume can be substantially larger.
+
+The result endpoint delegates to M8 `AnalysisService.export_rows`. It supports repeated query parameters:
+
+~~~text
+filter=PATH=VALUE
+quality=clean
+metric=throughput.median
+~~~
+
+Filter values use the same JSON-scalar parsing semantics as the CLI.
+
+The matrix endpoint delegates to the existing sparse projection service:
+
+~~~text
+x=compute.batch_size
+y=compute.ubatch_size
+metric=throughput.median
+facet=context.cache_type_k
+filter=workload.kind=microbench-prefill
+~~~
+
+The API does not reinterpret or silently aggregate coordinates differently from CLI analysis.
+
+### 42.9 Server validation
+
+Implemented resource:
+
+~~~text
+POST /api/candidates/{id}/validate
+~~~
+
+The request supplies the Experiment context, registered server/SPEED-Bench binary IDs, target/draft model paths, optional concrete placement, bind host/port, timeouts, and optional workload selection.
+
+The route delegates to M9 `ServerValidationService`; the HTTP layer does not construct llama-server or SPEED-Bench argv itself.
+
+Candidate promotion is intentionally not implemented in M10:
+
+~~~text
+POST /api/candidates/{id}/promote
+~~~
+
+remains M12 work because promotion requires launcher provenance and patch/diff semantics.
+
+### 42.10 HTTP status semantics
+
+V1 uses:
+
+~~~text
+200 successful reads/actions
+201 created resource / registered binary
+202 accepted asynchronous benchmark-control action
+
+400 malformed analysis/binary request
+404 missing resource
+409 invalid state transition / host-operation conflict
+422 Pydantic request validation failure
+503 configured launcher profile source unavailable/malformed
+~~~
+
+Subprocess benchmark failures themselves remain persisted experiment/run data rather than being rewritten as generic HTTP failures.
 
 ## 43. Source launcher integration
 
