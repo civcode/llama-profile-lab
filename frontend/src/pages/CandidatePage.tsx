@@ -19,6 +19,7 @@ import type {
   LatencyEstimate,
   LauncherProfile,
   Placement,
+  PromotionResponse,
   ResultRow
 } from "../types";
 
@@ -74,6 +75,8 @@ export function CandidatePage({
   const [speedBinaryId, setSpeedBinaryId] = useState("");
   const [validationPort, setValidationPort] = useState(8080);
   const [validating, setValidating] = useState(false);
+  const [promotion, setPromotion] = useState<PromotionResponse | null>(null);
+  const [promoting, setPromoting] = useState(false);
 
   async function refresh() {
     try {
@@ -178,6 +181,25 @@ export function CandidatePage({
       setError(reason);
     } finally {
       setValidating(false);
+    }
+  }
+
+  async function promote() {
+    if (!experiment || !candidate || !profile) return;
+    try {
+      setPromoting(true);
+      setError(null);
+      setPromotion(
+        await api.promoteCandidate(candidate.id, {
+          experiment_id: experiment.id,
+          source_profile_id: profile.id
+        })
+      );
+      await refresh();
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPromoting(false);
     }
   }
 
@@ -586,6 +608,71 @@ export function CandidatePage({
             </div>
           ) : (
             <p className="muted">No server validation records yet.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-body">
+          <div className="section-heading-row">
+            <div>
+              <div className="eyebrow">Launcher promotion</div>
+              <h2>Proposed profile patch</h2>
+              <p className="section-copy">
+                Generate a reproducible patch from the current launcher configuration.
+                The launcher file is never changed by this action; the proposal and
+                supporting validation provenance are persisted for review.
+              </p>
+            </div>
+            <StatusBadge
+              status={
+                history?.evaluations.some(
+                  (item) =>
+                    item.stage === "server-validated" &&
+                    item.decision === "completed"
+                )
+                  ? "server-validated"
+                  : "planned"
+              }
+            />
+          </div>
+          <div className="button-row">
+            <button
+              className="button button-primary"
+              disabled={
+                promoting ||
+                !profile ||
+                !history?.evaluations.some(
+                  (item) =>
+                    item.stage === "server-validated" &&
+                    item.decision === "completed"
+                )
+              }
+              onClick={() => void promote()}
+            >
+              {promoting ? "Generating…" : "Generate launcher patch"}
+            </button>
+          </div>
+          {promotion ? (
+            <>
+              <div className="definition-grid">
+                <span>Source profile</span>
+                <strong>{promotion.source_profile}</strong>
+                <span>Argument changes</span>
+                <strong>{promotion.changes.length}</strong>
+                <span>Promotion record</span>
+                <strong>{promotion.id}</strong>
+              </div>
+              <pre className="promotion-patch">
+                {promotion.patch || "# No launcher changes are required.\n"}
+              </pre>
+              <JsonDetails label="Promotion provenance" value={promotion} />
+            </>
+          ) : (
+            <p className="muted">
+              A completed server validation is required before a promotion patch can
+              be generated.
+            </p>
           )}
         </div>
       </section>
