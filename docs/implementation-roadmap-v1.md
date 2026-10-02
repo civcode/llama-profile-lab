@@ -68,7 +68,7 @@ M13 V1 hardening and release
 
 A milestone is complete only when its acceptance gate passes.
 
-## 4. M0 — Repository bootstrap
+## 4. M0 — Repository bootstrap\n\n**Status: Complete**
 
 ### Objective
 
@@ -123,19 +123,19 @@ src/llama_profile_lab/
 
 ### Work items
 
-- [ ] Initialize pyproject.toml
-- [ ] Configure uv project workflow
-- [ ] Add .python-version
-- [ ] Generate and commit uv.lock
-- [ ] Move development tools to the dev dependency group
-- [ ] Add package metadata
-- [ ] Add llprof console entry point
-- [ ] Add pytest configuration
-- [ ] Add lint/type-check configuration
-- [ ] Add .gitignore
-- [ ] Add initial README
-- [ ] Add CI for lint + unit tests
-- [ ] Add empty migration framework directory
+- [x] Initialize pyproject.toml
+- [x] Configure uv project workflow
+- [x] Add .python-version
+- [x] Generate and commit uv.lock
+- [x] Move development tools to the dev dependency group
+- [x] Add package metadata
+- [x] Add llprof console entry point
+- [x] Add pytest configuration
+- [x] Add lint/type-check configuration
+- [x] Add .gitignore
+- [x] Add initial README
+- [x] Add CI for lint + unit tests
+- [x] Add empty migration framework directory
 
 ### Acceptance gate
 
@@ -155,7 +155,7 @@ No llama.cpp installation is required yet.
 
 ---
 
-## 5. M1 — Domain model and canonical identities
+## 5. M1 — Domain model and canonical identities\n\n**Status: Complete**
 
 ### Objective
 
@@ -226,18 +226,18 @@ Support:
 
 ### Work items
 
-- [ ] Candidate schema
-- [ ] Candidate validators
-- [ ] WorkloadSuite schema
-- [ ] WorkloadCase schema
-- [ ] MeasurementPolicy schema
-- [ ] SearchSpace schema
-- [ ] ExperimentDefinition schema
-- [ ] canonical serializer
-- [ ] SHA-256 identity functions
-- [ ] semantic metadata exclusion from hashes
-- [ ] unit tests for stable hashes
-- [ ] unit tests for validation failures
+- [x] Candidate schema
+- [x] Candidate validators
+- [x] WorkloadSuite schema
+- [x] WorkloadCase schema
+- [x] MeasurementPolicy schema
+- [x] SearchSpace schema
+- [x] ExperimentDefinition schema
+- [x] canonical serializer
+- [x] SHA-256 identity functions
+- [x] semantic metadata exclusion from hashes
+- [x] unit tests for stable hashes
+- [x] unit tests for validation failures
 
 ### Important tests
 
