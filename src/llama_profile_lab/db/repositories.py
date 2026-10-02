@@ -834,7 +834,7 @@ class EnvironmentRepository:
         hardware_fingerprint: str,
         cpu: Mapping[str, Any],
         ram_bytes: int,
-        gpus: list[Mapping[str, Any]],
+        gpus: Sequence[Mapping[str, Any]],
         os_info: Mapping[str, Any],
     ) -> str:
         identifier = _content_id("host", sha256_json(hardware_fingerprint))
