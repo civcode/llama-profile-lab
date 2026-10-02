@@ -77,3 +77,26 @@ def test_non_contiguous_migrations_are_rejected(tmp_path: Path) -> None:
             migrate(connection, migrations_dir)
     finally:
         connection.close()
+
+
+def test_every_historical_schema_prefix_upgrades_to_current(tmp_path: Path) -> None:
+    source_dir = Path(__file__).parents[1] / "migrations"
+    migration_files = sorted(source_dir.glob("[0-9][0-9][0-9]_*.sql"))
+    assert len(migration_files) == 5
+
+    for prefix_length in range(1, len(migration_files)):
+        partial_dir = tmp_path / f"migrations-{prefix_length}"
+        partial_dir.mkdir()
+        for source in migration_files[:prefix_length]:
+            (partial_dir / source.name).write_bytes(source.read_bytes())
+
+        connection = connect_database(tmp_path / f"upgrade-{prefix_length}.db")
+        try:
+            assert migrate(connection, partial_dir) == prefix_length
+            assert schema_version(connection) == prefix_length
+            assert migrate(connection) == len(migration_files)
+            assert schema_version(connection) == len(migration_files)
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        finally:
+            connection.close()
