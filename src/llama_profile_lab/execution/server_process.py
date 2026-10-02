@@ -7,12 +7,12 @@ import signal
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Event
 from typing import Literal
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 
 ServerProcessFailureKind = Literal[
@@ -178,13 +178,13 @@ class ManagedServerProcess:
 
 
 def _health_ready(url: str) -> bool:
-    request = Request(url, method="GET")
+    request = urllib.request.Request(url, method="GET")
     try:
-        with urlopen(request, timeout=1.0) as response:
+        with urllib.request.urlopen(request, timeout=1.0) as response:
             return response.status == 200
-    except HTTPError as exc:
+    except urllib.error.HTTPError as exc:
         return exc.code == 200
-    except (URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError):
         return False
 
 
