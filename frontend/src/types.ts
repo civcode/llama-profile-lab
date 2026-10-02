@@ -9,6 +9,7 @@ export interface LauncherProfile {
   draft_model_path: string | null;
   server_alias: string | null;
   args: Record<string, JsonScalar>;
+  candidate: Candidate;
 }
 
 export interface ProfileListResponse {

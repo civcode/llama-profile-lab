@@ -27,74 +27,7 @@ function gpuLayers(profile: LauncherProfile): number | "auto" | "all" | null {
 }
 
 export function candidateFromProfile(profile: LauncherProfile): Candidate {
-  const specType = profile.args["--spec-type"];
-  const draftN = profile.args["--spec-draft-n-max"];
-  const speculative = typeof specType === "string" && typeof draftN === "number";
-  return {
-    schema: "llama-profile-candidate",
-    version: 1,
-    model: {
-      target_model_id: "launcher-profile:" + profile.id,
-      draft_model_id: profile.draft_model_path
-        ? "launcher-draft:" + profile.id
-        : null
-    },
-    context: {
-      size: numberArg(profile, "--ctx-size", 4096),
-      cache_type_k: stringArg(profile, "--cache-type-k", "f16"),
-      cache_type_v: stringArg(profile, "--cache-type-v", "f16"),
-      kv_offload: profile.args["--no-kv-offload"] !== true,
-      kv_unified: profile.args["--no-kv-unified"] !== true
-    },
-    compute: {
-      flash_attn: stringArg(profile, "--flash-attn", "auto") as
-        | "on"
-        | "off"
-        | "auto",
-      batch_size: numberArg(profile, "--batch-size", 2048),
-      ubatch_size: numberArg(profile, "--ubatch-size", 512),
-      threads:
-        typeof profile.args["--threads"] === "number"
-          ? Number(profile.args["--threads"])
-          : null,
-      load_mode: stringArg(profile, "--load-mode", "auto"),
-      lazy_mode: stringArg(profile, "--lazy-mode", "auto"),
-      repack: profile.args["--no-repack"] !== true,
-      no_host: profile.args["--no-host"] === true,
-      no_op_offload: profile.args["--no-op-offload"] === true
-    },
-    placement: {
-      mode: "fit",
-      fit: {
-        target_mib: numberArg(profile, "--fit-target", 256),
-        min_context: Math.min(4096, numberArg(profile, "--ctx-size", 4096))
-      },
-      constraints: {
-        n_gpu_layers: gpuLayers(profile),
-        n_cpu_moe: numberArg(profile, "--n-cpu-moe", 0),
-        split_mode: stringArg(profile, "--split-mode", "layer"),
-        main_gpu: numberArg(profile, "--main-gpu", 0),
-        devices: "auto",
-        tensor_split: null,
-        override_tensor: []
-      }
-    },
-    server: {
-      parallel: numberArg(profile, "--parallel", 1)
-    },
-    speculative: speculative
-      ? {
-          enabled: true,
-          type: String(specType),
-          draft_n_max: Number(draftN)
-        }
-      : {
-          enabled: false,
-          type: null,
-          draft_n_max: null
-        },
-    extra_args: {}
-  };
+  return profile.candidate;
 }
 
 export function parseDimensionValues(
@@ -136,8 +69,9 @@ export function dimensionSupported(
   definition: ParameterDefinition,
   binary: BinaryRecord | null
 ): boolean {
-  if (!binary || !definition.cli_argument) return true;
-  if (!definition.supported_by.includes(binary.kind)) return true;
+  if (!binary) return true;
+  if (!definition.supported_by.includes(binary.kind)) return false;
+  if (!definition.cli_argument) return true;
   const options = binaryOptions(binary);
   return options.size === 0 || options.has(definition.cli_argument);
 }

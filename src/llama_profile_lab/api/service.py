@@ -918,6 +918,7 @@ def _profile_dto(profile: LauncherProfile) -> LauncherProfileDTO:
         draft_model_path=profile.draft_model_path,
         server_alias=profile.server_alias,
         args=profile.args,
+        candidate=profile.candidate,
     )
 
 

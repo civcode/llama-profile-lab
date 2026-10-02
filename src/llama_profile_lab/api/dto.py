@@ -42,6 +42,7 @@ class LauncherProfileDTO(ApiModel):
     draft_model_path: str | None = None
     server_alias: str | None = None
     args: dict[str, JsonScalar]
+    candidate: Candidate
 
 
 class ProfileListResponse(ApiModel):
