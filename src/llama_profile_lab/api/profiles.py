@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -47,6 +48,23 @@ class LauncherProfileProvider:
     @property
     def configured(self) -> bool:
         return self.config_path is not None
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return an isolated copy of the configured launcher document."""
+        if self.config_path is None:
+            raise LauncherProfileError("launcher profile configuration is not configured")
+        return deepcopy(self._load())
+
+    def resolve_snapshot(
+        self,
+        payload: dict[str, Any],
+        model_id: str,
+    ) -> LauncherProfile | None:
+        """Resolve one profile against an already captured launcher snapshot."""
+        models = _mapping(payload, "models")
+        if model_id not in models:
+            return None
+        return self._resolve(payload, model_id)
 
     def list(self) -> tuple[LauncherProfile, ...]:
         if self.config_path is None:
