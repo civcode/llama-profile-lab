@@ -15,12 +15,17 @@ from llama_profile_lab.db.records import (
     BenchmarkCaseRecord,
     BenchmarkRunRecord,
     BinaryRecord,
+    CandidateEvaluationRecord,
     ExperimentRecord,
     ExperimentStatus,
     PlacementAttemptRecord,
     PlacementAttemptStatus,
     ResolvedPlacementRecord,
     RunStatus,
+    ServerBenchmarkRecord,
+    ServerBenchmarkStatus,
+    ServerRunRecord,
+    ServerRunStatus,
 )
 from llama_profile_lab.domain import (
     Candidate,
@@ -1468,3 +1473,363 @@ class EnvironmentRepository:
 def decode_json_object(value: str) -> dict[str, Any]:
     """Decode one persisted JSON object; useful to callers inspecting raw fields."""
     return _loads_object(value)
+
+
+class ServerValidationRepository:
+    """Persistence for managed llama-server and SPEED-Bench validation events."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create_run(
+        self,
+        *,
+        experiment_id: str,
+        candidate_id: str,
+        placement_id: str | None,
+        host_id: str,
+        server_binary_id: str,
+        target_model_id: str,
+        draft_model_id: str | None,
+        target_model_path: str,
+        draft_model_path: str | None,
+        spec_type: str | None,
+        spec_draft_n_max: int | None,
+        bind_host: str,
+        bind_port: int,
+        argv: tuple[str, ...],
+        environment: Mapping[str, str],
+        started_at: str | None = None,
+    ) -> str:
+        identifier = _event_id("srv")
+        self.connection.execute(
+            """
+            INSERT INTO server_run(
+                id, experiment_id, candidate_id, placement_id, host_id,
+                server_binary_id, target_model_id, draft_model_id,
+                target_model_path, draft_model_path, spec_type, spec_draft_n_max,
+                argv_json, started_at, status, bind_host, bind_port,
+                environment_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?)
+            """,
+            (
+                identifier,
+                experiment_id,
+                candidate_id,
+                placement_id,
+                host_id,
+                server_binary_id,
+                target_model_id,
+                draft_model_id,
+                target_model_path,
+                draft_model_path,
+                spec_type,
+                spec_draft_n_max,
+                canonical_json(list(argv)),
+                started_at or _utc_now(),
+                bind_host,
+                bind_port,
+                canonical_json(dict(environment)),
+            ),
+        )
+        return identifier
+
+    def mark_ready(self, identifier: str, *, ready_at: str | None = None) -> None:
+        cursor = self.connection.execute(
+            """
+            UPDATE server_run
+            SET status = 'ready', ready_at = ?
+            WHERE id = ? AND status = 'starting'
+            """,
+            (ready_at or _utc_now(), identifier),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("server run does not exist or is not starting")
+
+    def finish_run(
+        self,
+        identifier: str,
+        *,
+        status: ServerRunStatus,
+        duration_ns: int,
+        exit_code: int | None,
+        stdout: str = "",
+        stderr: str = "",
+        finished_at: str | None = None,
+    ) -> None:
+        if status in {"starting", "ready"}:
+            raise ValueError("finished server run must be terminal")
+        cursor = self.connection.execute(
+            """
+            UPDATE server_run
+            SET finished_at = ?, duration_ns = ?, status = ?, exit_code = ?,
+                stdout = ?, stderr = ?
+            WHERE id = ? AND status IN ('starting', 'ready')
+            """,
+            (
+                finished_at or _utc_now(),
+                duration_ns,
+                status,
+                exit_code,
+                stdout,
+                stderr,
+                identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("server run does not exist or is already finalized")
+
+    def get_run(self, identifier: str) -> ServerRunRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, experiment_id, candidate_id, placement_id, host_id,
+                   server_binary_id, target_model_id, draft_model_id,
+                   target_model_path, draft_model_path, spec_type, spec_draft_n_max,
+                   bind_host, bind_port, started_at, ready_at, finished_at,
+                   duration_ns, status, exit_code
+            FROM server_run
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        return None if row is None else self._run_record(row)
+
+    def recover_orphaned(self, experiment_id: str | None = None) -> int:
+        query = """
+            UPDATE server_run
+            SET status = 'interrupted', finished_at = ?
+            WHERE status IN ('starting', 'ready')
+        """
+        parameters: tuple[Any, ...]
+        if experiment_id is None:
+            parameters = (_utc_now(),)
+        else:
+            query += " AND experiment_id = ?"
+            parameters = (_utc_now(), experiment_id)
+        cursor = self.connection.execute(query, parameters)
+        self.connection.execute(
+            """
+            UPDATE server_benchmark
+            SET status = 'interrupted'
+            WHERE status = 'running'
+              AND server_run_id IN (
+                  SELECT id FROM server_run WHERE status = 'interrupted'
+              )
+            """
+        )
+        return cursor.rowcount
+
+    def create_benchmark(
+        self,
+        *,
+        server_run_id: str,
+        workload_case_id: str,
+        speed_bench_binary_id: str,
+        category: str,
+        argv: tuple[str, ...],
+    ) -> str:
+        identifier = _event_id("srvbench")
+        self.connection.execute(
+            """
+            INSERT INTO server_benchmark(
+                id, server_run_id, workload_case_id, speed_bench_binary_id,
+                category, status, argv_json, raw_json
+            )
+            VALUES (?, ?, ?, ?, ?, 'running', ?, '{}')
+            """,
+            (
+                identifier,
+                server_run_id,
+                workload_case_id,
+                speed_bench_binary_id,
+                category,
+                canonical_json(list(argv)),
+            ),
+        )
+        return identifier
+
+    def finish_benchmark(
+        self,
+        identifier: str,
+        *,
+        status: ServerBenchmarkStatus,
+        duration_ns: int,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        raw_result: Mapping[str, Any] | None = None,
+        requests: int | None = None,
+        failed: int | None = None,
+        turns: int | None = None,
+        avg_prompt_ts: float | None = None,
+        avg_pred_ts: float | None = None,
+        avg_latency_ms: float | None = None,
+        draft_n: int | None = None,
+        accepted_n: int | None = None,
+        accept_rate: float | None = None,
+    ) -> None:
+        if status == "running":
+            raise ValueError("finished server benchmark must be terminal")
+        cursor = self.connection.execute(
+            """
+            UPDATE server_benchmark
+            SET status = ?, duration_ns = ?, exit_code = ?, stdout = ?, stderr = ?,
+                raw_json = ?, requests = ?, failed = ?, turns = ?,
+                avg_prompt_ts = ?, avg_pred_ts = ?, avg_latency_ms = ?,
+                draft_n = ?, accepted_n = ?, accept_rate = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (
+                status,
+                duration_ns,
+                exit_code,
+                stdout,
+                stderr,
+                canonical_json(dict(raw_result or {})),
+                requests,
+                failed,
+                turns,
+                avg_prompt_ts,
+                avg_pred_ts,
+                avg_latency_ms,
+                draft_n,
+                accepted_n,
+                accept_rate,
+                identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("server benchmark does not exist or is already finalized")
+
+    def benchmarks_for_candidate(
+        self,
+        *,
+        experiment_id: str,
+        candidate_id: str,
+        completed_only: bool = True,
+    ) -> tuple[ServerBenchmarkRecord, ...]:
+        query = """
+            SELECT sb.id, sb.server_run_id, sb.workload_case_id,
+                   sb.speed_bench_binary_id, sb.category, sb.status,
+                   sb.duration_ns, sb.exit_code, sb.requests, sb.failed, sb.turns,
+                   sb.avg_prompt_ts, sb.avg_pred_ts, sb.avg_latency_ms,
+                   sb.draft_n, sb.accepted_n, sb.accept_rate, sb.created_at
+            FROM server_benchmark AS sb
+            JOIN server_run AS sr ON sr.id = sb.server_run_id
+            WHERE sr.experiment_id = ? AND sr.candidate_id = ?
+        """
+        parameters: list[Any] = [experiment_id, candidate_id]
+        if completed_only:
+            query += " AND sb.status = 'completed'"
+        query += " ORDER BY sb.created_at, sb.id"
+        rows = self.connection.execute(query, tuple(parameters)).fetchall()
+        return tuple(self._benchmark_record(row) for row in rows)
+
+    def add_evaluation(
+        self,
+        *,
+        experiment_id: str,
+        candidate_id: str,
+        stage: str,
+        decision: str,
+        reason: str | None = None,
+        metrics: Mapping[str, Any] | None = None,
+    ) -> str:
+        identifier = _event_id("eval")
+        self.connection.execute(
+            """
+            INSERT INTO candidate_evaluation(
+                id, experiment_id, candidate_id, stage, decision, reason, metrics_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identifier,
+                experiment_id,
+                candidate_id,
+                stage,
+                decision,
+                reason,
+                canonical_json(dict(metrics or {})),
+            ),
+        )
+        return identifier
+
+    def evaluations(
+        self,
+        *,
+        experiment_id: str,
+        candidate_id: str,
+    ) -> tuple[CandidateEvaluationRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT id, experiment_id, candidate_id, stage, decision,
+                   reason, metrics_json, created_at
+            FROM candidate_evaluation
+            WHERE experiment_id = ? AND candidate_id = ?
+            ORDER BY created_at, id
+            """,
+            (experiment_id, candidate_id),
+        ).fetchall()
+        return tuple(
+            CandidateEvaluationRecord(
+                id=str(row["id"]),
+                experiment_id=str(row["experiment_id"]),
+                candidate_id=str(row["candidate_id"]),
+                stage=str(row["stage"]),
+                decision=str(row["decision"]),
+                reason=row["reason"],
+                metrics=_loads_object(str(row["metrics_json"])),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
+        )
+
+    @staticmethod
+    def _run_record(row: sqlite3.Row) -> ServerRunRecord:
+        return ServerRunRecord(
+            id=str(row["id"]),
+            experiment_id=str(row["experiment_id"]),
+            candidate_id=str(row["candidate_id"]),
+            placement_id=row["placement_id"],
+            host_id=str(row["host_id"]),
+            server_binary_id=str(row["server_binary_id"]),
+            target_model_id=str(row["target_model_id"]),
+            draft_model_id=row["draft_model_id"],
+            target_model_path=row["target_model_path"],
+            draft_model_path=row["draft_model_path"],
+            spec_type=row["spec_type"],
+            spec_draft_n_max=row["spec_draft_n_max"],
+            bind_host=str(row["bind_host"]),
+            bind_port=row["bind_port"],
+            started_at=str(row["started_at"]),
+            ready_at=row["ready_at"],
+            finished_at=row["finished_at"],
+            duration_ns=row["duration_ns"],
+            status=row["status"],
+            exit_code=row["exit_code"],
+        )
+
+    @staticmethod
+    def _benchmark_record(row: sqlite3.Row) -> ServerBenchmarkRecord:
+        return ServerBenchmarkRecord(
+            id=str(row["id"]),
+            server_run_id=str(row["server_run_id"]),
+            workload_case_id=str(row["workload_case_id"]),
+            speed_bench_binary_id=row["speed_bench_binary_id"],
+            category=str(row["category"]),
+            status=row["status"],
+            duration_ns=row["duration_ns"],
+            exit_code=row["exit_code"],
+            requests=row["requests"],
+            failed=row["failed"],
+            turns=row["turns"],
+            avg_prompt_ts=row["avg_prompt_ts"],
+            avg_pred_ts=row["avg_pred_ts"],
+            avg_latency_ms=row["avg_latency_ms"],
+            draft_n=row["draft_n"],
+            accepted_n=row["accepted_n"],
+            accept_rate=row["accept_rate"],
+            created_at=str(row["created_at"]),
+        )

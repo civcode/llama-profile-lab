@@ -25,6 +25,18 @@ from llama_profile_lab.llama.discovery import (
     probe_binary,
     sha256_file,
 )
+from llama_profile_lab.llama.server import (
+    LlamaServerAdapter,
+    LlamaServerConfigurationError,
+)
+from llama_profile_lab.llama.speed_bench import (
+    SpeedBenchAdapter,
+    SpeedBenchConfigurationError,
+    SpeedBenchParseError,
+    SpeedBenchResult,
+    SpeedBenchSummary,
+    parse_speed_bench_json,
+)
 from llama_profile_lab.llama.fit_params import (
     LlamaFitParamsAdapter,
     LlamaFitParamsConfigurationError,
@@ -42,6 +54,13 @@ __all__ = [
     "LlamaFitParamsConfigurationError",
     "LlamaFitParamsParseError",
     "LlamaFitParamsResult",
+    "LlamaServerAdapter",
+    "LlamaServerConfigurationError",
+    "SpeedBenchAdapter",
+    "SpeedBenchConfigurationError",
+    "SpeedBenchParseError",
+    "SpeedBenchResult",
+    "SpeedBenchSummary",
     "BinaryDiscoveryError",
     "BinaryKind",
     "BinaryProbe",
@@ -54,6 +73,7 @@ __all__ = [
     "parse_build_metadata",
     "parse_help_options",
     "parse_llama_bench_json",
+    "parse_speed_bench_json",
     "probe_binary",
     "sha256_file",
 ]

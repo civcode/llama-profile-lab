@@ -8,7 +8,7 @@ from typing import Literal
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.domain.search_space import SearchSpace
 
-ToolName = Literal["llama-bench", "llama-server", "llama-fit-params"]
+ToolName = Literal["llama-bench", "llama-server", "llama-fit-params", "speed-bench"]
 
 
 class ParameterError(ValueError):

@@ -16,11 +16,13 @@ from llama_profile_lab.llama.capabilities import (
     parse_help_options,
 )
 
-_BINARY_NAMES: tuple[BinaryKind, ...] = (
-    "llama-bench",
-    "llama-fit-params",
-    "llama-server",
-)
+_BINARY_NAME_TO_KIND: dict[str, BinaryKind] = {
+    "llama-bench": "llama-bench",
+    "llama-fit-params": "llama-fit-params",
+    "llama-server": "llama-server",
+    "speed-bench": "speed-bench",
+    "speed_bench.py": "speed-bench",
+}
 _VERSION_NUMBER_RE = re.compile(r"\b(?:version|build)\s*[:=]?\s*(\d+)\b", re.IGNORECASE)
 _COMMIT_LABEL_RE = re.compile(
     r"\b(?:commit|revision|rev)\s*[:=]\s*([0-9a-f]{7,40})\b",
@@ -86,8 +88,9 @@ def infer_binary_kind(path: Path, explicit: BinaryKind | None = None) -> BinaryK
         return explicit
 
     name = path.name
-    if name in _BINARY_NAMES:
-        return name
+    inferred = _BINARY_NAME_TO_KIND.get(name)
+    if inferred is not None:
+        return inferred
     raise BinaryDiscoveryError(
         f"cannot infer llama.cpp binary kind from filename {name!r}; specify --kind"
     )
@@ -114,18 +117,18 @@ def discover_binary_paths(
         expanded = directory.expanduser()
         if expanded.is_file():
             candidate = expanded.resolve()
-            if candidate.name in _BINARY_NAMES and os.access(candidate, os.X_OK):
+            if candidate.name in _BINARY_NAME_TO_KIND and os.access(candidate, os.X_OK):
                 discovered[str(candidate)] = candidate
             continue
 
-        for name in _BINARY_NAMES:
+        for name in _BINARY_NAME_TO_KIND:
             candidate = expanded / name
             if candidate.is_file() and os.access(candidate, os.X_OK):
                 resolved = candidate.resolve()
                 discovered[str(resolved)] = resolved
 
     if include_path:
-        for name in _BINARY_NAMES:
+        for name in _BINARY_NAME_TO_KIND:
             found = shutil.which(name)
             if found is not None:
                 resolved = Path(found).resolve()
