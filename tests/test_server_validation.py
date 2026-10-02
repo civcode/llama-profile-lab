@@ -503,7 +503,6 @@ def test_server_start_failure_is_persisted_without_benchmark_rows(
         speed_bench_binary_id=speed_id,
         model_path=model,
         placement_id=placement_id,
-        model_name="baseline",
         port=free_port(),
         readiness_timeout_seconds=2,
         benchmark_timeout_seconds=2,
