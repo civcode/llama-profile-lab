@@ -12,6 +12,11 @@ from llama_profile_lab.db import (
     ExperimentRepository,
 )
 from llama_profile_lab.domain import ExperimentDefinition, FixedPlacementPolicy
+from llama_profile_lab.domain.telemetry import (
+    GpuTelemetrySample,
+    TelemetryPhase,
+    TelemetrySample,
+)
 from llama_profile_lab.execution import ExperimentExecutor
 from llama_profile_lab.execution.engine import _process_failure_status
 from llama_profile_lab.execution.process import ProcessResult
@@ -506,3 +511,120 @@ def test_process_failure_classification_detects_oom() -> None:
     )
 
     assert _process_failure_status(result) == "oom"
+
+
+
+class LoadedTelemetryProvider:
+    """Deterministic provider that simulates substantial external CPU load."""
+
+    logical_cpu_count = 16
+
+    def __init__(self) -> None:
+        self.timestamp = 0
+
+    def sample(
+        self,
+        *,
+        pid: int | None,
+        phase: TelemetryPhase,
+    ) -> TelemetrySample:
+        self.timestamp += 1
+        during = phase == "during"
+        return TelemetrySample(
+            timestamp_ns=self.timestamp,
+            phase=phase,
+            cpu_system_pct=80.0 if during else 5.0,
+            cpu_user_pct=70.0 if during else 3.0,
+            cpu_system_mode_pct=10.0 if during else 2.0,
+            cpu_iowait_pct=0.0,
+            process_cpu_pct_normalized=40.0 if during else None,
+            process_cpu_pct_raw=640.0 if during else None,
+            process_user_time_ns=1_000_000 if during else None,
+            process_system_time_ns=100_000 if during else None,
+            process_threads=8 if during else None,
+            cpu_freq_avg_hz=4_000_000_000,
+            cpu_freq_min_hz=3_900_000_000,
+            cpu_freq_max_hz=4_100_000_000,
+            cpu_temperature_c=65.0,
+            load_avg_1m=8.0,
+            load_avg_5m=4.0,
+            ram_used_bytes=8_000_000_000,
+            ram_available_bytes=24_000_000_000,
+            swap_used_bytes=0,
+            process_rss_bytes=2_000_000_000 if during else None,
+            gpus=(
+                GpuTelemetrySample(
+                    device="0000:01:00.0",
+                    utilization_pct=90.0 if during else 0.0,
+                    vram_used_bytes=12_000_000_000 if during else 1_000_000_000,
+                    vram_total_bytes=24_000_000_000,
+                    temperature_c=70.0,
+                    power_w=250.0 if during else 40.0,
+                ),
+            ),
+            cpu_per_core_pct=(80.0,) * 16,
+        )
+
+
+def test_completed_run_persists_cpu_gpu_telemetry_and_external_load_quality(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "telemetry.db")
+    experiment_id = seed_reference_experiment(database)
+    with database.session() as connection:
+        plan_experiment(connection, experiment_id)
+
+    bench = tmp_path / "llama-bench"
+    fit = tmp_path / "llama-fit-params"
+    write_fake_llama_bench(bench)
+    write_fake_fit_params(fit)
+    bench_id = register_fake_binary(database, bench)
+    fit_id = register_fake_binary(database, fit)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+
+    summary = ExperimentExecutor(
+        database,
+        telemetry_provider_factory=LoadedTelemetryProvider,
+    ).execute(
+        experiment_id,
+        binary_id=bench_id,
+        fit_binary_id=fit_id,
+        model_path=model,
+        limit=1,
+        telemetry_interval_seconds=0.5,
+    )
+
+    assert summary.completed == 1
+    with database.session() as connection:
+        run_id = str(
+            connection.execute(
+                "SELECT id FROM benchmark_run WHERE status = 'completed' LIMIT 1"
+            ).fetchone()[0]
+        )
+        run = BenchmarkRunRepository(connection).get(run_id)
+        assert run is not None
+        assert run.status == "completed"
+        assert run.quality == "external_cpu_load"
+
+        rows = connection.execute(
+            """
+            SELECT phase.value, telemetry_sample.process_cpu_pct_normalized,
+                   telemetry_sample.cpu_system_pct, telemetry_sample.gpu_json
+            FROM telemetry_sample
+            JOIN json_each(telemetry_sample.extra_json, '$.phase') AS phase
+            WHERE telemetry_sample.run_id = ?
+            ORDER BY telemetry_sample.timestamp_ns
+            """,
+            (run_id,),
+        ).fetchall()
+        metrics = BenchmarkRunRepository(connection).metrics(run_id)
+
+    assert len(rows) == 3
+    during = rows[1]
+    assert float(during[1]) == 40.0
+    assert float(during[2]) == 80.0
+    assert "0000:01:00.0" in str(during[3])
+    assert metrics["telemetry.process_cpu_peak_pct_normalized"] == 40.0
+    assert metrics["telemetry.gpu_utilization_peak_pct"] == 90.0
+    assert metrics["telemetry.process_rss_peak_bytes"] == 2_000_000_000

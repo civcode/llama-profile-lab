@@ -57,3 +57,15 @@ def test_process_runner_reports_launch_failure(tmp_path: Path) -> None:
 
     with pytest.raises(ProcessRunnerError, match="failed to launch"):
         ProcessRunner().run((str(missing),))
+
+
+
+def test_process_runner_reports_spawned_pid_to_callback() -> None:
+    observed: list[int] = []
+
+    result = ProcessRunner().run(
+        (sys.executable, "-c", "print('ok')"),
+        on_started=observed.append,
+    )
+
+    assert observed == [result.pid]
