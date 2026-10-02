@@ -192,25 +192,24 @@ class ArchiveService:
             finally:
                 connection.close()
 
+            artifact_targets: list[tuple[Path, Path]] = []
+            if artifacts_dir is not None:
+                target_root = artifacts_dir.expanduser()
+                for item in manifest.files:
+                    if item.kind != "artifact":
+                        continue
+                    target = target_root / Path(item.path).name
+                    if target.exists():
+                        raise ArchiveError(
+                            f"restored artifact already exists: {target}"
+                        )
+                    artifact_targets.append((root / item.path, target))
+
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(snapshot_path, destination)
-
-            if artifacts_dir is not None:
-                artifact_root = root / "artifacts"
-                if artifact_root.is_dir():
-                    target_root = artifacts_dir.expanduser()
-                    target_root.mkdir(parents=True, exist_ok=True)
-                    for item in manifest.files:
-                        if item.kind != "artifact":
-                            continue
-                        source_artifact = root / item.path
-                        target = target_root / Path(item.path).name
-                        if target.exists():
-                            destination.unlink(missing_ok=True)
-                            raise ArchiveError(
-                                f"restored artifact already exists: {target}"
-                            )
-                        shutil.copy2(source_artifact, target)
+            for source_artifact, target in artifact_targets:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_artifact, target)
 
         return manifest
 
@@ -557,6 +556,13 @@ def _verify_archive_files(root: Path, manifest: ArchiveManifest) -> None:
     expected_paths = {item.path for item in manifest.files}
     if "database.sqlite3" not in expected_paths:
         raise ArchiveError("archive manifest does not include database.sqlite3")
+    actual_paths = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() and path.name != "manifest.json"
+    }
+    if actual_paths != expected_paths:
+        raise ArchiveError("archive contents do not match the manifest file list")
     for item in manifest.files:
         path = root / item.path
         if not path.is_file():
