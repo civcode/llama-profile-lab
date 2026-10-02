@@ -763,6 +763,37 @@ class BenchmarkRunRepository:
             for row in rows
         )
 
+    def metrics(self, run_id: str) -> dict[str, int | float]:
+        """Return normalized scalar metrics for a run."""
+        rows = self.connection.execute(
+            """
+            SELECT metric_name, value_real, value_integer
+            FROM metric
+            WHERE run_id = ?
+            ORDER BY metric_name
+            """,
+            (run_id,),
+        ).fetchall()
+        metrics: dict[str, int | float] = {}
+        for row in rows:
+            integer = row["value_integer"]
+            real = row["value_real"]
+            if integer is not None:
+                metrics[str(row["metric_name"])] = int(integer)
+            elif real is not None:
+                metrics[str(row["metric_name"])] = float(real)
+        return metrics
+
+    def logs(self, run_id: str) -> tuple[str, str]:
+        """Return captured stdout and stderr for one run."""
+        row = self.connection.execute(
+            "SELECT stdout, stderr FROM benchmark_run WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"benchmark run not found: {run_id}")
+        return str(row["stdout"]), str(row["stderr"])
+
     def get(self, identifier: str) -> BenchmarkRunRecord | None:
         row = self.connection.execute(
             """
