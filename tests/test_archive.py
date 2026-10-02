@@ -13,6 +13,7 @@ from llama_profile_lab.archive import (
     export_experiment,
     serialize_experiment_export,
 )
+from llama_profile_lab.cli.main import main
 from tests.analysis_helpers import seed_analysis_experiment
 
 
@@ -83,3 +84,40 @@ def test_full_experiment_export_contains_plan_runs_and_environment(tmp_path: Pat
     reparsed = json.loads(serialized)
     assert reparsed["experiment"]["id"] == experiment_id
     assert len(reparsed["execution"]["benchmark_runs"]) == 44
+
+
+def test_archive_and_full_export_cli_commands(tmp_path: Path) -> None:
+    database, experiment_id = seed_analysis_experiment(tmp_path / "cli.db")
+    database_path = Path(database.path)
+    export_path = tmp_path / "experiment.json"
+    archive_path = tmp_path / "experiment.tar.gz"
+
+    assert (
+        main(
+            [
+                "experiment",
+                "export",
+                experiment_id,
+                "--output",
+                str(export_path),
+                "--database",
+                str(database_path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(export_path.read_text(encoding="utf-8"))["experiment"]["id"] == experiment_id
+
+    assert (
+        main(
+            [
+                "archive",
+                "--output",
+                str(archive_path),
+                "--database",
+                str(database_path),
+            ]
+        )
+        == 0
+    )
+    assert archive_path.is_file()
