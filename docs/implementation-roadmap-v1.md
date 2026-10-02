@@ -620,6 +620,8 @@ Real-host acceptance remains pending: run the same flow against a registered nat
 
 ## 10. M6 — Placement resolution
 
+**Status: Implementation Complete — Real-host acceptance pending**
+
 ### Objective
 
 Make benchmark placement representative of the actual production context rather than allowing shallow benchmark cases to refit independently.
@@ -673,19 +675,23 @@ all selected Candidates use X
 
 ### Work items
 
-- [ ] fit argv generation
-- [ ] fit output parser
-- [ ] resolved-placement model
-- [ ] placement hash
-- [ ] placement caching
-- [ ] per-candidate fit scheduling
-- [ ] fixed-placement experiment mode
-- [ ] placement failure handling
-- [ ] concrete placement injection into bench argv
+- [x] fit argv generation
+- [x] fit output parser
+- [x] resolved-placement model
+- [x] placement hash
+- [x] placement caching
+- [x] per-candidate fit scheduling
+- [x] fixed-placement experiment mode
+- [x] placement failure handling
+- [x] concrete placement injection into bench argv
 
 ### Acceptance gate
 
-A 128K Flash Next Candidate is fit once against 131072 production context, and all its shallow and deep llama-bench cases use the same resolved placement.
+Automated acceptance is complete: the 128K reference Candidate is fitted at context 131072 exactly once for its four PP/TG workloads, the resolved placement is bound to all four cases, and every llama-bench argv receives the same concrete GPU-layer/tensor placement without fit arguments. The full eleven-Candidate reference sweep produces eleven successful placements and forty-four benchmark runs; a pause/resume reuses previously cached placement rather than fitting again.
+
+Fixed-placement mode is also covered automatically: an existing resolved placement can be selected by experiment policy and reused without invoking llama-fit-params again, provided the host hardware identity and production context match.
+
+Real-host acceptance remains pending: run the flow against the workstation's registered llama-fit-params / llama-bench binaries and the real 131072-context Flash Next GGUF. GitHub CI does not have access to those local binaries, GPUs, or model files.
 
 ---
 

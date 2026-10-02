@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. The repository currently implements **M0 — Repository bootstrap**, **M1 — Domain model and canonical identities**, **M2 — SQLite persistence and migrations**, and **M3 — Planning engine and N-dimensional expansion** from the implementation roadmap.
+V1 is under active development. **M0–M4 are complete. M5 — llama-bench execution engine and M6 — placement resolution are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending.**
 
 Project documents:
 
@@ -18,7 +18,7 @@ Project documents:
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
 
-llama.cpp is optional for development and CI tests. M4 can discover and fingerprint local `llama-bench`, `llama-fit-params`, and `llama-server` executables, and M5 can execute planned microbenchmarks with a registered `llama-bench` binary.
+llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, and M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs.
 
 ## Development setup
 
@@ -79,15 +79,19 @@ llprof --version
 llprof experiment plan EXPERIMENT_ID --database data/benchmarks.db
 
 llprof experiment run EXPERIMENT_ID \
-  --binary BIN_ID \
+  --binary BENCH_BIN_ID \
+  --fit-binary FIT_BIN_ID \
   --model-path /path/to/model.gguf \
   --database data/benchmarks.db
 
 llprof experiment resume EXPERIMENT_ID \
-  --binary BIN_ID \
+  --binary BENCH_BIN_ID \
+  --fit-binary FIT_BIN_ID \
   --model-path /path/to/model.gguf \
   --database data/benchmarks.db
 
+llprof placement list --database data/benchmarks.db
+llprof placement show PLACEMENT_ID --database data/benchmarks.db
 llprof run show RUN_ID --database data/benchmarks.db
 ~~~
 
@@ -95,7 +99,9 @@ Binary discovery fingerprints exact executables by SHA-256, captures version/hel
 
 The plan command expands the stored SearchSpace and WorkloadSuite, persists Candidates and concrete benchmark cases atomically, and does not launch llama.cpp.
 
-The M5 executor runs incomplete cases sequentially under a host lock, revalidates the registered binary SHA-256 before execution, persists stdout/stderr/raw JSON and individual repetitions, and resumes only cases without a successful prior run. Placement fitting is intentionally deferred to M6.
+The M5 executor runs incomplete cases sequentially under a host lock, revalidates registered executable SHA-256 identities, persists stdout/stderr/raw JSON and individual repetitions, and resumes only cases without a successful prior run.
+
+M6 adds production-context placement resolution. Under the default per-candidate policy, `llama-fit-params` is run once at the Candidate's full context and its concrete placement is cached and applied to every PP/TG workload for that Candidate. Fixed-placement experiments can deliberately reuse an existing placement on the same host/context. Fit attempts and successful resolved placements are persisted separately.
 
 ## Design principles
 

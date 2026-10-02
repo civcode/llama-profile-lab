@@ -988,30 +988,106 @@ ResolvedPlacement
 llama-bench at selected active depths
 ~~~
 
-A ResolvedPlacement SHALL record:
+Placement resolution is performed before the first benchmark workload for a Candidate. The fit invocation pins `--ctx-size` to the Candidate's full production context. A successful fit is reused for every shallow and deep microbenchmark workload for that Candidate.
 
-- candidate ID;
-- host ID;
-- fit binary ID;
+### 21.1 Fit input
+
+LlamaFitParamsAdapter SHALL derive fit input from the effective Candidate and the selected fit binary's advertised capabilities.
+
+V1 includes, where supported:
+
+- model path;
 - production context size;
-- requested fit target;
+- batch and ubatch size;
+- K/V cache types;
+- KV offload;
+- flash attention;
+- load/lazy mode;
+- operation offload;
+- host-buffer behavior;
+- repack setting;
+- fit target;
+- fit minimum context;
+- device/split/main-GPU constraints;
+- compatible extra arguments.
+
+Boolean options for llama-fit-params use the common llama.cpp flag pairs advertised by the selected binary, for example `--kv-offload` / `--no-kv-offload`, `--op-offload` / `--no-op-offload`, and `--repack` / `--no-repack`. They are not rendered with llama-bench's numeric boolean convention.
+
+Automatic fitting rejects pre-fixed GPU-layer/tensor placement constraints that would conflict with the fit result. Use fixed-placement experiment policy for controlled comparisons with an already resolved placement.
+
+### 21.2 Fit output and attempts
+
+Each actual llama-fit-params invocation is an append-only placement_attempt recording:
+
+- placement hash;
+- Candidate/host/binary references;
+- model path;
+- argv;
+- start/finish timestamps;
+- duration;
+- terminal status;
+- exit code;
+- stdout/stderr;
+- parsed raw result where available.
+
+Failed, timed-out, interrupted, cancelled, and parser-failed attempts remain observable and do not populate the successful placement cache.
+
+The current llama-fit-params adapter reads the final fitted CLI argument line from stdout using shell-compatible tokenization. V1 normalizes:
+
+- context size;
+- concrete n_gpu_layers;
+- tensor split;
+- one or more tensor-override arguments.
+
+Raw output is retained so future parser versions can reinterpret historical attempts.
+
+### 21.3 Resolved placement and cache identity
+
+A successful ResolvedPlacement records:
+
+- source Candidate ID;
+- host ID;
+- fit binary ID and fit-attempt ID;
+- production context size;
 - resolved n_gpu_layers;
 - n_cpu_moe;
 - split mode;
 - main GPU;
+- device selection;
 - tensor split;
 - tensor overrides;
-- relevant resolved context parameters;
-- complete argv;
-- stdout;
-- stderr;
-- exit status;
-- raw parsed result if available;
+- fit argv;
+- stdout/stderr/exit status;
+- raw parsed result;
+- complete request provenance;
 - creation timestamp.
 
-A shallow llama-bench invocation SHALL NOT be allowed to silently refit placement for a production-context experiment.
+The placement cache hash is derived only from fit-relevant identity:
 
-Once placement has been resolved, llama-bench runs use the concrete placement.
+- target model identity plus model artifact size/mtime safety metadata;
+- production context;
+- K/V cache types and KV offload;
+- flash attention;
+- batch and ubatch size;
+- fit target/minimum context;
+- load/lazy/repack/host/op-offload settings;
+- placement constraints and fit-relevant extra args;
+- host hardware fingerprint;
+- exact llama-fit-params executable SHA-256.
+
+Non-fit Candidate settings such as server parallelism and speculative-decoding configuration do not invalidate the placement cache. The mounted model path is preserved as provenance but is not itself part of the cache hash.
+
+The Linux host hardware fingerprint includes stable DRM/PCI GPU identity when available. Transient DRM card numbering is retained as metadata but excluded from the fingerprint identity.
+
+### 21.4 Per-candidate and fixed policies
+
+For `per-candidate` policy, the executor lazily resolves placement when it reaches the first incomplete workload for a Candidate. This avoids fitting Candidates that are not reached by a limited/smoke run. Persistent cache lookup occurs before running the fit process.
+
+For `fixed` policy, the experiment references an existing ResolvedPlacement. V1 requires that fixed placement to belong to the current host hardware identity and to match the Candidate production context. It may intentionally originate from another Candidate so controlled placement comparisons are possible.
+
+After resolution, the placement is bound to all benchmark cases for that Candidate. Concrete placement values are authoritative in llama-bench argv generation. Candidate extra_args that would re-enable fitting or override resolved placement are rejected.
+
+A shallow llama-bench invocation SHALL NOT silently refit placement for a production-context experiment.
 
 ## 22. Process execution
 
@@ -1425,6 +1501,28 @@ expansion_provenance_json
 ~~~
 
 The Candidate reference is required because relative-depth workload expansion may produce different concrete WorkloadCases for different Candidate context sizes.
+
+### placement_attempt
+
+~~~text
+id
+placement_hash
+candidate_id
+host_id
+binary_id
+model_path
+started_at
+finished_at
+duration_ns
+status
+exit_code
+argv_json
+stdout
+stderr
+raw_result_json
+~~~
+
+Fit attempts are append-only execution observations. Only successful parsed attempts produce or reuse a resolved_placement.
 
 ### resolved_placement
 
@@ -2045,14 +2143,19 @@ llprof binary compare BIN_LEFT BIN_RIGHT --database data/benchmarks.db
 llprof experiment create
 llprof experiment plan EXPERIMENT --database data/benchmarks.db
 llprof experiment run EXPERIMENT \
-  --binary BIN_ID \
+  --binary BENCH_BIN_ID \
+  --fit-binary FIT_BIN_ID \
   --model-path /path/to/model.gguf \
   --database data/benchmarks.db
 
 llprof experiment resume EXPERIMENT \
-  --binary BIN_ID \
+  --binary BENCH_BIN_ID \
+  --fit-binary FIT_BIN_ID \
   --model-path /path/to/model.gguf \
   --database data/benchmarks.db
+
+llprof placement list --database data/benchmarks.db
+llprof placement show PLACEMENT_ID --database data/benchmarks.db
 
 llprof run show RUN --database data/benchmarks.db
 
