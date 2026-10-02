@@ -331,6 +331,30 @@ class ServerValidationResponse(ApiModel):
     speculative: bool
 
 
+class PromotionRequest(ApiModel):
+    experiment_id: str
+    source_profile_id: str | None = None
+
+
+class LauncherArgChangeDTO(ApiModel):
+    path: str
+    argument: str
+    before: JsonScalar
+    after: JsonScalar
+
+
+class PromotionResponse(ApiModel):
+    id: str
+    experiment_id: str
+    candidate_id: str
+    source_profile: str
+    changes: tuple[LauncherArgChangeDTO, ...]
+    patch: str
+    source_snapshot: dict[str, Any]
+    proposed_snapshot: dict[str, Any]
+    validation: dict[str, Any]
+
+
 class ParameterDefinitionDTO(ApiModel):
     path: str
     label: str
