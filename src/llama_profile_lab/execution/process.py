@@ -29,6 +29,10 @@ class ProcessResult:
     forced_kill: bool = False
 
 
+class ProcessRunnerError(RuntimeError):
+    """Raised when a subprocess cannot be launched."""
+
+
 class ProcessRunner:
     """Execute one command without a shell and clean up its process group."""
 
@@ -60,14 +64,17 @@ class ProcessRunner:
 
         started_wall = _utc_now()
         started_ns = time.monotonic_ns()
-        process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            shell=False,
-            start_new_session=True,
-        )
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                shell=False,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise ProcessRunnerError(f"failed to launch {argv[0]}: {exc}") from exc
 
         timed_out = False
         cancelled = False
