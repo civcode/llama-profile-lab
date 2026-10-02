@@ -11,6 +11,7 @@ from llama_profile_lab.db import (
     EnvironmentRepository,
     ExperimentRepository,
 )
+from llama_profile_lab.domain import ExperimentDefinition, FixedPlacementPolicy
 from llama_profile_lab.execution import ExperimentExecutor
 from llama_profile_lab.execution.engine import _process_failure_status
 from llama_profile_lab.execution.process import ProcessResult
@@ -313,6 +314,82 @@ def test_one_candidate_is_fit_once_for_all_four_workloads(tmp_path: Path) -> Non
         assert "--tensor-split" in argv_json
         assert "--override-tensor" in argv_json
         assert "--fit-target" not in argv_json
+
+
+def test_fixed_placement_reuses_existing_resolution_without_fit(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "fixed.db")
+    source_experiment = seed_reference_experiment(database)
+    with database.session() as connection:
+        plan_experiment(connection, source_experiment)
+
+    bench = tmp_path / "llama-bench"
+    fit = tmp_path / "llama-fit-params"
+    write_fake_llama_bench(bench)
+    write_fake_fit_params(fit)
+    bench_id = register_fake_binary(database, bench)
+    fit_id = register_fake_binary(database, fit)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+
+    first = ExperimentExecutor(database).execute(
+        source_experiment,
+        binary_id=bench_id,
+        fit_binary_id=fit_id,
+        model_path=model,
+        limit=1,
+    )
+    assert first.completed == 1
+
+    with database.session() as connection:
+        placement_id = str(
+            connection.execute("SELECT id FROM resolved_placement LIMIT 1").fetchone()[0]
+        )
+        source_definition = ExperimentRepository(connection).get_definition(
+            source_experiment
+        )
+        assert source_definition is not None
+        fixed_experiment = ExperimentRepository(connection).create(
+            ExperimentDefinition(
+                name="fixed placement reuse",
+                base_candidate_id=source_definition.base_candidate_id,
+                search_space_id=source_definition.search_space_id,
+                workload_suite_id=source_definition.workload_suite_id,
+                measurement_policy_id=source_definition.measurement_policy_id,
+                placement_policy=FixedPlacementPolicy(placement_id=placement_id),
+                baseline=source_definition.baseline,
+            )
+        )
+        plan_experiment(connection, fixed_experiment)
+        attempts_before = connection.execute(
+            "SELECT COUNT(*) FROM placement_attempt"
+        ).fetchone()[0]
+
+    second = ExperimentExecutor(database).execute(
+        fixed_experiment,
+        binary_id=bench_id,
+        model_path=model,
+        limit=1,
+    )
+
+    assert second.completed == 1
+    with database.session() as connection:
+        attempts_after = connection.execute(
+            "SELECT COUNT(*) FROM placement_attempt"
+        ).fetchone()[0]
+        bound = connection.execute(
+            """
+            SELECT placement_id FROM benchmark_case
+            WHERE experiment_id = ?
+            ORDER BY ordinal
+            LIMIT 1
+            """,
+            (fixed_experiment,),
+        ).fetchone()[0]
+
+    assert attempts_after == attempts_before
+    assert bound == placement_id
 
 
 def test_fit_failure_is_persisted_and_candidate_is_retryable(tmp_path: Path) -> None:
