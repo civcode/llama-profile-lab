@@ -274,6 +274,7 @@ def resolved_placement_from_record(
     record: ResolvedPlacementRecord,
 ) -> ResolvedPlacement:
     """Convert persistence DTO into the immutable placement domain object."""
+    devices: Literal["auto"] | tuple[str, ...]
     if isinstance(record.devices, str):
         if record.devices != "auto":
             raise PlacementConfigurationError(
