@@ -69,8 +69,9 @@ export function dimensionSupported(
   definition: ParameterDefinition,
   binary: BinaryRecord | null
 ): boolean {
-  if (!binary || !definition.cli_argument) return true;
-  if (!definition.supported_by.includes(binary.kind)) return true;
+  if (!binary) return true;
+  if (!definition.supported_by.includes(binary.kind)) return false;
+  if (!definition.cli_argument) return true;
   const options = binaryOptions(binary);
   return options.size === 0 || options.has(definition.cli_argument);
 }
