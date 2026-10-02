@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from llama_profile_lab import __version__
+from llama_profile_lab.archive import ArchiveError, ArchiveService, serialize_experiment_export
 from llama_profile_lab.analysis import (
     DEFAULT_METRIC_REGISTRY,
     AnalysisError,
@@ -45,6 +46,8 @@ from llama_profile_lab.llama import (
     probe_binary,
 )
 from llama_profile_lab.planning import PlanningError, plan_experiment, render_plan_summary
+from llama_profile_lab.api.profiles import LauncherProfileError, LauncherProfileProvider
+from llama_profile_lab.promotion import PromotionError, PromotionService
 
 _BINARY_KIND_CHOICES = (
     "auto",
@@ -69,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands = parser.add_subparsers(dest="command")
     _add_experiment_parser(commands)
+    _add_profile_parser(commands)
     _add_binary_parser(commands)
     _add_run_parser(commands)
     _add_placement_parser(commands)
@@ -76,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_server_parser(commands)
     _add_api_parser(commands)
     _add_ui_parser(commands)
+    _add_archive_parser(commands)
     return parser
 
 
@@ -106,6 +111,40 @@ def _add_experiment_parser(
         help="Recover stale attempts and execute only cases without a successful run.",
     )
     _add_execution_arguments(resume)
+
+    export = experiment_commands.add_parser(
+        "export",
+        help="Export complete persisted provenance for one experiment as JSON.",
+    )
+    export.add_argument("experiment_id")
+    export.add_argument("--output", type=Path, default=None)
+    _add_database_argument(export)
+
+
+def _add_profile_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    profile = commands.add_parser(
+        "profile",
+        help="Inspect launcher profiles and generate validated promotion patches.",
+    )
+    profile_commands = profile.add_subparsers(dest="profile_command")
+
+    promote = profile_commands.add_parser(
+        "promote",
+        help="Persist and render a launcher patch for a server-validated Candidate.",
+    )
+    promote.add_argument("experiment_id")
+    promote.add_argument("candidate_id")
+    promote.add_argument(
+        "--launcher-config",
+        type=Path,
+        required=True,
+        help="llama-profile-launcher host JSON used as the immutable patch source.",
+    )
+    promote.add_argument("--source-profile", dest="source_profile_id", default=None)
+    promote.add_argument("--output", type=Path, default=None)
+    _add_database_argument(promote)
 
 
 def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
@@ -477,6 +516,29 @@ def _add_ui_parser(
     _add_database_argument(ui)
 
 
+def _add_archive_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    archive = commands.add_parser(
+        "archive",
+        help="Create a consistent database snapshot archive with a hash manifest.",
+    )
+    archive.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Destination .tar.gz archive path.",
+    )
+    archive.add_argument(
+        "--artifact",
+        action="append",
+        type=Path,
+        default=[],
+        help="Optional artifact file to include; may be repeated.",
+    )
+    _add_database_argument(archive)
+
+
 def _add_database_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--database",
@@ -496,6 +558,85 @@ def _plan_command(database_path: Path, experiment_id: str) -> int:
         return 2
 
     print(render_plan_summary(summary))
+    return 0
+
+
+def _experiment_export_command(
+    database_path: Path,
+    experiment_id: str,
+    *,
+    output: Path | None,
+) -> int:
+    try:
+        rendered = serialize_experiment_export(Database(database_path), experiment_id)
+    except ArchiveError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if output is None:
+        print(rendered, end="")
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+        print(f"Wrote experiment export to {output}")
+    return 0
+
+
+def _profile_promote_command(
+    database_path: Path,
+    experiment_id: str,
+    candidate_id: str,
+    *,
+    launcher_config: Path,
+    source_profile_id: str | None,
+    output: Path | None,
+) -> int:
+    try:
+        proposal = PromotionService(
+            Database(database_path),
+            LauncherProfileProvider(launcher_config),
+        ).propose(
+            experiment_id,
+            candidate_id,
+            source_profile_id=source_profile_id,
+        )
+    except (PromotionError, LauncherProfileError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    rendered = proposal.patch or "# No launcher changes are required.\n"
+    if output is None:
+        print(rendered, end="")
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+        print(f"Wrote launcher patch to {output}")
+    print(
+        f"Promotion record: {proposal.id} "
+        f"({len(proposal.changes)} launcher argument changes)"
+    )
+    return 0
+
+
+def _archive_command(
+    database_path: Path,
+    *,
+    output: Path,
+    artifacts: Sequence[Path],
+) -> int:
+    try:
+        manifest = ArchiveService(Database(database_path)).create(
+            output,
+            artifacts=artifacts,
+        )
+    except ArchiveError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Archive: {output}")
+    print(f"Schema version: {manifest.schema_version}")
+    for item in manifest.files:
+        print(f"{item.sha256}  {item.size_bytes}  {item.path}")
     return 0
 
 
@@ -1215,6 +1356,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "experiment":
         if args.experiment_command == "plan":
             return _plan_command(args.database, args.experiment_id)
+        if args.experiment_command == "export":
+            return _experiment_export_command(
+                args.database,
+                args.experiment_id,
+                output=args.output,
+            )
         if args.experiment_command in {"run", "resume"}:
             return _execute_command(
                 args.database,
@@ -1228,6 +1375,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resume=args.experiment_command == "resume",
                 telemetry_interval_ms=args.telemetry_interval_ms,
             )
+
+    if args.command == "profile" and args.profile_command == "promote":
+        return _profile_promote_command(
+            args.database,
+            args.experiment_id,
+            args.candidate_id,
+            launcher_config=args.launcher_config,
+            source_profile_id=args.source_profile_id,
+            output=args.output,
+        )
 
     if args.command == "binary":
         if args.binary_command == "inspect":
@@ -1352,5 +1509,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 filter_args=args.filter,
                 qualities=args.quality,
             )
+
+    if args.command == "archive":
+        return _archive_command(
+            args.database,
+            output=args.output,
+            artifacts=args.artifact,
+        )
 
     return 0
