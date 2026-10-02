@@ -16,6 +16,16 @@ ExperimentStatus = Literal[
     "failed",
 ]
 
+PlacementAttemptStatus = Literal[
+    "running",
+    "completed",
+    "fit_failed",
+    "timeout",
+    "parser_failed",
+    "interrupted",
+    "cancelled",
+]
+
 RunStatus = Literal[
     "planned",
     "running",
@@ -95,3 +105,42 @@ class BinaryRecord:
     build_info: Mapping[str, Any]
     capabilities: Mapping[str, Any]
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedPlacementRecord:
+    """One immutable successful placement resolution."""
+
+    id: str
+    placement_hash: str
+    candidate_id: str
+    host_id: str
+    binary_id: str
+    fit_attempt_id: str | None
+    production_context_size: int
+    n_gpu_layers: int
+    n_cpu_moe: int
+    split_mode: str
+    main_gpu: int
+    devices: str | tuple[str, ...]
+    tensor_split: tuple[float, ...] | None
+    override_tensor: tuple[str, ...]
+    request: Mapping[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementAttemptRecord:
+    """One append-only llama-fit-params execution attempt."""
+
+    id: str
+    placement_hash: str
+    candidate_id: str
+    host_id: str
+    binary_id: str
+    model_path: str
+    started_at: str
+    finished_at: str | None
+    duration_ns: int | None
+    status: PlacementAttemptStatus
+    exit_code: int | None
