@@ -18,6 +18,7 @@ from llama_profile_lab.domain import (
     TelemetrySample,
     WorkloadSuite,
 )
+from llama_profile_lab.analysis import ParetoObjective
 from llama_profile_lab.domain.base import JsonScalar
 
 
@@ -146,6 +147,10 @@ class ExperimentDTO(ApiModel):
     benchmark_case_count: NonNegativeInt
     incomplete_case_count: NonNegativeInt
     definition: ExperimentDefinition
+    base_candidate: Candidate
+    search_space: SearchSpace
+    workload_suite: WorkloadSuite
+    measurement_policy: MeasurementPolicy
 
 
 class ExperimentListResponse(ApiModel):
@@ -214,6 +219,11 @@ class ExperimentProgressDTO(ApiModel):
     incomplete_cases: NonNegativeInt
     case_status_counts: dict[str, NonNegativeInt]
     operation: OperationDTO | None
+    current_candidate_id: str | None = None
+    current_workload_case_id: str | None = None
+    latest_run_id: str | None = None
+    latest_tokens_per_second: float | None = None
+    latest_metrics: dict[str, int | float] = Field(default_factory=dict)
 
 
 class CandidateDTO(ApiModel):
@@ -300,3 +310,92 @@ class ServerValidationResponse(ApiModel):
     benchmark_ids: tuple[str, ...]
     completed: bool
     speculative: bool
+
+
+class ParameterDefinitionDTO(ApiModel):
+    path: str
+    label: str
+    category: str
+    value_types: tuple[str, ...]
+    cli_argument: str | None
+    affects_placement: bool
+    supported_by: tuple[str, ...]
+    minimum: int | float | None
+    maximum: int | float | None
+    string_choices: tuple[str, ...] | None
+
+
+class ParameterListResponse(ApiModel):
+    items: tuple[ParameterDefinitionDTO, ...]
+
+
+class MetricDefinitionDTO(ApiModel):
+    name: str
+    label: str
+    unit: str
+
+
+class MetricListResponse(ApiModel):
+    items: tuple[MetricDefinitionDTO, ...]
+
+
+class PlacementDTO(ApiModel):
+    id: str
+    candidate_id: str
+    host_id: str
+    binary_id: str
+    fit_attempt_id: str | None
+    production_context_size: PositiveInt
+    n_gpu_layers: NonNegativeInt
+    n_cpu_moe: NonNegativeInt
+    split_mode: str
+    main_gpu: NonNegativeInt
+    devices: str | tuple[str, ...]
+    tensor_split: tuple[float, ...] | None
+    override_tensor: tuple[str, ...]
+    request: dict[str, Any]
+    created_at: str
+
+
+class PlacementListResponse(ApiModel):
+    items: tuple[PlacementDTO, ...]
+
+
+class ParetoRequestDTO(ApiModel):
+    objectives: Annotated[tuple[ParetoObjective, ...], Field(min_length=1)]
+    filters: tuple[str, ...] = ()
+    qualities: tuple[str, ...] = ()
+
+
+class CandidateEvaluationDTO(ApiModel):
+    id: str
+    stage: str
+    decision: str
+    reason: str | None
+    metrics: dict[str, Any]
+    created_at: str
+
+
+class ServerBenchmarkDTO(ApiModel):
+    id: str
+    server_run_id: str
+    workload_case_id: str
+    category: str
+    status: str
+    requests: int | None
+    failed: int | None
+    turns: int | None
+    avg_prompt_ts: float | None
+    avg_pred_ts: float | None
+    avg_latency_ms: float | None
+    draft_n: int | None
+    accepted_n: int | None
+    accept_rate: float | None
+    created_at: str
+
+
+class CandidateValidationHistoryDTO(ApiModel):
+    experiment_id: str
+    candidate_id: str
+    evaluations: tuple[CandidateEvaluationDTO, ...]
+    benchmarks: tuple[ServerBenchmarkDTO, ...]
