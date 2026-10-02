@@ -18,6 +18,7 @@ from llama_profile_lab.db import (
     Database,
     EnvironmentRepository,
     PlacementRepository,
+    ServerValidationRepository,
 )
 from llama_profile_lab.domain import (
     AbsoluteDepth,
@@ -336,6 +337,127 @@ def test_health_profiles_binary_registration_and_experiment_planning(
     assert clone.json()["status"] == "draft"
     assert clone.json()["name"] == "HTTP clone"
     assert clone.json()["id"] != experiment_id
+
+
+def test_validated_candidate_generates_persisted_launcher_patch(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "promotion.db"
+    launcher = tmp_path / "workstation.json"
+    source_payload = {
+        "binaries": {"custom": "/opt/llama-server"},
+        "defaults": {"args": {"--host": "127.0.0.1"}},
+        "profiles": {"flash": {"args": {"--flash-attn": "on"}}},
+        "models": {
+            "demo": {
+                "binary": "custom",
+                "profiles": ["flash"],
+                "model": "/models/demo.gguf",
+                "server_alias": "demo",
+                "args": {
+                    "--ctx-size": 8192,
+                    "--batch-size": 2048,
+                    "--ubatch-size": 512,
+                },
+            }
+        },
+    }
+    launcher.write_text(json.dumps(source_payload), encoding="utf-8")
+    app = create_app(database_path, launcher_config_path=launcher)
+
+    profile = api_request(app, "GET", "/api/profiles/demo").json()
+    search = SearchSpace(
+        dimensions=(
+            SearchDimension(
+                path="compute.batch_size",
+                values=(2048, 4096),
+            ),
+        )
+    )
+    suite = WorkloadSuite(
+        id="promotion-suite",
+        cases=(
+            PrefillSuiteCase(
+                label="pp-128",
+                prompt_tokens=128,
+                depth=AbsoluteDepth(tokens=0),
+            ),
+        ),
+    )
+    policy = MeasurementPolicy(repetitions=1)
+    created = api_request(
+        app,
+        "POST",
+        "/api/experiments",
+        body={
+            "name": "Promotion acceptance",
+            "base_candidate": profile["candidate"],
+            "search_space": search.model_dump(mode="json", by_alias=True),
+            "workload_suite": suite.model_dump(mode="json", by_alias=True),
+            "measurement_policy": policy.model_dump(mode="json", by_alias=True),
+        },
+    )
+    assert created.status_code == 201
+    experiment_id = created.json()["id"]
+    assert api_request(
+        app,
+        "POST",
+        f"/api/experiments/{experiment_id}/plan",
+    ).status_code == 200
+
+    candidates = api_request(
+        app,
+        "GET",
+        f"/api/experiments/{experiment_id}/candidates",
+    ).json()["items"]
+    promoted = next(
+        item
+        for item in candidates
+        if item["candidate"]["compute"]["batch_size"] == 4096
+    )
+    candidate_id = promoted["id"]
+
+    with Database(database_path).session() as connection:
+        ServerValidationRepository(connection).add_evaluation(
+            experiment_id=experiment_id,
+            candidate_id=candidate_id,
+            stage="server-validated",
+            decision="completed",
+            metrics={"server_run_id": "srv-acceptance"},
+        )
+
+    response = api_request(
+        app,
+        "POST",
+        f"/api/candidates/{candidate_id}/promote",
+        body={
+            "experiment_id": experiment_id,
+            "source_profile_id": "demo",
+        },
+    )
+    assert response.status_code == 201
+    proposal = response.json()
+    assert proposal["source_profile"] == "demo"
+    assert proposal["proposed_snapshot"]["models"]["demo"]["args"]["--batch-size"] == 4096
+    assert any(
+        item["path"] == "compute.batch_size"
+        and item["before"] == 2048
+        and item["after"] == 4096
+        for item in proposal["changes"]
+    )
+    assert '"--batch-size": 2048' in proposal["patch"]
+    assert '"--batch-size": 4096' in proposal["patch"]
+    assert json.loads(launcher.read_text(encoding="utf-8")) == source_payload
+
+    history = api_request(
+        app,
+        "GET",
+        f"/api/experiments/{experiment_id}/candidates/{candidate_id}/validation",
+    ).json()
+    assert any(
+        item["stage"] == "promotion" and item["decision"] == "proposed"
+        for item in history["evaluations"]
+    )
 
 
 def test_http_execution_results_telemetry_and_sse(tmp_path: Path) -> None:
