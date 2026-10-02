@@ -135,13 +135,13 @@ The planner SHALL NOT launch subprocesses.
 
 The executor SHALL consume planned work from SQLite.
 
-### 5.2 Experiments are immutable after execution begins
+### 5.2 Experiments are immutable after planning
 
-Before execution, a draft experiment may be edited.
+Before planning, a draft experiment may be edited.
 
-When the first run starts, the experiment definition is frozen.
+A successful plan operation atomically persists the generated Candidates, concrete workloads, and benchmark cases, changes the experiment state to `planned`, and records `frozen_at`.
 
-Changing a frozen experiment means cloning it into a new experiment.
+Once planned, changing the experiment definition means cloning it into a new experiment. Execution therefore consumes a stable persisted plan rather than re-expanding a mutable definition.
 
 ### 5.3 Historical observations are append-only
 
@@ -563,19 +563,27 @@ Example:
 }
 ~~~
 
+Grid dimensions are expanded in declared order. A conditional dimension is evaluated against the base Candidate plus assignments from earlier dimensions. If its condition is false, that dimension is skipped and does not multiply the Cartesian product.
+
+This makes dimension ordering semantically relevant when one dimension controls the applicability of a later dimension.
+
 ### 11.2 Constraint language
 
 V1 MAY implement constraints using an internal typed expression model rather than evaluating arbitrary Python.
 
 Arbitrary eval SHALL NOT be used.
 
-The initial implementation only needs:
+The V1 implementation supports:
 
 - equality and inequality;
-- numeric comparison;
-- boolean conjunction/disjunction;
-- membership;
-- references to Candidate paths.
+- numeric and string ordering comparisons;
+- boolean conjunction/disjunction and boolean `not`;
+- membership and non-membership;
+- list/tuple/set literals;
+- references to Candidate paths;
+- lowercase `true`, `false`, and `null`/ `none` literals.
+
+Expressions are parsed with Python's AST module and interpreted by an explicit whitelist. Calls, arithmetic, indexing, comprehensions, and arbitrary evaluation are rejected.
 
 ## 12. WorkloadSuite schema
 
@@ -1387,10 +1395,13 @@ generation_metadata_json
 
 ~~~text
 experiment_id
+candidate_id
 workload_case_id
 suite_case_index
 expansion_provenance_json
 ~~~
+
+The Candidate reference is required because relative-depth workload expansion may produce different concrete WorkloadCases for different Candidate context sizes.
 
 ### resolved_placement
 
@@ -2000,7 +2011,7 @@ llprof profile list
 llprof profile show qwen-flash-gsq-rco-iq3-128k
 
 llprof experiment create
-llprof experiment plan EXPERIMENT
+llprof experiment plan EXPERIMENT --database data/benchmarks.db
 llprof experiment run EXPERIMENT
 llprof experiment pause EXPERIMENT
 llprof experiment resume EXPERIMENT

@@ -333,6 +333,8 @@ Migration tests run in CI.
 
 ## 7. M3 — Planning engine and N-dimensional expansion
 
+**Status: Complete**
+
 ### Objective
 
 Turn experiment definitions into a complete deterministic benchmark plan without running llama.cpp.
@@ -447,20 +449,20 @@ Expected result:
 
 ### Work items
 
-- [ ] ParameterRegistry
-- [ ] typed parameter-path access
-- [ ] dimension expansion
-- [ ] conditional dimensions
-- [ ] safe constraint parser/evaluator
-- [ ] Candidate mutation from base Candidate
-- [ ] candidate deduplication
-- [ ] WorkloadSuite expansion
-- [ ] relative-depth handling
-- [ ] benchmark-case generation
-- [ ] deterministic ordering
-- [ ] persisted plan
-- [ ] llprof experiment plan
-- [ ] human-readable plan summary
+- [x] ParameterRegistry
+- [x] typed parameter-path access
+- [x] dimension expansion
+- [x] conditional dimensions
+- [x] safe constraint parser/evaluator
+- [x] Candidate mutation from base Candidate
+- [x] candidate deduplication
+- [x] WorkloadSuite expansion
+- [x] relative-depth handling
+- [x] benchmark-case generation
+- [x] deterministic ordering
+- [x] persisted plan
+- [x] llprof experiment plan
+- [x] human-readable plan summary
 
 ### Acceptance gate
 

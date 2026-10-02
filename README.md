@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. The repository currently implements **M0 — Repository bootstrap**, **M1 — Domain model and canonical identities**, and **M2 — SQLite persistence and migrations** from the implementation roadmap.
+V1 is under active development. The repository currently implements **M0 — Repository bootstrap**, **M1 — Domain model and canonical identities**, **M2 — SQLite persistence and migrations**, and **M3 — Planning engine and N-dimensional expansion** from the implementation roadmap.
 
 Project documents:
 
@@ -71,12 +71,15 @@ docs/           Technical specification and roadmap
 
 ## CLI
 
-The bootstrap milestone intentionally exposes only the top-level CLI shell. Commands are added as their backing capabilities are implemented.
+The planner milestone exposes persisted experiment planning in addition to the top-level CLI shell:
 
 ~~~text
 llprof --help
 llprof --version
+llprof experiment plan EXPERIMENT_ID --database data/benchmarks.db
 ~~~
+
+The plan command expands the stored SearchSpace and WorkloadSuite, persists Candidates and concrete benchmark cases atomically, and does not launch llama.cpp.
 
 ## Design principles
 
