@@ -8,7 +8,10 @@ import sqlite3
 import tarfile
 from pathlib import Path
 
+import pytest
+
 from llama_profile_lab.archive import (
+    ArchiveError,
     ArchiveService,
     export_experiment,
     serialize_experiment_export,
@@ -121,3 +124,49 @@ def test_archive_and_full_export_cli_commands(tmp_path: Path) -> None:
         == 0
     )
     assert archive_path.is_file()
+
+
+def test_archive_restore_verifies_snapshot_and_artifacts(tmp_path: Path) -> None:
+    database, experiment_id = seed_analysis_experiment(tmp_path / "source.db")
+    artifact = tmp_path / "trace.txt"
+    artifact.write_text("trace payload\n", encoding="utf-8")
+    archive_path = tmp_path / "backup.tar.gz"
+    ArchiveService(database).create(archive_path, artifacts=(artifact,))
+
+    restored_path = tmp_path / "restored.db"
+    restored_artifacts = tmp_path / "restored-artifacts"
+    manifest = ArchiveService.restore(
+        archive_path,
+        restored_path,
+        artifacts_dir=restored_artifacts,
+    )
+
+    assert manifest.format == "llprof-archive-v1"
+    assert restored_path.is_file()
+    assert (restored_artifacts / "000-trace.txt").read_text(encoding="utf-8") == (
+        "trace payload\n"
+    )
+    restored = export_experiment(Database(restored_path), experiment_id)
+    assert restored["experiment"]["id"] == experiment_id
+    assert len(restored["execution"]["benchmark_runs"]) == 44
+
+
+def test_archive_restore_rejects_tampered_payload(tmp_path: Path) -> None:
+    database, _ = seed_analysis_experiment(tmp_path / "source.db")
+    archive_path = tmp_path / "backup.tar.gz"
+    ArchiveService(database).create(archive_path)
+
+    unpacked = tmp_path / "unpacked"
+    unpacked.mkdir()
+    with tarfile.open(archive_path, "r:gz") as archive:
+        archive.extractall(unpacked)
+    with (unpacked / "database.sqlite3").open("ab") as handle:
+        handle.write(b"tampered")
+
+    tampered = tmp_path / "tampered.tar.gz"
+    with tarfile.open(tampered, "w:gz") as archive:
+        archive.add(unpacked / "database.sqlite3", arcname="database.sqlite3")
+        archive.add(unpacked / "manifest.json", arcname="manifest.json")
+
+    with pytest.raises(ArchiveError, match="size mismatch|hash mismatch"):
+        ArchiveService.restore(tampered, tmp_path / "should-not-exist.db")
