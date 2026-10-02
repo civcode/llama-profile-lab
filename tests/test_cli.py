@@ -13,6 +13,7 @@ def test_help(capsys: pytest.CaptureFixture[str]) -> None:
     output = capsys.readouterr().out
     assert "llprof" in output
     assert "Experiment, benchmark, and tune llama.cpp profiles." in output
+    assert "server" in output
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:

@@ -113,6 +113,45 @@ server.serve_forever()
     path.chmod(0o755)
 
 
+def write_failing_server(path: Path) -> None:
+    script = r'''#!/usr/bin/env python3
+import sys
+
+HELP = """usage: llama-server [options]
+  --model F
+  --host H
+  --port N
+  --ctx-size N
+  --batch-size N
+  --ubatch-size N
+  --cache-type-k T
+  --cache-type-v T
+  --parallel N
+  --n-gpu-layers N
+  --kv-offload
+  --no-kv-offload
+  --kv-unified
+  --no-kv-unified
+  --op-offload
+  --no-op-offload
+  --repack
+  --no-repack
+"""
+
+if "--version" in sys.argv:
+    print("version: 9002 (deadbeef)")
+    raise SystemExit(0)
+if "--help" in sys.argv or "-h" in sys.argv:
+    print(HELP)
+    raise SystemExit(0)
+
+print("synthetic server startup failure", file=sys.stderr)
+raise SystemExit(42)
+'''
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+
+
 def write_fake_speed_bench(path: Path) -> None:
     script = r'''#!/usr/bin/env python3
 import json
@@ -439,3 +478,57 @@ def test_server_validation_persists_speculative_metrics_and_comparison(
             "server-validated",
         ]
         assert evaluations[-1].decision == "completed"
+
+
+
+def test_server_start_failure_is_persisted_without_benchmark_rows(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "server-failure.db")
+    experiment_id, baseline_id, _, placement_id, _ = seed_validation(database)
+    server = tmp_path / "llama-server"
+    speed = tmp_path / "speed_bench.py"
+    write_failing_server(server)
+    write_fake_speed_bench(speed)
+    server_id = register_binary(database, server)
+    speed_id = register_binary(database, speed)
+
+    model = tmp_path / "target.gguf"
+    model.write_bytes(b"target")
+
+    summary = ServerValidationService(database, host_detector=host_info).validate(
+        experiment_id,
+        candidate_id=baseline_id,
+        server_binary_id=server_id,
+        speed_bench_binary_id=speed_id,
+        model_path=model,
+        placement_id=placement_id,
+        model_name="baseline",
+        port=free_port(),
+        readiness_timeout_seconds=2,
+        benchmark_timeout_seconds=2,
+    )
+
+    assert not summary.completed
+    assert summary.benchmark_ids == ()
+
+    with database.session() as connection:
+        repository = ServerValidationRepository(connection)
+        run = repository.get_run(summary.server_run_id)
+        assert run is not None
+        assert run.status == "start_failed"
+        assert run.exit_code == 42
+        assert repository.benchmarks_for_candidate(
+            experiment_id=experiment_id,
+            candidate_id=baseline_id,
+            completed_only=False,
+        ) == ()
+
+        evaluations = repository.evaluations(
+            experiment_id=experiment_id,
+            candidate_id=baseline_id,
+        )
+        assert evaluations[-1].stage == "server-validated"
+        assert evaluations[-1].decision == "failed"
+        assert evaluations[-1].reason is not None
+        assert "exited before readiness" in evaluations[-1].reason

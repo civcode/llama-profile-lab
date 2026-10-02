@@ -113,12 +113,18 @@ def test_discovery_searches_explicit_directories(tmp_path: Path) -> None:
     bench = native_dir / "llama-bench"
     fit = native_dir / "llama-fit-params"
     server = native_dir / "llama-server"
+    speed = native_dir / "speed_bench.py"
     write_fake_binary(bench, version="version: 1 (aaaaaaa)", help_text="  --model F")
     write_fake_binary(fit, version="version: 1 (aaaaaaa)", help_text="  --fit-target N")
     write_fake_binary(server, version="version: 1 (aaaaaaa)", help_text="  --model F")
+    write_fake_binary(speed, version="version: 1", help_text="  --url URL\n  --output FILE")
 
     discovered = discover_binary_paths((native_dir,), include_path=False)
 
     assert discovered == tuple(
-        sorted((bench.resolve(), fit.resolve(), server.resolve()), key=str)
+        sorted(
+            (bench.resolve(), fit.resolve(), server.resolve(), speed.resolve()),
+            key=str,
+        )
     )
+    assert probe_binary(speed).kind == "speed-bench"
