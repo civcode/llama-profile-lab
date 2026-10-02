@@ -24,13 +24,13 @@ class BasicHostInfo:
 
 def detect_basic_host() -> BasicHostInfo:
     """Capture stable host metadata without vendor-specific telemetry tools."""
-    cpu = {
+    cpu: dict[str, object] = {
         "machine": platform.machine(),
         "processor": platform.processor(),
         "logical_cpus": os.cpu_count(),
     }
     ram_bytes = _total_ram_bytes()
-    os_info = {
+    os_info: dict[str, object] = {
         "system": platform.system(),
         "release": platform.release(),
         "version": platform.version(),
