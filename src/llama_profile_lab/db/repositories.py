@@ -347,6 +347,33 @@ class ExperimentRepository:
             completed_at=row["completed_at"],
         )
 
+    def list(self) -> tuple[ExperimentRecord, ...]:
+        """List experiments newest first without exposing persistence JSON."""
+        rows = self.connection.execute(
+            """
+            SELECT id, status, name, base_candidate_id, search_space_id,
+                   workload_suite_id, measurement_policy_id,
+                   created_at, frozen_at, completed_at
+            FROM experiment
+            ORDER BY created_at DESC, id DESC
+            """
+        ).fetchall()
+        return tuple(
+            ExperimentRecord(
+                id=str(row["id"]),
+                status=row["status"],
+                name=str(row["name"]),
+                base_candidate_id=str(row["base_candidate_id"]),
+                search_space_id=str(row["search_space_id"]),
+                workload_suite_id=str(row["workload_suite_id"]),
+                measurement_policy_id=str(row["measurement_policy_id"]),
+                created_at=str(row["created_at"]),
+                frozen_at=row["frozen_at"],
+                completed_at=row["completed_at"],
+            )
+            for row in rows
+        )
+
     def add_candidate(
         self,
         *,
@@ -456,6 +483,20 @@ class ExperimentRepository:
         )
         if cursor.rowcount != 1:
             raise ValueError("experiment does not exist or is not running")
+
+    def mark_cancelled(self, identifier: str) -> None:
+        """Mark unfinished experiment work cancelled without deleting its plan/history."""
+        cursor = self.connection.execute(
+            """
+            UPDATE experiment
+            SET status = 'cancelled'
+            WHERE id = ?
+              AND status IN ('draft', 'planned', 'running', 'paused', 'failed')
+            """,
+            (identifier,),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("experiment does not exist or is already terminal")
 
 
 class PlacementRepository:
@@ -1169,6 +1210,30 @@ class BenchmarkRunRepository:
         ).fetchone()
         if row is None:
             return None
+        return self._record(row)
+
+    def list_for_experiment(
+        self,
+        experiment_id: str,
+    ) -> tuple[BenchmarkRunRecord, ...]:
+        """List all append-only attempts for an experiment in start order."""
+        rows = self.connection.execute(
+            """
+            SELECT br.id, br.benchmark_case_id, br.host_id, br.binary_id,
+                   br.measurement_policy_id, br.started_at, br.finished_at,
+                   br.duration_ns, br.status, br.exit_code, br.quality,
+                   br.quality_details_json
+            FROM benchmark_run AS br
+            JOIN benchmark_case AS bc ON bc.id = br.benchmark_case_id
+            WHERE bc.experiment_id = ?
+            ORDER BY br.started_at, br.id
+            """,
+            (experiment_id,),
+        ).fetchall()
+        return tuple(self._record(row) for row in rows)
+
+    @staticmethod
+    def _record(row: sqlite3.Row) -> BenchmarkRunRecord:
         return BenchmarkRunRecord(
             id=str(row["id"]),
             benchmark_case_id=str(row["benchmark_case_id"]),
