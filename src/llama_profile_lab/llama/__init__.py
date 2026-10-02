@@ -15,12 +15,6 @@ from llama_profile_lab.llama.capabilities import (
     compare_capabilities,
     parse_help_options,
 )
-from llama_profile_lab.llama.fit_params import (
-    LlamaFitParamsAdapter,
-    LlamaFitParamsConfigurationError,
-    LlamaFitParamsParseError,
-    LlamaFitParamsResult,
-)
 from llama_profile_lab.llama.discovery import (
     BinaryDiscoveryError,
     BinaryProbe,
@@ -30,6 +24,12 @@ from llama_profile_lab.llama.discovery import (
     parse_build_metadata,
     probe_binary,
     sha256_file,
+)
+from llama_profile_lab.llama.fit_params import (
+    LlamaFitParamsAdapter,
+    LlamaFitParamsConfigurationError,
+    LlamaFitParamsParseError,
+    LlamaFitParamsResult,
 )
 
 __all__ = [
