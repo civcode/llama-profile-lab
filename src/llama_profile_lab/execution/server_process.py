@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 from threading import Event
 from typing import Literal
 
-
 ServerProcessFailureKind = Literal[
     "start_failed",
     "readiness_failed",
