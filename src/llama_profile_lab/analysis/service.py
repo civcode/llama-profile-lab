@@ -9,7 +9,6 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from statistics import median
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -32,7 +31,6 @@ from llama_profile_lab.analysis.models import (
     ParetoResult,
 )
 from llama_profile_lab.db import (
-    CandidateRepository,
     Database,
     ExperimentRepository,
     SearchSpaceRepository,

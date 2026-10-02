@@ -9,6 +9,17 @@ from statistics import fmean, median, stdev
 from typing import Literal, Protocol
 
 MetricAggregation = Literal["mean", "max", "min"]
+DerivedMetric = Literal[
+    "throughput_mean",
+    "throughput_median",
+    "throughput_stddev",
+    "throughput_cv",
+    "throughput_min",
+    "throughput_max",
+    "throughput_sample_count",
+    "cpu_seconds_per_1k_tokens",
+    "gpu_energy_j",
+]
 
 
 class MetricRun(Protocol):
@@ -29,17 +40,7 @@ class MetricDefinition:
     unit: str
     source_metric: str | None = None
     aggregation: MetricAggregation = "mean"
-    derived: Literal[
-        "throughput_mean",
-        "throughput_median",
-        "throughput_stddev",
-        "throughput_cv",
-        "throughput_min",
-        "throughput_max",
-        "throughput_sample_count",
-        "cpu_seconds_per_1k_tokens",
-        "gpu_energy_j",
-    ] | None = None
+    derived: DerivedMetric | None = None
 
 
 class MetricRegistry:
@@ -83,7 +84,7 @@ class MetricRegistry:
 
 
 def _evaluate_derived(
-    kind: MetricDefinition.__annotations__["derived"],
+    kind: DerivedMetric,
     runs: Sequence[MetricRun],
 ) -> float | None:
     samples = [sample for run in runs for sample in run.samples]
