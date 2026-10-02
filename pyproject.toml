@@ -17,7 +17,7 @@ dependencies = [
   "uvicorn>=0.30,<1",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "mypy>=1.11,<2",
   "pytest>=8.3,<9",
@@ -48,3 +48,6 @@ python_version = "3.12"
 strict = true
 packages = ["llama_profile_lab"]
 mypy_path = "src"
+
+[tool.uv]
+required-version = "==0.12.19"
