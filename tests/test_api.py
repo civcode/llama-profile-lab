@@ -459,6 +459,25 @@ def test_validated_candidate_generates_persisted_launcher_patch(
         for item in history["evaluations"]
     )
 
+    drifted_payload = json.loads(json.dumps(source_payload))
+    drifted_payload["models"]["demo"]["args"]["--batch-size"] = 1024
+    launcher.write_text(json.dumps(drifted_payload), encoding="utf-8")
+
+    frozen = api_request(app, "GET", f"/api/experiments/{experiment_id}").json()
+    assert frozen["base_candidate"]["compute"]["batch_size"] == 2048
+
+    drifted = api_request(
+        app,
+        "POST",
+        f"/api/candidates/{candidate_id}/promote",
+        body={
+            "experiment_id": experiment_id,
+            "source_profile_id": "demo",
+        },
+    )
+    assert drifted.status_code == 409
+    assert "changed since experiment creation" in drifted.json()["detail"]
+
 
 def test_http_execution_results_telemetry_and_sse(tmp_path: Path) -> None:
     database_path = tmp_path / "execution.db"
