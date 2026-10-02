@@ -62,6 +62,41 @@ def test_reference_matrix_is_sparse_and_supports_workload_facets(tmp_path: Path)
     assert all(len(facet.cells) == 11 for facet in faceted.facets)
 
 
+def test_reference_acceptance_matrices_cover_pp_tg_and_cpu(tmp_path: Path) -> None:
+    database, experiment_id = seed_analysis_experiment(tmp_path / "acceptance.db")
+    service = AnalysisService(database)
+    views = (
+        (
+            "throughput.median",
+            (
+                AnalysisFilter(path="workload.kind", value="microbench-prefill"),
+                AnalysisFilter(path="workload.prompt_tokens", value=2048),
+            ),
+        ),
+        ("throughput.median", pp8k_filters()),
+        ("throughput.median", tg4k_filters()),
+        (
+            "throughput.median",
+            (
+                AnalysisFilter(path="workload.kind", value="microbench-decode"),
+                AnalysisFilter(path="workload.depth_tokens", value=65408),
+            ),
+        ),
+        ("cpu.process.avg_pct", tg4k_filters()),
+    )
+
+    for metric, filters in views:
+        projection = service.matrix(
+            experiment_id,
+            x_path="compute.batch_size",
+            y_path="compute.ubatch_size",
+            metric=metric,
+            filters=filters,
+        )
+        assert len(projection.facets) == 1
+        assert len(projection.facets[0].cells) == 11
+
+
 def test_matrix_rejects_hidden_workload_dimensions(tmp_path: Path) -> None:
     database, experiment_id = seed_analysis_experiment(tmp_path / "ambiguous.db")
 

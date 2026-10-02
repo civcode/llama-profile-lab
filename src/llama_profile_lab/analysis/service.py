@@ -79,6 +79,7 @@ class AnalysisDataset:
     base_candidate_id: str
     baseline_candidate_id: str
     dimension_paths: tuple[str, ...]
+    candidate_ordinals: Mapping[str, int]
     runs: tuple[AnalysisRun, ...]
 
 
@@ -259,9 +260,7 @@ class AnalysisService:
 
         dataset = self._load(experiment_id)
         selected = _select_runs(dataset.runs, filters, qualities)
-        candidate_ordinals = {
-            run.candidate_id: run.candidate_ordinal for run in dataset.runs
-        }
+        candidate_ordinals = dataset.candidate_ordinals
         vectors: list[ParetoCandidate] = []
         excluded: dict[str, str] = {}
 
@@ -525,6 +524,20 @@ def _load_dataset(
     else:
         baseline_id = definition.baseline.candidate_id
 
+    candidate_rows = connection.execute(
+        """
+        SELECT candidate_id, ordinal
+        FROM experiment_candidate
+        WHERE experiment_id = ?
+        ORDER BY ordinal, candidate_id
+        """,
+        (experiment_id,),
+    ).fetchall()
+    candidate_ordinals = {
+        str(row["candidate_id"]): int(row["ordinal"])
+        for row in candidate_rows
+    }
+
     rows = connection.execute(
         """
         SELECT br.id AS run_id, br.host_id, br.binary_id, br.quality,
@@ -605,6 +618,7 @@ def _load_dataset(
         base_candidate_id=definition.base_candidate_id,
         baseline_candidate_id=baseline_id,
         dimension_paths=tuple(dimension.path for dimension in search_space.dimensions),
+        candidate_ordinals=candidate_ordinals,
         runs=analysis_runs,
     )
 
