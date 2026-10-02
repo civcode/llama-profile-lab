@@ -441,6 +441,23 @@ export interface CandidateValidationHistory {
   }[];
 }
 
+export interface PromotionResponse {
+  id: string;
+  experiment_id: string;
+  candidate_id: string;
+  source_profile: string;
+  changes: {
+    path: string;
+    argument: string;
+    before: JsonScalar;
+    after: JsonScalar;
+  }[];
+  patch: string;
+  source_snapshot: Record<string, unknown>;
+  proposed_snapshot: Record<string, unknown>;
+  validation: Record<string, unknown>;
+}
+
 export interface ServerValidationRequest {
   experiment_id: string;
   server_binary_id: string;
