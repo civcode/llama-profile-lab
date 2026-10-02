@@ -3105,6 +3105,60 @@ Frontend acceptance SHALL also exercise start, pause, cancel, and resume actions
 
 in addition to the Python lockfile, Ruff, strict mypy, and pytest gates.
 
+### 42.12 Launcher promotion, archive, and experiment export (M12)
+
+M12 completes the reviewable lifecycle from source launcher profile to validated Candidate without introducing automatic production mutation.
+
+Promotion uses:
+
+~~~text
+POST /api/candidates/{candidate_id}/promote
+~~~
+
+The request identifies the Experiment and may explicitly select the source launcher profile. Promotion requires a completed `server-validated / completed` Candidate evaluation. The service captures the current launcher JSON document as the immutable source snapshot, resolves that source profile, translates representable Candidate changes into model-level launcher argument overrides, and returns a unified JSON patch plus the complete proposed snapshot. The launcher configuration file is not modified.
+
+Each generated proposal is persisted append-only as a Candidate evaluation with:
+
+- experiment and Candidate identity;
+- source launcher profile;
+- argument-level changes;
+- exact source launcher snapshot;
+- exact proposed launcher snapshot;
+- supporting server-validation provenance;
+- rendered patch.
+
+Changes that cannot be represented safely by the current launcher JSON surface fail explicitly rather than being silently omitted.
+
+The CLI exposes the same operation:
+
+~~~text
+llprof profile promote EXPERIMENT CANDIDATE \
+  --launcher-config /path/to/launcher/config/hosts/workstation.json \
+  --output candidate.patch \
+  --database data/benchmarks.db
+~~~
+
+Full experiment provenance export is separate from M8's summarized result export:
+
+~~~text
+llprof experiment export EXPERIMENT \
+  --output experiment.json \
+  --database data/benchmarks.db
+~~~
+
+The export includes the Experiment and immutable definitions, generated Candidate/workload plan, benchmark attempts/samples/metrics/telemetry, placement attempts/resolutions, server validation, Candidate evaluations, and referenced binary/host provenance.
+
+Archiving uses:
+
+~~~text
+llprof archive \
+  --output experiment-archive.tar.gz \
+  --artifact /optional/file \
+  --database data/benchmarks.db
+~~~
+
+Before snapshotting, the archive service performs a full WAL checkpoint. The database copy is then created through SQLite's backup API, not by copying live database files. The archive contains `database.sqlite3`, `manifest.json`, and optional artifact files. The manifest records archive format, creation time, schema version, source database, file sizes, and SHA-256 hashes.
+
 ## 43. Source launcher integration
 
 llama-profile-launcher is treated as an external source of production profiles.
