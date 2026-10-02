@@ -9,8 +9,8 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
-JsonScalar: TypeAlias = str | int | float | bool | None
-JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+type JsonScalar = str | int | float | bool | None
+type JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 _NON_SEMANTIC_KEYS = frozenset({"label", "description", "display_order"})
 
