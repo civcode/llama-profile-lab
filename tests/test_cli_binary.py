@@ -59,14 +59,14 @@ def test_binary_compare_reports_capability_difference(
     database_path = tmp_path / "benchmarks.db"
 
     assert main(["binary", "inspect", str(first), "--database", str(database_path)]) == 0
-    first_id = Database(database_path).connect().execute(
-        "SELECT id FROM binary ORDER BY created_at LIMIT 1"
-    ).fetchone()[0]
     assert main(["binary", "inspect", str(second), "--database", str(database_path)]) == 0
 
     with Database(database_path).session() as connection:
         records = EnvironmentRepository(connection).list_binaries()
-        second_id = next(record.id for record in records if record.id != first_id)
+        first_id = next(record.id for record in records if record.path == str(first.resolve()))
+        second_id = next(
+            record.id for record in records if record.path == str(second.resolve())
+        )
 
     capsys.readouterr()
     result = main(

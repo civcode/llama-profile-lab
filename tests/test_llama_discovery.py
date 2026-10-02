@@ -111,10 +111,14 @@ def test_discovery_searches_explicit_directories(tmp_path: Path) -> None:
     native_dir = tmp_path / "build" / "bin"
     native_dir.mkdir(parents=True)
     bench = native_dir / "llama-bench"
+    fit = native_dir / "llama-fit-params"
     server = native_dir / "llama-server"
     write_fake_binary(bench, version="version: 1 (aaaaaaa)", help_text="  --model F")
+    write_fake_binary(fit, version="version: 1 (aaaaaaa)", help_text="  --fit-target N")
     write_fake_binary(server, version="version: 1 (aaaaaaa)", help_text="  --model F")
 
     discovered = discover_binary_paths((native_dir,), include_path=False)
 
-    assert discovered == tuple(sorted((bench.resolve(), server.resolve()), key=str))
+    assert discovered == tuple(
+        sorted((bench.resolve(), fit.resolve(), server.resolve()), key=str)
+    )

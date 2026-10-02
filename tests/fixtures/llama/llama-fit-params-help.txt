@@ -1,0 +1,14 @@
+usage: llama-fit-params [options]
+
+  -m, --model <filename>              model path
+  -c, --ctx-size <n>                  production context
+  -ngl, --n-gpu-layers <n>           GPU layers
+  -ncmoe, --n-cpu-moe <n>            CPU MoE layers
+  -sm, --split-mode <mode>            GPU split mode
+  -mg, --main-gpu <index>             main GPU
+  -ts, --tensor-split <split>         tensor split
+  -ot, --override-tensor <pattern>    tensor placement override
+  --fit-target <MiB>                  memory fit target
+  --fit-ctx <n>                       minimum fit context
+  --no-kv-offload                     keep KV on CPU
+  -fa, --flash-attn <on|off|auto>     flash attention
