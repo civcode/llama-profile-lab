@@ -76,6 +76,20 @@ def test_external_cpu_load_is_classified_without_discarding_telemetry() -> None:
     assert assessment.summary.sample_count == 2
 
 
+def test_moderate_background_cpu_load_is_classified_as_noisy() -> None:
+    assessment = classify_run_quality(
+        (
+            sample(1, system_cpu=60, process_cpu=48),
+            sample(2, system_cpu=62, process_cpu=50),
+        ),
+        expect_gpu=False,
+    )
+
+    assert assessment.quality == "noisy"
+    assert assessment.telemetry_complete
+    assert any("noise threshold" in reason for reason in assessment.reasons)
+
+
 def test_gpu_baseline_load_is_external_gpu_load() -> None:
     assessment = classify_run_quality(
         (
