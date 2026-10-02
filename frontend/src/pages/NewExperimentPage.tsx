@@ -173,9 +173,27 @@ export function NewExperimentPage() {
   const capabilityBinary =
     binaries.find((item) => item.id === capabilityBinaryId) ?? null;
 
+  useEffect(() => {
+    if (!capabilityBinary) return;
+    setDimensionInputs((current) => {
+      let next: Record<string, string> | null = null;
+      for (const definition of parameters) {
+        if (
+          current[definition.path] !== undefined &&
+          !dimensionSupported(definition, capabilityBinary)
+        ) {
+          next ??= { ...current };
+          delete next[definition.path];
+        }
+      }
+      return next ?? current;
+    });
+  }, [capabilityBinary, parameters]);
+
   const dimensions = useMemo(() => {
     const values: SearchDimension[] = [];
     for (const definition of parameters) {
+      if (!dimensionSupported(definition, capabilityBinary)) continue;
       const raw = dimensionInputs[definition.path];
       if (!raw) continue;
       try {
@@ -189,7 +207,7 @@ export function NewExperimentPage() {
       }
     }
     return values;
-  }, [dimensionInputs, parameters]);
+  }, [capabilityBinary, dimensionInputs, parameters]);
 
   const [preview, setPreview] = useState<PlanPreview | null>(null);
   const [previewError, setPreviewError] = useState<unknown>(null);
@@ -433,6 +451,14 @@ export function NewExperimentPage() {
             {parameters.map((definition) => {
               const enabled = dimensionInputs[definition.path] !== undefined;
               const supported = dimensionSupported(definition, capabilityBinary);
+              const unsupportedReason =
+                !supported && capabilityBinary
+                  ? definition.supported_by.includes(capabilityBinary.kind)
+                    ? definition.cli_argument
+                      ? definition.cli_argument + " unavailable"
+                      : "Unavailable"
+                    : "Not supported by " + capabilityBinary.kind
+                  : "";
               return (
                 <div
                   className={"dimension-row " + (!supported ? "is-disabled" : "")}
@@ -465,9 +491,7 @@ export function NewExperimentPage() {
                     }
                   />
                   {!supported ? (
-                    <span className="support-note">
-                      {definition.cli_argument} unavailable
-                    </span>
+                    <span className="support-note">{unsupportedReason}</span>
                   ) : (
                     <span className="support-note">
                       {definition.affects_placement ? "affects placement" : definition.category}
