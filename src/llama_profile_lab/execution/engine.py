@@ -20,12 +20,12 @@ from llama_profile_lab.db import (
     TelemetryRepository,
     WorkloadCaseRepository,
 )
-from llama_profile_lab.domain.telemetry import TelemetrySample
 from llama_profile_lab.db.records import (
     BinaryRecord,
     ResolvedPlacementRecord,
     RunStatus,
 )
+from llama_profile_lab.domain.telemetry import TelemetrySample
 from llama_profile_lab.execution.host import detect_basic_host
 from llama_profile_lab.execution.lock import HostLock
 from llama_profile_lab.execution.placement import (
@@ -35,17 +35,17 @@ from llama_profile_lab.execution.placement import (
     resolved_placement_from_record,
     validate_fixed_placement,
 )
+from llama_profile_lab.execution.process import (
+    ProcessResult,
+    ProcessRunner,
+    ProcessRunnerError,
+)
 from llama_profile_lab.execution.telemetry import (
     LinuxTelemetryProvider,
     TelemetryProvider,
     TelemetrySampler,
     classify_run_quality,
     summary_metrics,
-)
-from llama_profile_lab.execution.process import (
-    ProcessResult,
-    ProcessRunner,
-    ProcessRunnerError,
 )
 from llama_profile_lab.llama import CapabilitySet, sha256_file
 from llama_profile_lab.llama.bench import (
