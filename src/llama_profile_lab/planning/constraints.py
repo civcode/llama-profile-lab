@@ -162,11 +162,20 @@ def _compare(left: object, operator: ast.cmpop, right: object) -> bool:
     if isinstance(left, bool) or isinstance(right, bool):
         raise ConstraintError("ordered comparison does not support booleans")
 
-    comparable_numbers = isinstance(left, (int, float)) and isinstance(
-        right, (int, float)
-    )
-    comparable_strings = isinstance(left, str) and isinstance(right, str)
-    if not comparable_numbers and not comparable_strings:
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return _compare_ordered(left, operator, right)
+    if isinstance(left, str) and isinstance(right, str):
+        return _compare_ordered(left, operator, right)
+
+    raise ConstraintError("ordered comparison requires compatible scalar values")
+
+
+def _compare_ordered(
+    left: int | float | str,
+    operator: ast.cmpop,
+    right: int | float | str,
+) -> bool:
+    if isinstance(left, str) != isinstance(right, str):
         raise ConstraintError("ordered comparison requires compatible scalar values")
 
     if isinstance(operator, ast.Lt):
