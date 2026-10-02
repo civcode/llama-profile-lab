@@ -20,7 +20,11 @@ from llama_profile_lab.db import (
 from llama_profile_lab.db.records import BinaryRecord, RunStatus
 from llama_profile_lab.execution.host import detect_basic_host
 from llama_profile_lab.execution.lock import HostLock
-from llama_profile_lab.execution.process import ProcessResult, ProcessRunner
+from llama_profile_lab.execution.process import (
+    ProcessResult,
+    ProcessRunner,
+    ProcessRunnerError,
+)
 from llama_profile_lab.llama import CapabilitySet, sha256_file
 from llama_profile_lab.llama.bench import (
     LlamaBenchAdapter,
@@ -203,11 +207,23 @@ class ExperimentExecutor:
                     environment=_captured_environment(),
                 )
                 cases.set_status(case.id, "running")
-                process_result = self.process_runner.run(
-                    argv,
-                    timeout_seconds=timeout_seconds,
-                    cancel_event=cancel_event,
-                )
+                try:
+                    process_result = self.process_runner.run(
+                        argv,
+                        timeout_seconds=timeout_seconds,
+                        cancel_event=cancel_event,
+                    )
+                except ProcessRunnerError as exc:
+                    runs.finish(
+                        run_id,
+                        status="benchmark_failed",
+                        duration_ns=0,
+                        exit_code=None,
+                        stderr=str(exc),
+                    )
+                    cases.set_status(case.id, "benchmark_failed")
+                    failed += 1
+                    continue
                 terminal_status = _process_failure_status(process_result)
                 if terminal_status is not None:
                     runs.finish(
@@ -372,7 +388,8 @@ def _lock_path(database: Database) -> Path:
     raw = str(database.path)
     if raw == ":memory:":
         raise ExecutionError("benchmark execution requires a file-backed SQLite database")
-    return Path(raw + ".host.lock")
+    runtime_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+    return runtime_dir / f"llama-profile-lab-{os.getuid()}.host.lock"
 
 
 def _append_error(stderr: str, error: str) -> str:
