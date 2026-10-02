@@ -1,9 +1,9 @@
 """Persistence round-trip and append-only run tests."""
 
 from pathlib import Path
+from sqlite3 import IntegrityError
 
 import pytest
-from sqlite3 import IntegrityError
 
 from llama_profile_lab.db import (
     BenchmarkCaseRepository,

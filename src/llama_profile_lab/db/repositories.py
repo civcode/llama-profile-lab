@@ -11,6 +11,13 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
+from llama_profile_lab.db.records import (
+    BenchmarkCaseRecord,
+    BenchmarkRunRecord,
+    ExperimentRecord,
+    ExperimentStatus,
+    RunStatus,
+)
 from llama_profile_lab.domain import (
     Candidate,
     ExperimentDefinition,
@@ -21,13 +28,6 @@ from llama_profile_lab.domain import (
     sha256_json,
 )
 from llama_profile_lab.domain.workload import WorkloadCase
-from llama_profile_lab.db.records import (
-    BenchmarkCaseRecord,
-    BenchmarkRunRecord,
-    ExperimentRecord,
-    ExperimentStatus,
-    RunStatus,
-)
 
 _WORKLOAD_ADAPTER = TypeAdapter(WorkloadCase)
 
