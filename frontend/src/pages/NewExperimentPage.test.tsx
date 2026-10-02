@@ -115,4 +115,33 @@ describe("NewExperimentPage", () => {
     expect(payload.measurement_policy.repetitions).toBe(3);
     await waitFor(() => expect(mocks.planExperiment).toHaveBeenCalledWith("exp-ui"));
   });
+
+  it("adds a server validation workload without inflating microbenchmark case count", async () => {
+    render(<NewExperimentPage />);
+    expect(await screen.findByText("11 valid candidates")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add server validation" })
+    );
+    expect(screen.getByText("server workload")).toBeInTheDocument();
+    expect(screen.getByText("44")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save + plan experiment" })
+    );
+
+    await waitFor(() => expect(mocks.createExperiment).toHaveBeenCalledTimes(1));
+    const payload = mocks.createExperiment.mock.calls[0][0];
+    expect(payload.workload_suite.cases).toHaveLength(5);
+    expect(payload.workload_suite.cases[4]).toMatchObject({
+      kind: "speed-bench",
+      speed_bench: {
+        bench: "throughput_1k",
+        categories: ["all"],
+        output_tokens: 256,
+        concurrency: 1
+      }
+    });
+    await waitFor(() => expect(mocks.planExperiment).toHaveBeenCalledWith("exp-ui"));
+  });
 });
