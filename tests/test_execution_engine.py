@@ -101,6 +101,20 @@ print(json.dumps([{
     path.chmod(0o755)
 
 
+def write_oom_llama_bench(path: Path) -> None:
+    """Write a probeable llama-bench that fails every benchmark with OOM."""
+    write_fake_llama_bench(path)
+    script = path.read_text(encoding="utf-8")
+    marker = 'repetitions = int(option("--repetitions", "3"))'
+    script = script.replace(
+        marker,
+        'print("CUDA error: out of memory", file=sys.stderr)\n'
+        "raise SystemExit(1)\n"
+        + marker,
+    )
+    path.write_text(script, encoding="utf-8")
+
+
 def write_fake_fit_params(path: Path, *, fail: bool = False) -> None:
     """Write a fake full-context fit tool with deterministic placement output."""
     script = f'''#!/usr/bin/env python3
@@ -496,6 +510,51 @@ def test_orphaned_running_attempt_is_recovered_before_resume(tmp_path: Path) -> 
         case = cases.get(first_case.id)
         assert case is not None
         assert case.status == "planned"
+
+
+def test_oom_attempt_remains_queryable_and_retryable(tmp_path: Path) -> None:
+    database = Database(tmp_path / "oom.db")
+    experiment_id = seed_reference_experiment(database)
+    with database.session() as connection:
+        plan_experiment(connection, experiment_id)
+
+    bench = tmp_path / "llama-bench"
+    fit = tmp_path / "llama-fit-params"
+    write_oom_llama_bench(bench)
+    write_fake_fit_params(fit)
+    bench_id = register_fake_binary(database, bench)
+    fit_id = register_fake_binary(database, fit)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+
+    summary = ExperimentExecutor(database).execute(
+        experiment_id,
+        binary_id=bench_id,
+        fit_binary_id=fit_id,
+        model_path=model,
+        limit=1,
+    )
+
+    assert summary.completed == 0
+    assert summary.failed == 1
+    assert summary.remaining == 44
+    with database.session() as connection:
+        run = connection.execute(
+            """
+            SELECT benchmark_run.status, benchmark_run.stderr, benchmark_case.status
+            FROM benchmark_run
+            JOIN benchmark_case
+              ON benchmark_case.id = benchmark_run.benchmark_case_id
+            WHERE benchmark_case.experiment_id = ?
+            ORDER BY benchmark_run.started_at
+            LIMIT 1
+            """,
+            (experiment_id,),
+        ).fetchone()
+        assert run is not None
+        assert run[0] == "oom"
+        assert "out of memory" in str(run[1]).lower()
+        assert run[2] == "oom"
 
 
 def test_process_failure_classification_detects_oom() -> None:
