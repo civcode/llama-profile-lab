@@ -17,12 +17,16 @@ from llama_profile_lab.db.records import (
     BinaryRecord,
     ExperimentRecord,
     ExperimentStatus,
+    PlacementAttemptRecord,
+    PlacementAttemptStatus,
+    ResolvedPlacementRecord,
     RunStatus,
 )
 from llama_profile_lab.domain import (
     Candidate,
     ExperimentDefinition,
     MeasurementPolicy,
+    ResolvedPlacement,
     SearchSpace,
     WorkloadSuite,
     canonical_json,
@@ -447,6 +451,279 @@ class ExperimentRepository:
             raise ValueError("experiment does not exist or is not running")
 
 
+class PlacementRepository:
+    """Persistence for fit attempts and immutable successful placements."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create_attempt(
+        self,
+        *,
+        placement_hash: str,
+        candidate_id: str,
+        host_id: str,
+        binary_id: str,
+        model_path: str,
+        argv: tuple[str, ...],
+        started_at: str | None = None,
+    ) -> str:
+        identifier = _event_id("fit")
+        self.connection.execute(
+            """
+            INSERT INTO placement_attempt(
+                id, placement_hash, candidate_id, host_id, binary_id,
+                model_path, started_at, status, argv_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)
+            """,
+            (
+                identifier,
+                placement_hash,
+                candidate_id,
+                host_id,
+                binary_id,
+                model_path,
+                started_at or _utc_now(),
+                canonical_json(list(argv)),
+            ),
+        )
+        return identifier
+
+    def finish_attempt(
+        self,
+        identifier: str,
+        *,
+        status: PlacementAttemptStatus,
+        duration_ns: int,
+        exit_code: int | None,
+        stdout: str = "",
+        stderr: str = "",
+        raw_result: Any = None,
+        finished_at: str | None = None,
+    ) -> None:
+        if status == "running":
+            raise ValueError("finished placement attempt must be terminal")
+        cursor = self.connection.execute(
+            """
+            UPDATE placement_attempt
+            SET finished_at = ?, duration_ns = ?, status = ?, exit_code = ?,
+                stdout = ?, stderr = ?, raw_result_json = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (
+                finished_at or _utc_now(),
+                duration_ns,
+                status,
+                exit_code,
+                stdout,
+                stderr,
+                canonical_json(raw_result) if raw_result is not None else None,
+                identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("placement attempt does not exist or is already finalized")
+
+    def get_attempt(self, identifier: str) -> PlacementAttemptRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, placement_hash, candidate_id, host_id, binary_id,
+                   model_path, started_at, finished_at, duration_ns,
+                   status, exit_code
+            FROM placement_attempt
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return PlacementAttemptRecord(
+            id=str(row["id"]),
+            placement_hash=str(row["placement_hash"]),
+            candidate_id=str(row["candidate_id"]),
+            host_id=str(row["host_id"]),
+            binary_id=str(row["binary_id"]),
+            model_path=str(row["model_path"]),
+            started_at=str(row["started_at"]),
+            finished_at=row["finished_at"],
+            duration_ns=row["duration_ns"],
+            status=row["status"],
+            exit_code=row["exit_code"],
+        )
+
+    def recover_orphaned(self) -> int:
+        """Finalize stale fit attempts left running by a previous process."""
+        now = _utc_now()
+        cursor = self.connection.execute(
+            """
+            UPDATE placement_attempt
+            SET status = 'interrupted', finished_at = ?
+            WHERE status = 'running'
+            """,
+            (now,),
+        )
+        return cursor.rowcount
+
+    def put_resolved(
+        self,
+        *,
+        placement_hash: str,
+        candidate_id: str,
+        host_id: str,
+        binary_id: str,
+        fit_attempt_id: str | None,
+        placement: ResolvedPlacement,
+        request: Mapping[str, Any],
+        argv: tuple[str, ...],
+        stdout: str,
+        stderr: str,
+        exit_code: int | None,
+        raw_result: Mapping[str, Any] | None = None,
+    ) -> str:
+        identifier = _content_id("place", placement_hash)
+        self.connection.execute(
+            """
+            INSERT INTO resolved_placement(
+                id, placement_hash, candidate_id, host_id, binary_id,
+                production_context_size, n_gpu_layers, n_cpu_moe,
+                split_mode, main_gpu, tensor_split_json, override_tensor_json,
+                argv_json, stdout, stderr, exit_code, raw_result_json,
+                fit_attempt_id, devices_json, request_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(placement_hash) DO NOTHING
+            """,
+            (
+                identifier,
+                placement_hash,
+                candidate_id,
+                host_id,
+                binary_id,
+                placement.production_context_size,
+                placement.n_gpu_layers,
+                placement.n_cpu_moe,
+                placement.split_mode,
+                placement.main_gpu,
+                (
+                    canonical_json(list(placement.tensor_split))
+                    if placement.tensor_split is not None
+                    else None
+                ),
+                canonical_json(list(placement.override_tensor)),
+                canonical_json(list(argv)),
+                stdout,
+                stderr,
+                exit_code,
+                canonical_json(dict(raw_result or {})),
+                fit_attempt_id,
+                canonical_json(
+                    placement.devices
+                    if placement.devices == "auto"
+                    else list(placement.devices)
+                ),
+                canonical_json(dict(request)),
+            ),
+        )
+        row = self.connection.execute(
+            "SELECT id FROM resolved_placement WHERE placement_hash = ?",
+            (placement_hash,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("resolved placement insert did not produce a row")
+        return str(row["id"])
+
+    def find_by_hash(self, placement_hash: str) -> ResolvedPlacementRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, placement_hash, candidate_id, host_id, binary_id,
+                   fit_attempt_id, production_context_size, n_gpu_layers,
+                   n_cpu_moe, split_mode, main_gpu, devices_json,
+                   tensor_split_json, override_tensor_json, request_json,
+                   created_at
+            FROM resolved_placement
+            WHERE placement_hash = ?
+            """,
+            (placement_hash,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def get(self, identifier: str) -> ResolvedPlacementRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, placement_hash, candidate_id, host_id, binary_id,
+                   fit_attempt_id, production_context_size, n_gpu_layers,
+                   n_cpu_moe, split_mode, main_gpu, devices_json,
+                   tensor_split_json, override_tensor_json, request_json,
+                   created_at
+            FROM resolved_placement
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def list(self) -> tuple[ResolvedPlacementRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT id, placement_hash, candidate_id, host_id, binary_id,
+                   fit_attempt_id, production_context_size, n_gpu_layers,
+                   n_cpu_moe, split_mode, main_gpu, devices_json,
+                   tensor_split_json, override_tensor_json, request_json,
+                   created_at
+            FROM resolved_placement
+            ORDER BY created_at, id
+            """
+        ).fetchall()
+        return tuple(self._record(row) for row in rows)
+
+    @staticmethod
+    def _record(row: sqlite3.Row) -> ResolvedPlacementRecord:
+        raw_devices = json.loads(str(row["devices_json"]))
+        if raw_devices == "auto":
+            devices: str | tuple[str, ...] = "auto"
+        elif isinstance(raw_devices, list):
+            devices = tuple(str(value) for value in raw_devices)
+        else:
+            raise ValueError("persisted devices_json is invalid")
+
+        raw_tensor_split = (
+            None
+            if row["tensor_split_json"] is None
+            else json.loads(str(row["tensor_split_json"]))
+        )
+        tensor_split: tuple[float, ...] | None
+        if raw_tensor_split is None:
+            tensor_split = None
+        elif isinstance(raw_tensor_split, list):
+            tensor_split = tuple(float(value) for value in raw_tensor_split)
+        else:
+            raise ValueError("persisted tensor_split_json is invalid")
+
+        raw_overrides = json.loads(str(row["override_tensor_json"]))
+        if not isinstance(raw_overrides, list):
+            raise ValueError("persisted override_tensor_json is invalid")
+
+        return ResolvedPlacementRecord(
+            id=str(row["id"]),
+            placement_hash=str(row["placement_hash"]),
+            candidate_id=str(row["candidate_id"]),
+            host_id=str(row["host_id"]),
+            binary_id=str(row["binary_id"]),
+            fit_attempt_id=row["fit_attempt_id"],
+            production_context_size=int(row["production_context_size"]),
+            n_gpu_layers=int(row["n_gpu_layers"]),
+            n_cpu_moe=int(row["n_cpu_moe"] or 0),
+            split_mode=str(row["split_mode"] or "layer"),
+            main_gpu=int(row["main_gpu"] or 0),
+            devices=devices,
+            tensor_split=tensor_split,
+            override_tensor=tuple(str(value) for value in raw_overrides),
+            request=_loads_object(str(row["request_json"])),
+            created_at=str(row["created_at"]),
+        )
+
+
 class BenchmarkCaseRepository:
     """Persistence for planned benchmark cases."""
 
@@ -582,6 +859,65 @@ class BenchmarkCaseRepository:
         )
         if cursor.rowcount != 1:
             raise ValueError(f"benchmark case not found: {identifier}")
+
+
+    def bind_placement_for_candidate(
+        self,
+        *,
+        experiment_id: str,
+        candidate_id: str,
+        placement_id: str,
+    ) -> int:
+        """Bind one concrete placement to all cases for a Candidate."""
+        rows = self.connection.execute(
+            """
+            SELECT id, workload_case_id, placement_id
+            FROM benchmark_case
+            WHERE experiment_id = ? AND candidate_id = ?
+            ORDER BY ordinal
+            """,
+            (experiment_id, candidate_id),
+        ).fetchall()
+
+        updated = 0
+        for row in rows:
+            case_id = str(row["id"])
+            existing = row["placement_id"]
+            if existing == placement_id:
+                continue
+            if existing is not None and existing != placement_id:
+                successful = self.connection.execute(
+                    """
+                    SELECT 1
+                    FROM benchmark_run
+                    WHERE benchmark_case_id = ? AND status = 'completed'
+                    LIMIT 1
+                    """,
+                    (case_id,),
+                ).fetchone()
+                if successful is not None:
+                    raise ValueError(
+                        f"cannot change placement for successfully completed case {case_id}"
+                    )
+
+            case_hash = sha256_json(
+                {
+                    "experiment_id": experiment_id,
+                    "candidate_id": candidate_id,
+                    "workload_case_id": str(row["workload_case_id"]),
+                    "placement_id": placement_id,
+                }
+            )
+            self.connection.execute(
+                """
+                UPDATE benchmark_case
+                SET placement_id = ?, case_hash = ?
+                WHERE id = ?
+                """,
+                (placement_id, case_hash, case_id),
+            )
+            updated += 1
+        return updated
 
 
 class BenchmarkRunRepository:
