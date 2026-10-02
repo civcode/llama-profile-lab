@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Any
 
 from llama_profile_lab.db import (
     BenchmarkCaseRepository,
@@ -27,7 +26,6 @@ from llama_profile_lab.llama.bench import (
     LlamaBenchAdapter,
     LlamaBenchConfigurationError,
     LlamaBenchParseError,
-    LlamaBenchResult,
     parse_llama_bench_json,
 )
 
@@ -247,8 +245,23 @@ class ExperimentExecutor:
                     failed += 1
                     continue
 
-                runs.add_samples(run_id, result.samples)
-                runs.add_bench_metrics(run_id, result)
+                runs.add_samples(
+                    run_id,
+                    tuple(
+                        (sample.elapsed_ns, sample.tokens_per_second)
+                        for sample in result.samples
+                    ),
+                )
+                metrics: dict[str, int | float] = {}
+                for name, value in (
+                    ("avg_ns", result.avg_ns),
+                    ("stddev_ns", result.stddev_ns),
+                    ("avg_ts", result.avg_ts),
+                    ("stddev_ts", result.stddev_ts),
+                ):
+                    if value is not None:
+                        metrics[name] = value
+                runs.add_metrics(run_id, metrics)
                 runs.finish(
                     run_id,
                     status="completed",
