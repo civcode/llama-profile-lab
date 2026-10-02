@@ -128,12 +128,13 @@ It SHALL:
 - create immutable candidates;
 - expand workload suites into concrete workload cases;
 - determine whether placement resolution is required;
-- create planned benchmark cases;
+- create planned `benchmark_case` rows for llama-bench-compatible microbench workloads;
+- retain server-only workloads such as `speed-bench` in `experiment_workload` without converting them into llama-bench cases;
 - persist the plan before execution begins.
 
 The planner SHALL NOT launch subprocesses.
 
-The executor SHALL consume planned work from SQLite.
+The microbenchmark executor SHALL consume planned `benchmark_case` rows from SQLite. Server validation SHALL independently consume persisted server-workload links and create `server_run` / `server_benchmark` observations.
 
 ### 5.2 Experiments are immutable after planning
 
@@ -1951,17 +1952,43 @@ candidate_id
 placement_id
 host_id
 server_binary_id
+
 target_model_id
 draft_model_id
+target_model_path
+draft_model_path
+
 spec_type
 spec_draft_n_max
+
+bind_host
+bind_port
+
 argv_json
+environment_json
+
 started_at
 ready_at
 finished_at
+duration_ns
+
 status
+exit_code
 stdout
 stderr
+~~~
+
+V1 server-run states are:
+
+~~~text
+starting
+ready
+completed
+start_failed
+readiness_failed
+benchmark_failed
+interrupted
+cancelled
 ~~~
 
 ### server_benchmark
@@ -1970,15 +1997,45 @@ stderr
 id
 server_run_id
 workload_case_id
+speed_bench_binary_id
+category
+status
+
+argv_json
+duration_ns
+exit_code
+stdout
+stderr
+
+requests
+failed
+turns
+
 avg_prompt_ts
 avg_pred_ts
 avg_latency_ms
+
 draft_n
 accepted_n
 accept_rate
+
 raw_json
 created_at
 ~~~
+
+V1 server-benchmark states are:
+
+~~~text
+running
+completed
+benchmark_failed
+timeout
+parser_failed
+interrupted
+cancelled
+~~~
+
+The complete SPEED-Bench JSON remains authoritative in `raw_json`; normalized columns exist for frequent comparisons and UI queries.
 
 ### candidate_evaluation
 
@@ -1992,6 +2049,8 @@ reason
 metrics_json
 created_at
 ~~~
+
+Candidate evaluation rows are append-only workflow/provenance events. M9 records a `finalist / validate` event before launching the server and a terminal `server-validated / completed|failed` event afterward. They do not replace raw server-run or server-benchmark status.
 
 ## 30. SQLite indexes
 
@@ -2135,6 +2194,12 @@ llama-server + SPEED-Bench
 Candidate promotion
 ~~~
 
+Server validation is append-only. It SHALL NOT rewrite the original experiment plan, microbenchmark observations, or Candidate identity.
+
+A server-validation session SHALL reuse a concrete M6 ResolvedPlacement for the Candidate. The validation layer does not independently run automatic fitting because doing so would make server measurements incomparable with the placement that survived screening.
+
+The host-level benchmark lock also protects server validation so a managed llama-server session cannot overlap another performance benchmark owned by llama-profile-lab.
+
 The UI SHOULD expose statuses such as:
 
 ~~~text
@@ -2147,7 +2212,89 @@ promoted
 
 These are experiment/evaluation concepts, not replacements for raw run status.
 
-## 37. Speculative decoding
+### 36.1 Managed server lifecycle
+
+For one finalist:
+
+~~~text
+verify exact binary hashes
+        ↓
+verify Candidate + host + resolved placement
+        ↓
+persist finalist evaluation
+        ↓
+persist server_run(starting)
+        ↓
+Popen llama-server in its own process group
+        ↓
+poll GET /health
+        ↓
+server_run(ready)
+        ↓
+run persisted SPEED-Bench workloads
+        ↓
+SIGTERM server process group
+        ↓
+SIGKILL after grace period if necessary
+        ↓
+persist server logs/status
+        ↓
+persist server-validated evaluation
+~~~
+
+The readiness endpoint is:
+
+~~~text
+GET http://HOST:PORT/health
+~~~
+
+HTTP 200 is ready. Connection failures and non-200 responses are treated as not-yet-ready until the readiness timeout. A process that exits before readiness is a `start_failed` server run.
+
+Server stdout and stderr are captured independently from SPEED-Bench stdout and stderr. Startup, readiness, benchmark, parser, timeout, cancellation, and interruption failures remain persisted observations.
+
+### 36.2 Exact executable identity
+
+Both `llama-server` and SPEED-Bench are registered binaries with:
+
+- path;
+- SHA-256;
+- size/mtime;
+- help output;
+- parsed option capabilities;
+- build/version metadata where available.
+
+Before validation, executable SHA-256 values are rechecked. A changed executable must be registered again rather than silently reusing stale provenance.
+
+SPEED-Bench is recognized as binary kind `speed-bench`, including the upstream `speed_bench.py` filename.
+
+### 36.3 Server argv
+
+LlamaServerAdapter maps the Candidate plus concrete ResolvedPlacement to the selected server's advertised capability surface.
+
+Long-form options are preferred. Relevant configuration includes:
+
+- model path;
+- host and port;
+- production context;
+- batch/ubatch;
+- KV cache types;
+- server parallelism;
+- threads where explicit;
+- flash attention;
+- load/lazy settings;
+- concrete GPU layers / split / device / tensor overrides;
+- KV offload/unified behavior;
+- op offload;
+- repack;
+- Candidate extra args;
+- optional model alias;
+- speculative settings.
+
+Placement-fit arguments SHALL NOT be supplied during server validation.
+
+Boolean defaults may be omitted only when the requested Candidate value equals the tool's known default and the selected binary does not advertise an explicit flag for that default. A non-default value that the binary cannot represent is an error.
+
+## 37. Speculative decoding and SPEED-Bench
 
 MTP and other speculative-decoding parameters are server-validation concerns unless a future benchmark tool directly supports them.
 
@@ -2162,6 +2309,78 @@ llama-server + SPEED-Bench SHALL be used to measure:
 - speculative speedup.
 
 Candidate configuration still contains speculative settings so full deployment configurations remain reproducible.
+
+### 37.1 SPEED-Bench invocation
+
+The M9 adapter uses the selected binary's detected support for the current long-form surface:
+
+~~~text
+--url
+--model
+--bench
+--category
+--osl
+--extra-inputs
+--concurrency
+--limit
+--timeout
+--output
+~~~
+
+Each persisted `speed-bench` WorkloadCase may produce one invocation per configured category. The subprocess writes raw JSON to a temporary output path; the database retains that parsed raw object plus subprocess stdout/stderr and argv.
+
+### 37.2 Normalized SPEED-Bench metrics
+
+From the invocation's `overall` summary row, V1 normalizes:
+
+~~~text
+requests
+turns
+failed
+avg_prompt_t_s       → avg_prompt_ts
+avg_pred_t_s         → avg_pred_ts
+avg_latency seconds  → avg_latency_ms
+draft_n
+accepted             → accepted_n
+accept_rate
+~~~
+
+Acceptance rate must be within 0–1 and accepted draft count cannot exceed drafted token count.
+
+The persisted invocation category is the requested workload category such as `all`; normalized values come from that invocation's `overall` aggregate row.
+
+### 37.3 Speculative Candidate validation
+
+Candidate dimensions such as:
+
+~~~text
+speculative.enabled
+speculative.type
+speculative.draft_n_max
+~~~
+
+remain ordinary Candidate coordinates and may therefore be swept independently of workloads.
+
+When the Candidate references a draft model, validation requires an explicit draft-model path. The server argv freezes the Candidate's speculative type and `draft_n_max` along with target/draft model provenance.
+
+### 37.4 Baseline comparison
+
+Server comparison aligns completed observations by persisted WorkloadCase and requested category.
+
+For a non-speculative baseline and speculative Candidate it exposes, without selecting a winner:
+
+~~~text
+baseline/spec prompt throughput
+baseline/spec delivered decode throughput
+baseline/spec average latency
+decode speedup = spec_pred_ts / baseline_pred_ts
+latency speedup = baseline_latency_ms / spec_latency_ms
+draft_n
+accepted_n
+accept_rate
+~~~
+
+Exactly one common workload/category is required for a scalar CLI comparison. Broader multi-workload visualization belongs to the analysis/API/UI layers.
 
 ## 38. Analysis model
 
@@ -2440,7 +2659,8 @@ llprof profile show qwen-flash-gsq-rco-iq3-128k
 llprof binary discover \
   --search-dir /path/to/llama.cpp/build/bin \
   --database data/benchmarks.db
-llprof binary inspect /path/to/llama-server --database data/benchmarks.db
+llprof binary inspect /path/to/llama-server /path/to/speed_bench.py \
+  --database data/benchmarks.db
 llprof binary list --database data/benchmarks.db
 llprof binary compare BIN_LEFT BIN_RIGHT --database data/benchmarks.db
 
@@ -2466,6 +2686,17 @@ llprof run show RUN --database data/benchmarks.db
 llprof results matrix EXPERIMENT
 llprof results compare EXPERIMENT
 llprof run show RUN
+
+llprof server validate EXPERIMENT CANDIDATE \
+  --server-binary SERVER_BIN_ID \
+  --speed-bench-binary SPEED_BIN_ID \
+  --model-path /path/to/target.gguf \
+  --draft-model-path /path/to/draft.gguf \
+  --placement PLACEMENT_ID \
+  --model-name finalist
+
+llprof server compare EXPERIMENT BASELINE_CANDIDATE SPEC_CANDIDATE \
+  --category all
 
 llprof ui
 llprof archive

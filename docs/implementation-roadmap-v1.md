@@ -912,6 +912,8 @@ The same synthetic reference observations are analyzed with explicit PP8K-maximi
 
 ## 13. M9 — llama-server and SPEED-Bench validation
 
+**Status: Implementation Complete — Real-host acceptance pending**
+
 ### Objective
 
 Validate finalists under actual server execution, including MTP/speculative decoding.
@@ -962,19 +964,25 @@ where supported by the selected server binary.
 
 ### Work items
 
-- [ ] server argv generator
-- [ ] server process lifecycle
-- [ ] health/readiness detection
-- [ ] SPEED-Bench runner
-- [ ] raw/normalized parser
-- [ ] server benchmark tables
-- [ ] speculative acceptance metrics
-- [ ] baseline vs speculative comparison
-- [ ] finalist stage transitions
+- [x] server argv generator
+- [x] server process lifecycle
+- [x] health/readiness detection
+- [x] SPEED-Bench runner
+- [x] raw/normalized parser
+- [x] server benchmark tables
+- [x] speculative acceptance metrics
+- [x] baseline vs speculative comparison
+- [x] finalist stage transitions
 
 ### Acceptance gate
 
-A selected Qwen MTP Candidate can be launched with llama-server, tested with SPEED-Bench, and compared against a non-speculative baseline with acceptance rate and delivered decode throughput stored in SQLite.
+Automated acceptance is complete. CI launches a real managed test-server subprocess, waits for its HTTP `/health` endpoint, runs a separate SPEED-Bench-compatible subprocess, persists raw and normalized server observations, shuts the server down through the managed lifecycle, and compares a non-speculative baseline with a `draft-mtp` Candidate.
+
+The speculative acceptance fixture records baseline decode throughput of 50 t/s and speculative decode throughput of 75 t/s together with 100 drafted tokens, 60 accepted tokens, and a 0.60 acceptance rate. The descriptive comparison reports the corresponding decode and latency speedup ratios without selecting a universal winner.
+
+Failure handling is also covered: a server that exits before readiness is persisted as `start_failed`, produces no completed server benchmark row, and appends a failed `server-validated` Candidate evaluation event.
+
+Real-host acceptance remains pending: validate a selected Qwen MTP Candidate and a non-speculative baseline on the workstation with the registered custom llama-server/SPEED-Bench executables and real target/draft GGUFs, then verify delivered decode throughput, latency, draft counts, accepted counts, and acceptance rate.
 
 ---
 

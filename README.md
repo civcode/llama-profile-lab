@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. **M0–M4 and M8 — analysis and multidimensional projections are complete. M5 — llama-bench execution, M6 — placement resolution, and M7 — CPU/GPU telemetry and run quality are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending.**
+V1 is under active development. **M0–M4 and M8 — analysis and multidimensional projections are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
 
 Project documents:
 
@@ -18,7 +18,7 @@ Project documents:
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
 
-llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs, M7 records CPU/process/RAM/GPU telemetry plus run-quality signals, and M8 derives statistics, sparse projections, baseline deltas, Pareto frontiers, and compute-latency estimates from the persisted observations.
+llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs, M7 records CPU/process/RAM/GPU telemetry plus run-quality signals, M8 derives statistics and multidimensional comparisons, and M9 manages finalist `llama-server` sessions plus SPEED-Bench validation including speculative-decoding acceptance metrics.
 
 ## Development setup
 
@@ -116,11 +116,30 @@ llprof results export EXPERIMENT_ID \
   --format csv \
   --output results.csv \
   --database data/benchmarks.db
+
+
+llprof binary inspect \
+  /path/to/llama-server \
+  /path/to/speed_bench.py \
+  --database data/benchmarks.db
+
+llprof server validate EXPERIMENT_ID CANDIDATE_ID \
+  --server-binary SERVER_BIN_ID \
+  --speed-bench-binary SPEED_BIN_ID \
+  --model-path /path/to/target.gguf \
+  --draft-model-path /path/to/draft.gguf \
+  --placement PLACEMENT_ID \
+  --model-name finalist \
+  --database data/benchmarks.db
+
+llprof server compare EXPERIMENT_ID BASELINE_CANDIDATE_ID SPEC_CANDIDATE_ID \
+  --category all \
+  --database data/benchmarks.db
 ~~~
 
 Binary discovery fingerprints exact executables by SHA-256, captures version/help output, persists parsed supported arguments, and allows native/custom builds to be compared without assuming a global llama.cpp feature set.
 
-The plan command expands the stored SearchSpace and WorkloadSuite, persists Candidates and concrete benchmark cases atomically, and does not launch llama.cpp.
+The plan command expands the stored SearchSpace and WorkloadSuite atomically and does not launch llama.cpp. Microbenchmark workloads create `benchmark_case` rows for M5; server-only `speed-bench` workloads remain persisted in `experiment_workload` and are consumed by M9 rather than being misrouted through llama-bench.
 
 The M5 executor runs incomplete cases sequentially under a host lock, revalidates registered executable SHA-256 identities, persists stdout/stderr/raw JSON and individual repetitions, and resumes only cases without a successful prior run.
 
@@ -129,6 +148,8 @@ M6 adds production-context placement resolution. Under the default per-candidate
 M7 samples telemetry before, during, and after each benchmark. Linux CPU/process/RAM metrics come from `/proc` and `/sys`; NVIDIA GPUs use `nvidia-smi` when available, with a generic DRM/sysfs fallback. Raw samples are retained, normalized `telemetry.*` summary metrics are generated, and runs receive a quality label such as `clean`, `external_cpu_load`, or `telemetry_incomplete` without changing benchmark success status.
 
 M8 adds a read-only analysis layer over SQLite. Individual repetitions drive mean/median/stddev/CV throughput statistics; resource metrics can be projected over arbitrary Candidate dimensions; higher dimensions use exact filters and facets; ambiguous hidden coordinates are rejected instead of silently averaged. Baseline comparisons report signed deltas, Pareto analysis returns the non-dominated set for caller-defined maximize/minimize objectives, and PP/TG curves can estimate compute-only request latency. CSV and JSON export use the same services as the CLI and future API/UI.
+
+M9 validates selected finalists under a managed `llama-server`. Exact server and SPEED-Bench executables are fingerprinted and capability-checked, the existing resolved placement is frozen into the server argv, readiness is detected through `/health`, server and benchmark subprocess logs/results are persisted independently, and the server process group is cleaned up on completion or failure. SPEED-Bench normalizes prompt/decode throughput, latency, draft/accepted token counts, and acceptance rate while preserving its raw JSON. Candidate evaluation events record the finalist and server-validated stages append-only.
 
 ## Design principles
 
