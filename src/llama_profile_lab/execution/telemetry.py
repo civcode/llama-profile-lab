@@ -16,6 +16,7 @@ from typing import Protocol
 
 from llama_profile_lab.domain.telemetry import (
     GpuTelemetrySample,
+    RunQuality,
     RunQualityAssessment,
     TelemetryPhase,
     TelemetrySample,
@@ -151,6 +152,8 @@ class LinuxTelemetryProvider:
         frequencies = self._read_cpu_frequencies()
         cpu_temperature = self._read_cpu_temperature()
         package_power = self._read_package_power(monotonic_ns)
+        load_1m: float | None
+        load_5m: float | None
         try:
             load_1m, load_5m, _ = os.getloadavg()
         except OSError:
@@ -630,6 +633,7 @@ def classify_run_quality(
     if noisy and not (external_cpu or external_gpu):
         reasons.append("background resource activity exceeded the noise threshold")
 
+    quality: RunQuality
     if thermal:
         quality = "thermal_throttle"
     elif external_cpu:
