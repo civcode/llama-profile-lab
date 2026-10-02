@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. **M0–M4 are complete. M5 — llama-bench execution engine and M6 — placement resolution are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending.**
+V1 is under active development. **M0–M4 are complete. M5 — llama-bench execution, M6 — placement resolution, and M7 — CPU/GPU telemetry and run quality are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending.**
 
 Project documents:
 
@@ -18,7 +18,7 @@ Project documents:
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
 
-llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, and M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs.
+llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs, and M7 records CPU/process/RAM/GPU telemetry plus run-quality signals.
 
 ## Development setup
 
@@ -82,6 +82,7 @@ llprof experiment run EXPERIMENT_ID \
   --binary BENCH_BIN_ID \
   --fit-binary FIT_BIN_ID \
   --model-path /path/to/model.gguf \
+  --telemetry-interval-ms 1000 \
   --database data/benchmarks.db
 
 llprof experiment resume EXPERIMENT_ID \
@@ -102,6 +103,8 @@ The plan command expands the stored SearchSpace and WorkloadSuite, persists Cand
 The M5 executor runs incomplete cases sequentially under a host lock, revalidates registered executable SHA-256 identities, persists stdout/stderr/raw JSON and individual repetitions, and resumes only cases without a successful prior run.
 
 M6 adds production-context placement resolution. Under the default per-candidate policy, `llama-fit-params` is run once at the Candidate's full context and its concrete placement is cached and applied to every PP/TG workload for that Candidate. Fixed-placement experiments can deliberately reuse an existing placement on the same host/context. Fit attempts and successful resolved placements are persisted separately.
+
+M7 samples telemetry before, during, and after each benchmark. Linux CPU/process/RAM metrics come from `/proc` and `/sys`; NVIDIA GPUs use `nvidia-smi` when available, with a generic DRM/sysfs fallback. Raw samples are retained, normalized `telemetry.*` summary metrics are generated, and runs receive a quality label such as `clean`, `external_cpu_load`, or `telemetry_incomplete` without changing benchmark success status.
 
 ## Design principles
 

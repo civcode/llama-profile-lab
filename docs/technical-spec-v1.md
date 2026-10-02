@@ -1193,17 +1193,51 @@ Experiments may complete with failed individual cases.
 
 Telemetry is first-class because Flash Next and other architectures may use both CPU and GPU substantially.
 
-Sampling SHALL be performed independently of benchmark computation.
+Telemetry observations belong to a BenchmarkRun. They do not participate in Candidate, WorkloadCase, or placement identity.
 
-Default target sampling interval:
+Sampling is independent of benchmark computation and SQLite writes: the sampler collects in memory on a background thread and persists the complete observation set after the subprocess finishes. This avoids sharing a SQLite connection across threads.
+
+Default sampling interval:
 
 ~~~text
 1000 ms
 ~~~
 
-A configurable interval down to approximately 500 ms MAY be supported.
+V1 supports a minimum interval of:
 
-### 26.1 CPU telemetry
+~~~text
+500 ms
+~~~
+
+The CLI exposes `--telemetry-interval-ms` on experiment run/resume.
+
+### 26.1 Sampler lifecycle
+
+For every executable benchmark run:
+
+~~~text
+before host snapshot
+        ↓
+Popen llama-bench
+        ↓
+benchmark PID handed to telemetry sampler
+        ↓
+immediate process-aware sample
+        ↓
+periodic process-aware samples
+        ↓
+process exits
+        ↓
+after host snapshot
+        ↓
+persist raw samples + summary + quality
+~~~
+
+Telemetry errors SHALL NOT convert a successful benchmark into a failed benchmark. They are recorded in quality details and may produce `telemetry_incomplete`.
+
+### 26.2 CPU and process telemetry
+
+LinuxTelemetryProvider uses `/proc` and `/sys` without requiring psutil.
 
 Capture when available:
 
@@ -1220,7 +1254,7 @@ Capture when available:
 - average/min/max CPU frequency;
 - CPU/package temperature;
 - load averages;
-- CPU package power when reliably available.
+- CPU package power through Intel RAPL when reliably exposed.
 
 Normalized process CPU semantics:
 
@@ -1228,59 +1262,132 @@ Normalized process CPU semantics:
 0–100% represents fraction of total machine CPU capacity
 ~~~
 
-Raw process CPU semantics MAY additionally preserve the Linux convention where one fully used logical CPU equals 100%.
+Raw process CPU semantics follow the common per-core convention:
 
-### 26.2 Memory telemetry
+~~~text
+100% ≈ one fully occupied logical CPU
+800% ≈ eight fully occupied logical CPUs
+~~~
 
-Capture:
+The initial external-CPU estimate is:
+
+~~~text
+external_cpu_pct =
+    max(0, system_cpu_pct - process_cpu_pct_normalized)
+~~~
+
+This is a quality heuristic, not exact process attribution.
+
+### 26.3 Memory telemetry
+
+Capture when available:
 
 - RAM used;
 - RAM available;
 - swap used;
-- process RSS;
-- process virtual memory where useful.
+- benchmark-process RSS.
 
-### 26.3 GPU telemetry
+### 26.4 GPU telemetry
 
-For every relevant GPU capture when available:
+GPU collection is provider-based.
 
-- utilization percent;
-- VRAM used;
-- VRAM total;
-- temperature;
-- power;
-- GPU clock;
-- memory clock;
-- throttling indicators where available.
+The automatic Linux provider prefers NVIDIA management telemetry through:
 
-### 26.4 Telemetry providers
-
-Initial abstraction:
-
-~~~python
-class TelemetryProvider:
-    def snapshot(self, process_id: int | None) -> TelemetrySample:
-        ...
+~~~text
+nvidia-smi -q -x
 ~~~
 
-Initial implementation SHOULD use Linux /proc and /sys for portable CPU/process data.
+It captures when available:
 
-Vendor-specific GPU or power providers may be layered on top.
+- GPU identity/name/UUID;
+- utilization;
+- VRAM used/total;
+- temperature;
+- power draw;
+- graphics clock;
+- memory clock;
+- clock-event/throttle reasons.
 
-### 26.5 Run-quality classification
+Explicit thermal clock-event reasons are normalized to a thermal-throttle signal.
 
-Derived run quality MAY include:
+When NVIDIA management telemetry is unavailable, the generic DRM/sysfs provider captures available Linux GPU fields such as:
+
+- `gpu_busy_percent`;
+- `mem_info_vram_used`;
+- `mem_info_vram_total`;
+- hwmon temperature;
+- hwmon power.
+
+Per-GPU observations remain in `gpu_json` so vendor-specific fields can evolve without a schema migration.
+
+### 26.5 Persistence and summaries
+
+Each telemetry_sample stores normalized CPU/process/memory columns plus:
+
+- per-core CPU percentages as JSON;
+- per-GPU observations as JSON;
+- optional provider-specific fields in extra JSON;
+- sampling phase (`before`, `during`, or `after`) in extra JSON.
+
+After a run, normalized `telemetry.*` metrics are written to the generic metric table. V1 summaries include:
+
+- sample counts;
+- average/peak system CPU;
+- average/peak normalized process CPU;
+- average/peak raw process CPU;
+- CPU frequency range;
+- peak CPU temperature;
+- process user/system CPU time delta when enough samples exist;
+- peak RAM/swap/process RSS;
+- average/peak GPU utilization;
+- peak GPU temperature;
+- peak VRAM used;
+- average/peak GPU power;
+- estimated peak external CPU load;
+- peak out-of-run GPU baseline utilization.
+
+### 26.6 Run-quality classification
+
+Initial primary labels:
 
 ~~~text
 clean
 noisy
+external_cpu_load
+external_gpu_load
+thermal_throttle
+telemetry_incomplete
+~~~
+
+The primary label does not replace raw signals. All detected reasons and the full summary are retained in `quality_details_json`.
+
+Default V1 thresholds are intentionally conservative and configurable in code:
+
+~~~text
+external CPU       >= 20% of total machine capacity
+CPU noise          >= 10%
+external GPU       >= 15% baseline utilization
+GPU noise          >= 5% baseline utilization
+CPU thermal signal >= 95 C
+GPU thermal signal >= 90 C
+~~~
+
+Explicit GPU thermal-throttle reasons also trigger `thermal_throttle`.
+
+Out-of-run GPU baseline is measured from before/after snapshots. Because GPU process-utilization attribution is not portable across vendors, V1 does not subtract benchmark GPU utilization from total GPU utilization.
+
+Quality priority when several conditions are observed:
+
+~~~text
 thermal_throttle
 external_cpu_load
 external_gpu_load
 telemetry_incomplete
+noisy
+clean
 ~~~
 
-The raw run remains stored regardless of quality classification.
+A quality label never silently deletes a run and never changes `completed` into a failure state.
 
 ## 27. Derived run summaries
 

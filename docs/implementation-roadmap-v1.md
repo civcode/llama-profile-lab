@@ -697,6 +697,8 @@ Real-host acceptance remains pending: run the flow against the workstation's reg
 
 ## 11. M7 — CPU/GPU telemetry and run-quality classification
 
+**Status: Implementation Complete — Real-host acceptance pending**
+
 ### Objective
 
 Capture enough runtime state to distinguish real parameter effects from CPU/GPU contention, throttling, or memory pressure.
@@ -773,20 +775,24 @@ Implement initial classifications:
 
 ### Work items
 
-- [ ] /proc CPU/process provider
-- [ ] /sys frequency/temperature provider
-- [ ] memory provider
-- [ ] NVIDIA or generic GPU provider
-- [ ] sampler lifecycle
-- [ ] benchmark PID association
-- [ ] telemetry persistence
-- [ ] run summary metrics
-- [ ] quality rules
-- [ ] UI/API-ready telemetry DTO
+- [x] /proc CPU/process provider
+- [x] /sys frequency/temperature provider
+- [x] memory provider
+- [x] NVIDIA or generic GPU provider
+- [x] sampler lifecycle
+- [x] benchmark PID association
+- [x] telemetry persistence
+- [x] run summary metrics
+- [x] quality rules
+- [x] UI/API-ready telemetry DTO
 
 ### Acceptance gate
 
-A Flash Next decode run records both process CPU load and system CPU load, and a deliberately CPU-loaded test machine produces a noisy/external-load classification without discarding the run.
+Automated acceptance is complete. Executor-level tests run a benchmark with a deterministic telemetry provider that reports 80% machine CPU while the benchmark process accounts for 40% of total machine capacity. The benchmark remains `completed`, raw before/during/after telemetry is persisted, CPU/process/RSS/GPU metrics are summarized, and the run is classified `external_cpu_load` rather than discarded.
+
+Linux-provider tests independently verify /proc process CPU/time/thread/RSS parsing, /proc memory parsing, /sys CPU frequency and temperature collection, and generic DRM/sysfs GPU utilization/VRAM/temperature/power collection. NVIDIA telemetry is supported through `nvidia-smi -q -x` when available.
+
+Real-host acceptance remains pending: run a Flash Next decode workload on the workstation and verify process CPU, total CPU, GPU/VRAM, temperatures, power/clocks where available, and quality behavior under a deliberate external CPU load.
 
 ---
 
