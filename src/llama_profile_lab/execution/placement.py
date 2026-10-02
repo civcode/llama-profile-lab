@@ -274,13 +274,22 @@ def resolved_placement_from_record(
     record: ResolvedPlacementRecord,
 ) -> ResolvedPlacement:
     """Convert persistence DTO into the immutable placement domain object."""
+    if isinstance(record.devices, str):
+        if record.devices != "auto":
+            raise PlacementConfigurationError(
+                f"invalid persisted device setting: {record.devices!r}"
+            )
+        devices = "auto"
+    else:
+        devices = record.devices
+
     return ResolvedPlacement(
         production_context_size=record.production_context_size,
         n_gpu_layers=record.n_gpu_layers,
         n_cpu_moe=record.n_cpu_moe,
         split_mode=record.split_mode,
         main_gpu=record.main_gpu,
-        devices=record.devices,
+        devices=devices,
         tensor_split=record.tensor_split,
         override_tensor=record.override_tensor,
     )
