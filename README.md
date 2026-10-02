@@ -15,35 +15,40 @@ Project documents:
 
 ## Requirements
 
-- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- Python 3.12+ (managed automatically by uv when needed)
 
 llama.cpp is not required for the bootstrap milestone. Later milestones will integrate `llama-bench`, `llama-fit-params`, and `llama-server`.
 
 ## Development setup
 
-Create and activate a virtual environment, then install the package with development dependencies:
+Synchronize the project environment from the committed lockfile:
 
 ~~~bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+uv sync --frozen
 ~~~
 
-Run the quality gates:
+Run the quality gates through the locked environment:
 
 ~~~bash
-ruff check .
-mypy src
-pytest
+uv run --frozen ruff check .
+uv run --frozen mypy src
+uv run --frozen pytest
 ~~~
 
 Verify the CLI entry point:
 
 ~~~bash
-llprof --help
-llprof --version
+uv run --frozen llprof --help
+uv run --frozen llprof --version
 ~~~
+
+Dependency policy:
+
+- `pyproject.toml` defines project dependencies and allowed version ranges.
+- `uv.lock` is committed and defines the exact development/CI resolution.
+- development tools live in the standardized `dev` dependency group.
+- setuptools remains the Python build backend; uv manages Python, environments, dependency resolution, and command execution.
 
 ## Repository layout
 

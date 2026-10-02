@@ -32,6 +32,7 @@ The following rules apply throughout V1 implementation:
 12. **The UI and CLI use the same backend/domain services.**
 13. **Optimization policy never overwrites raw observations.**
 14. **Every milestone must include tests before the next milestone begins.**
+15. **Development and CI dependency resolution use the committed uv.lock in frozen mode.**
 
 ## 3. Milestone overview
 
@@ -76,6 +77,8 @@ Create the project skeleton, development environment, test runner, linting, and 
 ### Deliverables
 
 - pyproject.toml
+- committed uv.lock
+- .python-version pinned to Python 3.12
 - Python package under src/llama_profile_lab
 - test structure
 - migration directory
@@ -89,6 +92,7 @@ Create the project skeleton, development environment, test runner, linting, and 
 
 Backend:
 
+- uv
 - Python 3.12+
 - Pydantic v2
 - FastAPI
@@ -120,6 +124,10 @@ src/llama_profile_lab/
 ### Work items
 
 - [ ] Initialize pyproject.toml
+- [ ] Configure uv project workflow
+- [ ] Add .python-version
+- [ ] Generate and commit uv.lock
+- [ ] Move development tools to the dev dependency group
 - [ ] Add package metadata
 - [ ] Add llprof console entry point
 - [ ] Add pytest configuration
@@ -134,10 +142,14 @@ src/llama_profile_lab/
 The following must succeed from a clean checkout:
 
 ~~~bash
-python -m pip install -e .
-pytest
-llprof --help
+uv sync --frozen
+uv run --frozen ruff check .
+uv run --frozen mypy src
+uv run --frozen pytest
+uv run --frozen llprof --help
 ~~~
+
+CI SHALL use the same frozen lockfile rather than independently resolving dependency ranges.
 
 No llama.cpp installation is required yet.
 

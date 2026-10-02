@@ -196,6 +196,7 @@ SQLite is the source of truth for experiment history.
 ### 6.1 Backend
 
 - Python 3.12+
+- uv for Python selection, virtual-environment management, dependency resolution, locking, and development/CI command execution
 - Pydantic v2 for public schemas and validation
 - sqlite3 from the standard library for core persistence
 - FastAPI for the local HTTP API
@@ -204,6 +205,14 @@ SQLite is the source of truth for experiment history.
 - pathlib for paths
 - hashlib for content identities
 - JSON canonicalization for content-addressed objects
+
+`pyproject.toml` SHALL remain the canonical project/dependency declaration. Development-only tooling SHALL use the standardized `dev` dependency group.
+
+`uv.lock` SHALL be committed. Local development and CI SHALL use the lockfile in frozen mode so dependency resolution cannot silently drift between benchmark-tool revisions.
+
+`.python-version` SHALL pin the repository's default Python line to 3.12. uv may provision the requested interpreter when it is not already installed.
+
+setuptools remains the V1 Python build backend. Adopting uv does not require changing the build backend.
 
 SQLAlchemy is not required in V1.
 
@@ -236,6 +245,8 @@ Recommended initial structure:
 ~~~text
 llama-profile-lab/
   pyproject.toml
+  uv.lock
+  .python-version
   README.md
 
   docs/
