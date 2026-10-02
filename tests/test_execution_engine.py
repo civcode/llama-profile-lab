@@ -1,4 +1,4 @@
-"""End-to-end sequential llama-bench execution and resume tests."""
+"""End-to-end placement-aware llama-bench execution and resume tests."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from tests.test_planning_persistence import seed_reference_experiment
 
 
 def write_fake_llama_bench(path: Path) -> None:
-    """Write a fast fake that exposes the M5 option surface and JSON output."""
+    """Write a fast fake that exposes the placement-aware bench option surface."""
     script = r'''#!/usr/bin/env python3
 import json
 import sys
@@ -38,6 +38,13 @@ HELP = """usage: llama-bench [options]
   --flash-attn MODE
   --load-mode MODE
   --lazy-mode MODE
+  --n-gpu-layers N
+  --n-cpu-moe N
+  --split-mode MODE
+  --main-gpu N
+  --device LIST
+  --tensor-split LIST
+  --override-tensor EXPR
   --repack N
   --repetitions N
   --output FORMAT
@@ -88,7 +95,49 @@ print(json.dumps([{
     path.chmod(0o755)
 
 
-def register_fake_bench(database: Database, binary: Path) -> str:
+def write_fake_fit_params(path: Path, *, fail: bool = False) -> None:
+    """Write a fake full-context fit tool with deterministic placement output."""
+    script = f'''#!/usr/bin/env python3
+import sys
+
+HELP = """usage: llama-fit-params [options]
+  --model PATH
+  --ctx-size N
+  --batch-size N
+  --ubatch-size N
+  --cache-type-k TYPE
+  --cache-type-v TYPE
+  --flash-attn MODE
+  --load-mode MODE
+  --lazy-mode MODE
+  --fit-target N
+  --fit-ctx N
+  --split-mode MODE
+  --main-gpu N
+  --device LIST
+  --repack N
+"""
+
+if "--version" in sys.argv:
+    print("version: 9998 (fedcba987)")
+    raise SystemExit(0)
+if "--help" in sys.argv or "-h" in sys.argv:
+    print(HELP)
+    raise SystemExit(0)
+if {fail!r}:
+    print("failed to fit CLI arguments to free memory", file=sys.stderr)
+    raise SystemExit(1)
+
+index = sys.argv.index("--ctx-size")
+ctx = int(sys.argv[index + 1])
+print("llama_params_fit: successfully fit params to free device memory")
+print(f'-c {{ctx}} -ngl 42 -ts 3,1 -ot "blk\\.12\\.ffn_.*=CPU"')
+'''
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def register_fake_binary(database: Database, binary: Path) -> str:
     probe = probe_binary(binary)
     with database.session() as connection:
         return EnvironmentRepository(connection).put_binary(
@@ -104,6 +153,11 @@ def register_fake_bench(database: Database, binary: Path) -> str:
         )
 
 
+def register_fake_bench(database: Database, binary: Path) -> str:
+    """Backward-compatible test helper name used by CLI tests."""
+    return register_fake_binary(database, binary)
+
+
 def test_reference_experiment_runs_five_then_resumes_remaining_39(
     tmp_path: Path,
 ) -> None:
@@ -112,9 +166,12 @@ def test_reference_experiment_runs_five_then_resumes_remaining_39(
     with database.session() as connection:
         plan_experiment(connection, experiment_id)
 
-    binary = tmp_path / "llama-bench"
-    write_fake_llama_bench(binary)
-    binary_id = register_fake_bench(database, binary)
+    bench = tmp_path / "llama-bench"
+    fit = tmp_path / "llama-fit-params"
+    write_fake_llama_bench(bench)
+    write_fake_fit_params(fit)
+    binary_id = register_fake_binary(database, bench)
+    fit_binary_id = register_fake_binary(database, fit)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"fake-model")
 
@@ -122,6 +179,7 @@ def test_reference_experiment_runs_five_then_resumes_remaining_39(
     first = executor.execute(
         experiment_id,
         binary_id=binary_id,
+        fit_binary_id=fit_binary_id,
         model_path=model,
         limit=5,
     )
@@ -136,10 +194,14 @@ def test_reference_experiment_runs_five_then_resumes_remaining_39(
         record = ExperimentRepository(connection).get(experiment_id)
         assert record is not None
         assert record.status == "paused"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM placement_attempt WHERE status = 'completed'"
+        ).fetchone()[0] == 2
 
     second = executor.execute(
         experiment_id,
         binary_id=binary_id,
+        fit_binary_id=fit_binary_id,
         model_path=model,
         resume=True,
     )
@@ -161,6 +223,12 @@ def test_reference_experiment_runs_five_then_resumes_remaining_39(
         sample_count = connection.execute(
             "SELECT COUNT(*) FROM benchmark_sample"
         ).fetchone()[0]
+        placement_count = connection.execute(
+            "SELECT COUNT(*) FROM resolved_placement"
+        ).fetchone()[0]
+        fit_count = connection.execute(
+            "SELECT COUNT(*) FROM placement_attempt WHERE status = 'completed'"
+        ).fetchone()[0]
         max_successes_per_case = connection.execute(
             """
             SELECT MAX(success_count)
@@ -175,7 +243,125 @@ def test_reference_experiment_runs_five_then_resumes_remaining_39(
 
         assert run_count == 44
         assert sample_count == 132
+        assert placement_count == 11
+        assert fit_count == 11
         assert max_successes_per_case == 1
+
+
+def test_one_candidate_is_fit_once_for_all_four_workloads(tmp_path: Path) -> None:
+    database = Database(tmp_path / "fit-once.db")
+    experiment_id = seed_reference_experiment(database)
+    with database.session() as connection:
+        plan_experiment(connection, experiment_id)
+
+    bench = tmp_path / "llama-bench"
+    fit = tmp_path / "llama-fit-params"
+    write_fake_llama_bench(bench)
+    write_fake_fit_params(fit)
+    bench_id = register_fake_binary(database, bench)
+    fit_id = register_fake_binary(database, fit)
+    model = tmp_path / "flash.gguf"
+    model.write_bytes(b"flash")
+
+    summary = ExperimentExecutor(database).execute(
+        experiment_id,
+        binary_id=bench_id,
+        fit_binary_id=fit_id,
+        model_path=model,
+        limit=4,
+    )
+
+    assert summary.completed == 4
+    with database.session() as connection:
+        attempts = connection.execute(
+            "SELECT COUNT(*) FROM placement_attempt WHERE status = 'completed'"
+        ).fetchone()[0]
+        placement_ids = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT placement_id
+                FROM benchmark_case
+                WHERE experiment_id = ?
+                ORDER BY ordinal
+                LIMIT 4
+                """,
+                (experiment_id,),
+            ).fetchall()
+        }
+        argv_rows = connection.execute(
+            """
+            SELECT benchmark_run.argv_json
+            FROM benchmark_run
+            JOIN benchmark_case
+              ON benchmark_case.id = benchmark_run.benchmark_case_id
+            WHERE benchmark_case.experiment_id = ?
+              AND benchmark_run.status = 'completed'
+            ORDER BY benchmark_case.ordinal
+            LIMIT 4
+            """,
+            (experiment_id,),
+        ).fetchall()
+
+    assert attempts == 1
+    assert len(placement_ids) == 1
+    assert None not in placement_ids
+    for row in argv_rows:
+        argv_json = str(row[0])
+        assert "--n-gpu-layers" in argv_json
+        assert '"42"' in argv_json
+        assert "--tensor-split" in argv_json
+        assert "--override-tensor" in argv_json
+        assert "--fit-target" not in argv_json
+
+
+def test_fit_failure_is_persisted_and_candidate_is_retryable(tmp_path: Path) -> None:
+    database = Database(tmp_path / "fit-failed.db")
+    experiment_id = seed_reference_experiment(database)
+    with database.session() as connection:
+        plan_experiment(connection, experiment_id)
+
+    bench = tmp_path / "llama-bench"
+    fit = tmp_path / "llama-fit-params"
+    write_fake_llama_bench(bench)
+    write_fake_fit_params(fit, fail=True)
+    bench_id = register_fake_binary(database, bench)
+    fit_id = register_fake_binary(database, fit)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+
+    summary = ExperimentExecutor(database).execute(
+        experiment_id,
+        binary_id=bench_id,
+        fit_binary_id=fit_id,
+        model_path=model,
+        limit=4,
+    )
+
+    assert summary.completed == 0
+    assert summary.failed == 4
+    assert summary.remaining == 44
+
+    with database.session() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM placement_attempt WHERE status = 'fit_failed'"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM benchmark_run"
+        ).fetchone()[0] == 0
+        statuses = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT status FROM benchmark_case
+                WHERE experiment_id = ?
+                ORDER BY ordinal
+                LIMIT 4
+                """,
+                (experiment_id,),
+            ).fetchall()
+        }
+        assert statuses == {"fit_failed"}
 
 
 def test_orphaned_running_attempt_is_recovered_before_resume(tmp_path: Path) -> None:
@@ -202,8 +388,6 @@ def test_orphaned_running_attempt_is_recovered_before_resume(tmp_path: Path) -> 
             size_bytes=1,
             mtime_ns=1,
         )
-        policy_id = ExperimentRepository(connection).get(experiment_id)
-        assert policy_id is not None
 
         definition = ExperimentRepository(connection).get_definition(experiment_id)
         assert definition is not None
