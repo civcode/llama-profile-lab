@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Literal, cast
 
 from llama_profile_lab import __version__
-from llama_profile_lab.archive import ArchiveError, ArchiveService, serialize_experiment_export
 from llama_profile_lab.analysis import (
     DEFAULT_METRIC_REGISTRY,
     AnalysisError,
@@ -18,6 +17,12 @@ from llama_profile_lab.analysis import (
     AnalysisService,
     ParetoObjective,
     serialize_export,
+)
+from llama_profile_lab.api.profiles import LauncherProfileError, LauncherProfileProvider
+from llama_profile_lab.archive import (
+    ArchiveError,
+    ArchiveService,
+    serialize_experiment_export,
 )
 from llama_profile_lab.db import (
     BenchmarkRunRepository,
@@ -46,7 +51,6 @@ from llama_profile_lab.llama import (
     probe_binary,
 )
 from llama_profile_lab.planning import PlanningError, plan_experiment, render_plan_summary
-from llama_profile_lab.api.profiles import LauncherProfileError, LauncherProfileProvider
 from llama_profile_lab.promotion import PromotionError, PromotionService
 
 _BINARY_KIND_CHOICES = (
