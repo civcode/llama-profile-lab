@@ -60,7 +60,13 @@ def capabilities() -> CapabilitySet:
                 "--lazy-mode",
                 "--fit-target",
                 "--fit-ctx",
+                "--kv-offload",
+                "--no-kv-offload",
+                "--op-offload",
+                "--no-op-offload",
+                "--no-host",
                 "--repack",
+                "--no-repack",
             }
         ),
         help_stdout="",
@@ -82,6 +88,10 @@ def test_fit_argv_pins_full_production_context() -> None:
     assert argv[argv.index("--fit-target") + 1] == "256"
     assert argv[argv.index("--fit-ctx") + 1] == "4096"
     assert "--n-gpu-layers" not in argv
+    assert "--kv-offload" in argv
+    assert "--op-offload" in argv
+    assert "--repack" in argv
+    assert "1" not in argv[argv.index("--repack") + 1 : argv.index("--repack") + 2]
 
 
 def test_parser_extracts_concrete_placement() -> None:
@@ -112,3 +122,26 @@ def test_fit_rejects_fixed_gpu_layers() -> None:
             model_path=Path("/models/flash.gguf"),
             candidate=fixed,
         )
+
+
+
+def test_fit_argv_uses_negative_common_flags_when_disabled() -> None:
+    base = candidate()
+    payload = base.model_dump(mode="python")
+    payload["context"]["kv_offload"] = False
+    payload["compute"]["no_op_offload"] = True
+    payload["compute"]["no_host"] = True
+    payload["compute"]["repack"] = False
+    modified = Candidate.model_validate(payload)
+
+    argv = LlamaFitParamsAdapter().build_argv(
+        binary_path=Path("/bin/llama-fit-params"),
+        capabilities=capabilities(),
+        model_path=Path("/models/flash.gguf"),
+        candidate=modified,
+    )
+
+    assert "--no-kv-offload" in argv
+    assert "--no-op-offload" in argv
+    assert "--no-host" in argv
+    assert "--no-repack" in argv

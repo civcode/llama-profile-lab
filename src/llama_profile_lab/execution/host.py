@@ -37,12 +37,23 @@ def detect_basic_host() -> BasicHostInfo:
         "version": platform.version(),
     }
     gpus = _linux_gpu_inventory()
+    gpu_identity = [
+        {
+            key: value
+            for key, value in gpu.items()
+            if key != "drm_card"
+        }
+        for gpu in sorted(
+            gpus,
+            key=lambda item: str(item.get("pci_address", "")),
+        )
+    ]
     fingerprint_payload = {
         "cpu": cpu,
         "ram_bytes": ram_bytes,
         "os_system": os_info["system"],
         "machine": cpu["machine"],
-        "gpus": gpus,
+        "gpus": gpu_identity,
     }
     return BasicHostInfo(
         hostname=socket.gethostname(),

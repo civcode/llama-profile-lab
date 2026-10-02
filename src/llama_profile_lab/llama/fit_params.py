@@ -171,29 +171,31 @@ class LlamaFitParamsAdapter:
                 ",".join(constraints.devices),
             )
 
-        _append_optional_boolean(
+        _append_boolean_switch(
             argv,
             capabilities,
-            "--no-kv-offload",
-            not candidate.context.kv_offload,
+            enabled=candidate.context.kv_offload,
+            positive=("--kv-offload", "-kvo"),
+            negative=("--no-kv-offload", "-nkvo"),
+            label="KV offload",
         )
-        _append_optional_boolean(
+        _append_boolean_switch(
             argv,
             capabilities,
-            "--no-op-offload",
-            candidate.compute.no_op_offload,
+            enabled=not candidate.compute.no_op_offload,
+            positive=("--op-offload",),
+            negative=("--no-op-offload",),
+            label="operation offload",
         )
-        _append_optional_boolean(
+        if candidate.compute.no_host:
+            _append_flag(argv, capabilities, "--no-host", ())
+        _append_boolean_switch(
             argv,
             capabilities,
-            "--no-host",
-            candidate.compute.no_host,
-        )
-        _append_optional_boolean(
-            argv,
-            capabilities,
-            "--repack",
-            candidate.compute.repack,
+            enabled=candidate.compute.repack,
+            positive=("--repack",),
+            negative=("--no-repack", "-nr"),
+            label="weight repacking",
         )
 
         for extra in candidate.extra_args:
@@ -356,18 +358,43 @@ def _append(
     argv.extend((option, value))
 
 
-def _append_optional_boolean(
+def _append_flag(
     argv: list[str],
     capabilities: CapabilitySet,
-    option: str,
-    value: bool,
+    preferred: str,
+    fallbacks: tuple[str, ...],
 ) -> None:
-    if capabilities.supports(option):
-        argv.extend((option, "1" if value else "0"))
-    elif value:
-        raise LlamaFitParamsConfigurationError(
-            f"binary does not support required option {option}"
+    argv.append(_select_option(capabilities, preferred, fallbacks))
+
+
+def _append_boolean_switch(
+    argv: list[str],
+    capabilities: CapabilitySet,
+    *,
+    enabled: bool,
+    positive: tuple[str, ...],
+    negative: tuple[str, ...],
+    label: str,
+) -> None:
+    choices = positive if enabled else negative
+    if not choices:
+        if enabled:
+            raise LlamaFitParamsConfigurationError(
+                f"fit binary cannot explicitly enable {label}"
+            )
+        return
+    preferred, *fallbacks = choices
+    try:
+        option = _select_option(
+            capabilities,
+            preferred,
+            tuple(fallbacks),
         )
+    except LlamaFitParamsConfigurationError as exc:
+        raise LlamaFitParamsConfigurationError(
+            f"fit binary cannot represent {label}={enabled}"
+        ) from exc
+    argv.append(option)
 
 
 _PLACEMENT_CONTROL_OPTIONS = frozenset(

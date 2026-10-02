@@ -116,7 +116,10 @@ HELP = """usage: llama-fit-params [options]
   --split-mode MODE
   --main-gpu N
   --device LIST
-  --repack N
+  --kv-offload, --no-kv-offload
+  --op-offload, --no-op-offload
+  --no-host
+  --repack, --no-repack
 """
 
 if "--version" in sys.argv:
