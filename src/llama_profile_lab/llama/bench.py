@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from llama_profile_lab.domain import Candidate, MeasurementPolicy
+from llama_profile_lab.domain import Candidate, MeasurementPolicy, ResolvedPlacement
 from llama_profile_lab.domain.candidate import ExtraArgument
 from llama_profile_lab.domain.workload import (
     CombinedWorkloadCase,
@@ -60,6 +60,7 @@ class LlamaBenchAdapter:
         candidate: Candidate,
         workload: WorkloadCase,
         measurement_policy: MeasurementPolicy,
+        placement: ResolvedPlacement | None = None,
     ) -> tuple[str, ...]:
         """Build a single-workload argv, preferring long-form options."""
         if capabilities.kind != "llama-bench":
@@ -152,48 +153,73 @@ class LlamaBenchAdapter:
                 candidate.compute.lazy_mode,
             )
 
-        constraints = candidate.placement.constraints
-        if constraints.n_gpu_layers is not None:
+        if placement is None:
+            constraints = candidate.placement.constraints
+            n_gpu_layers = constraints.n_gpu_layers
+            n_cpu_moe = constraints.n_cpu_moe
+            split_mode = constraints.split_mode
+            main_gpu = constraints.main_gpu
+            devices = constraints.devices
+            tensor_split = constraints.tensor_split
+            override_tensor = constraints.override_tensor
+        else:
+            n_gpu_layers = placement.n_gpu_layers
+            n_cpu_moe = placement.n_cpu_moe
+            split_mode = placement.split_mode
+            main_gpu = placement.main_gpu
+            devices = placement.devices
+            tensor_split = placement.tensor_split
+            override_tensor = placement.override_tensor
+
+        if n_gpu_layers is not None:
             self._append(
                 argv,
                 capabilities,
                 "--n-gpu-layers",
                 ("-ngl",),
-                str(constraints.n_gpu_layers),
+                str(n_gpu_layers),
             )
-        if constraints.n_cpu_moe:
+        if n_cpu_moe:
             self._append(
                 argv,
                 capabilities,
                 "--n-cpu-moe",
                 ("-ncmoe",),
-                str(constraints.n_cpu_moe),
+                str(n_cpu_moe),
             )
-        if constraints.split_mode != "layer":
+        if split_mode != "layer":
             self._append(
                 argv,
                 capabilities,
                 "--split-mode",
                 ("-sm",),
-                constraints.split_mode,
+                split_mode,
             )
-        if constraints.main_gpu:
+        if main_gpu:
             self._append(
                 argv,
                 capabilities,
                 "--main-gpu",
                 ("-mg",),
-                str(constraints.main_gpu),
+                str(main_gpu),
             )
-        if constraints.tensor_split is not None:
+        if devices != "auto":
+            self._append(
+                argv,
+                capabilities,
+                "--device",
+                ("-dev",),
+                ",".join(devices),
+            )
+        if tensor_split is not None:
             self._append(
                 argv,
                 capabilities,
                 "--tensor-split",
                 ("-ts",),
-                ",".join(str(value) for value in constraints.tensor_split),
+                ",".join(str(value) for value in tensor_split),
             )
-        for override in constraints.override_tensor:
+        for override in override_tensor:
             self._append(
                 argv,
                 capabilities,
@@ -247,7 +273,12 @@ class LlamaBenchAdapter:
             )
 
         for extra_argument in candidate.extra_args:
-            self._append_extra(argv, capabilities, extra_argument)
+            self._append_extra(
+                argv,
+                capabilities,
+                extra_argument,
+                resolved_placement=placement is not None,
+            )
 
         return tuple(argv)
 
@@ -291,7 +322,13 @@ class LlamaBenchAdapter:
         argv: list[str],
         capabilities: CapabilitySet,
         extra: ExtraArgument,
+        *,
+        resolved_placement: bool,
     ) -> None:
+        if resolved_placement and extra.name in _PLACEMENT_CONTROL_OPTIONS:
+            raise LlamaBenchConfigurationError(
+                f"Candidate extra arg {extra.name} conflicts with resolved placement"
+            )
         if not capabilities.supports(extra.name):
             raise LlamaBenchConfigurationError(
                 f"binary does not advertise Candidate extra arg {extra.name}"
@@ -311,6 +348,35 @@ class LlamaBenchAdapter:
             return
         argv.append(_scalar_arg(value))
 
+
+
+
+
+_PLACEMENT_CONTROL_OPTIONS = frozenset(
+    {
+        "--fit",
+        "-fit",
+        "--fit-target",
+        "-fitt",
+        "--fit-ctx",
+        "-fitc",
+        "--n-gpu-layers",
+        "--gpu-layers",
+        "-ngl",
+        "--n-cpu-moe",
+        "-ncmoe",
+        "--split-mode",
+        "-sm",
+        "--main-gpu",
+        "-mg",
+        "--device",
+        "-dev",
+        "--tensor-split",
+        "-ts",
+        "--override-tensor",
+        "-ot",
+    }
+)
 
 def parse_llama_bench_json(
     text: str,
