@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from llama_profile_lab.domain import (
     Candidate,
@@ -288,17 +288,23 @@ def _truthy_arg(args: dict[str, JsonScalar], name: str) -> bool:
     return False
 
 
-def _flash_attn(args: dict[str, JsonScalar]) -> str:
+def _flash_attn(
+    args: dict[str, JsonScalar],
+) -> Literal["on", "off", "auto"]:
     value = _string_arg(args, "--flash-attn", "auto")
     return value if value in {"on", "off", "auto"} else "auto"
 
 
-def _gpu_layers(args: dict[str, JsonScalar]) -> int | str | None:
+def _gpu_layers(
+    args: dict[str, JsonScalar],
+) -> int | Literal["auto", "all"] | None:
     value = args.get("--n-gpu-layers")
     if isinstance(value, bool):
         return None
     if isinstance(value, int) and value >= 0:
         return value
-    if value in {"auto", "all"}:
-        return str(value)
+    if value == "auto":
+        return "auto"
+    if value == "all":
+        return "all"
     return None

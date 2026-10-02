@@ -44,6 +44,52 @@ describe("NewExperimentPage", () => {
             "--ubatch-size": 2048,
             "--flash-attn": "on",
             "--fit-target": 256
+          },
+          candidate: {
+            schema: "llama-profile-candidate",
+            version: 1,
+            model: {
+              target_model_id: "launcher-profile:flash-128k",
+              draft_model_id: null
+            },
+            context: {
+              size: 131072,
+              cache_type_k: "f16",
+              cache_type_v: "f16",
+              kv_offload: true,
+              kv_unified: true
+            },
+            compute: {
+              flash_attn: "on",
+              batch_size: 4096,
+              ubatch_size: 2048,
+              threads: null,
+              load_mode: "auto",
+              lazy_mode: "auto",
+              repack: true,
+              no_host: false,
+              no_op_offload: false
+            },
+            placement: {
+              mode: "fit",
+              fit: { target_mib: 256, min_context: 4096 },
+              constraints: {
+                n_gpu_layers: null,
+                n_cpu_moe: 0,
+                split_mode: "layer",
+                main_gpu: 0,
+                devices: "auto",
+                tensor_split: null,
+                override_tensor: []
+              }
+            },
+            server: { parallel: 1 },
+            speculative: {
+              enabled: false,
+              type: null,
+              draft_n_max: null
+            },
+            extra_args: {}
           }
         }
       ]
