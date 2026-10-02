@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. The repository currently implements **M0 — Repository bootstrap** and **M1 — Domain model and canonical identities** from the implementation roadmap.
+V1 is under active development. The repository currently implements **M0 — Repository bootstrap**, **M1 — Domain model and canonical identities**, and **M2 — SQLite persistence and migrations** from the implementation roadmap.
 
 Project documents:
 
@@ -18,7 +18,7 @@ Project documents:
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
 
-llama.cpp is not required for the bootstrap milestone. Later milestones will integrate `llama-bench`, `llama-fit-params`, and `llama-server`.
+llama.cpp is not required for the currently implemented milestones. Later milestones will integrate `llama-bench`, `llama-fit-params`, and `llama-server`.
 
 ## Development setup
 

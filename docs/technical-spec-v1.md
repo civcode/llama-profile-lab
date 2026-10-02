@@ -1222,6 +1222,10 @@ PRAGMA busy_timeout = 5000;
 
 Schema changes SHALL use numbered migrations.
 
+Applied migrations SHALL be recorded with their version, name, and SHA-256 checksum. An already-applied migration file is immutable; checksum drift SHALL be treated as an error and corrected with a new forward migration.
+
+Migration SQL SHALL be packaged with installed distributions as well as available from source checkouts.
+
 CREATE TABLE IF NOT EXISTS is not a migration strategy.
 
 One database SHOULD contain all experiments for a host/project installation.
@@ -1309,6 +1313,17 @@ Frequently queried fields are normalized into typed columns.
 
 The complete canonical Candidate remains in config_json.
 
+### search_space
+
+~~~text
+id
+definition_hash UNIQUE
+definition_json
+created_at
+~~~
+
+SearchSpace is a first-class immutable content-addressed entity. Experiments reference it by ID so the same N-dimensional definition can be reused and compared across experiment events.
+
 ### workload_suite
 
 ~~~text
@@ -1348,11 +1363,12 @@ id
 name
 status
 base_candidate_id
-search_space_json
+search_space_id
 workload_suite_id
 measurement_policy_id
 placement_policy_json
 baseline_json
+definition_json
 created_at
 frozen_at
 completed_at

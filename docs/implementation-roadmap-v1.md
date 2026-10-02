@@ -256,7 +256,7 @@ No subprocess execution exists yet.
 
 ---
 
-## 6. M2 — SQLite persistence and migrations
+## 6. M2 — SQLite persistence and migrations\n\n**Status: Complete**
 
 ### Objective
 
@@ -309,19 +309,19 @@ At minimum:
 
 ### Work items
 
-- [ ] connection factory
-- [ ] SQLite PRAGMA initialization
-- [ ] migration runner
-- [ ] 001_initial.sql
-- [ ] repository interfaces
-- [ ] candidate repository
-- [ ] workload repository
-- [ ] measurement-policy repository
-- [ ] experiment repository
-- [ ] benchmark-case repository
-- [ ] run repository
-- [ ] transaction tests
-- [ ] migration tests
+- [x] connection factory
+- [x] SQLite PRAGMA initialization
+- [x] migration runner
+- [x] 001_initial.sql
+- [x] repository interfaces
+- [x] candidate repository
+- [x] workload repository
+- [x] measurement-policy repository
+- [x] experiment repository
+- [x] benchmark-case repository
+- [x] run repository
+- [x] transaction tests
+- [x] migration tests
 
 ### Acceptance gate
 
