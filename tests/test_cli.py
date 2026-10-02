@@ -16,6 +16,8 @@ def test_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "llprof" in output
     assert "Experiment, benchmark, and tune llama.cpp profiles." in output
     assert "server" in output
+    assert "profile" in output
+    assert "archive" in output
     assert "api" in output
     assert "ui" in output
 
