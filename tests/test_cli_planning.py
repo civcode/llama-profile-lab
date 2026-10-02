@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
+import pytest
+
 from llama_profile_lab.cli.main import main
 from llama_profile_lab.db import Database
 from tests.test_planning_persistence import seed_reference_experiment
 
 
-def test_experiment_plan_command(tmp_path: Path, capsys: object) -> None:
+def test_experiment_plan_command(\n    tmp_path: Path,\n    capsys: pytest.CaptureFixture[str],\n) -> None:
     database_path = tmp_path / "benchmarks.db"
     database = Database(database_path)
     experiment_id = seed_reference_experiment(database)
