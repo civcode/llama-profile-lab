@@ -32,6 +32,7 @@ from llama_profile_lab.db import (
     TelemetryRepository,
 )
 from llama_profile_lab.db.records import BinaryRecord
+from llama_profile_lab.diagnostics import inspect_database
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     ExecutionError,
@@ -84,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_server_parser(commands)
     _add_api_parser(commands)
     _add_ui_parser(commands)
+    _add_database_parser(commands)
     _add_archive_parser(commands)
     return parser
 
@@ -520,25 +522,52 @@ def _add_ui_parser(
     _add_database_argument(ui)
 
 
+def _add_database_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    database = commands.add_parser(
+        "database",
+        help="Inspect SQLite integrity, growth, and representative query plans.",
+    )
+    database_commands = database.add_subparsers(dest="database_command")
+    check = database_commands.add_parser(
+        "check",
+        help="Run integrity, foreign-key, size, and index-plan diagnostics.",
+    )
+    _add_database_argument(check)
+
+
 def _add_archive_parser(
     commands: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
     archive = commands.add_parser(
         "archive",
-        help="Create a consistent database snapshot archive with a hash manifest.",
+        help="Create or restore a verified database snapshot archive.",
     )
     archive.add_argument(
         "--output",
         type=Path,
-        required=True,
-        help="Destination .tar.gz archive path.",
+        default=None,
+        help="Destination .tar.gz archive path when creating an archive.",
+    )
+    archive.add_argument(
+        "--restore",
+        type=Path,
+        default=None,
+        help="Restore this archive into --database instead of creating one.",
     )
     archive.add_argument(
         "--artifact",
         action="append",
         type=Path,
         default=[],
-        help="Optional artifact file to include; may be repeated.",
+        help="Optional artifact file to include when creating; may be repeated.",
+    )
+    archive.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        default=None,
+        help="Optional directory for restored artifact files.",
     )
     _add_database_argument(archive)
 
@@ -622,12 +651,75 @@ def _profile_promote_command(
     return 0
 
 
+def _database_check_command(database_path: Path) -> int:
+    if not database_path.expanduser().is_file():
+        print(f"error: database does not exist: {database_path}", file=sys.stderr)
+        return 2
+    try:
+        report = inspect_database(Database(database_path))
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Schema version: {report.schema_version}")
+    print(f"Integrity: {'ok' if report.integrity_ok else 'failed'}")
+    print(f"Foreign-key violations: {report.foreign_key_violations}")
+    print(f"Database bytes: {report.database_bytes}")
+    print(f"WAL bytes: {report.wal_bytes}")
+    print(f"Freelist pages: {report.freelist_count}/{report.page_count}")
+    print("Rows:")
+    for table, count in sorted(report.row_counts.items()):
+        print(f"  {table}: {count}")
+    print("Representative query plans:")
+    for plan in report.query_plans:
+        state = "indexed" if plan.uses_index else "scan"
+        print(f"  {plan.name}: {state}")
+        for detail in plan.details:
+            print(f"    {detail}")
+
+    healthy = (
+        report.integrity_ok
+        and report.foreign_key_violations == 0
+        and all(plan.uses_index for plan in report.query_plans)
+    )
+    return 0 if healthy else 1
+
+
 def _archive_command(
     database_path: Path,
     *,
-    output: Path,
+    output: Path | None,
+    restore: Path | None,
     artifacts: Sequence[Path],
+    artifacts_dir: Path | None,
 ) -> int:
+    if restore is not None:
+        if output is not None or artifacts:
+            print(
+                "error: --restore cannot be combined with --output or --artifact",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            manifest = ArchiveService.restore(
+                restore,
+                database_path,
+                artifacts_dir=artifacts_dir,
+            )
+        except ArchiveError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"Restored database: {database_path}")
+        print(f"Schema version: {manifest.schema_version}")
+        print(f"Verified files: {len(manifest.files)}")
+        return 0
+
+    if output is None:
+        print("error: --output is required when creating an archive", file=sys.stderr)
+        return 2
+    if artifacts_dir is not None:
+        print("error: --artifacts-dir is only valid with --restore", file=sys.stderr)
+        return 2
     try:
         manifest = ArchiveService(Database(database_path)).create(
             output,
@@ -1514,11 +1606,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 qualities=args.quality,
             )
 
+    if args.command == "database" and args.database_command == "check":
+        return _database_check_command(args.database)
+
     if args.command == "archive":
         return _archive_command(
             args.database,
             output=args.output,
+            restore=args.restore,
             artifacts=args.artifact,
+            artifacts_dir=args.artifacts_dir,
         )
 
     return 0
