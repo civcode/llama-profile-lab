@@ -3003,6 +3003,104 @@ V1 uses:
 
 Subprocess benchmark failures themselves remain persisted experiment/run data rather than being rewritten as generic HTTP failures.
 
+### 42.11 Browser client (M11)
+
+The V1 browser client is implemented with React, TypeScript, and Vite. It consumes only the local HTTP/SSE API and SHALL NOT read SQLite directly.
+
+The production-style local command is:
+
+~~~text
+llprof ui \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --launcher-config /path/to/launcher/config/hosts/workstation.json \
+  --database data/benchmarks.db
+~~~
+
+The built frontend is mounted after the /api routes so the browser and API share one local origin. Development uses the Vite dev server on 127.0.0.1:5173 with /api proxied to the FastAPI process on 127.0.0.1:8000.
+
+Frontend dependencies SHALL be reproduced from frontend/package-lock.json using npm ci. Generated frontend/dist artifacts SHALL NOT be committed.
+
+#### 42.11.1 Route model
+
+V1 uses hash routing so static hosting does not require server-side SPA rewrites:
+
+~~~text
+#/
+#/new
+#/experiments/{experiment_id}
+#/experiments/{experiment_id}/compare
+#/experiments/{experiment_id}/candidates/{candidate_id}
+~~~
+
+#### 42.11.2 Experiment editor
+
+The editor SHALL begin from the read-only launcher profile resource and construct an immutable Candidate snapshot.
+
+Search dimensions SHALL be populated from backend ParameterDefinition metadata rather than a second hard-coded parameter catalog. The UI SHALL expose parameter label/category/path, comma-separated discrete values, backend string choices and numeric constraints where present, placement-affecting status, and exact binary capability support.
+
+When a registered llama-bench binary is selected, a parameter whose required CLI option is absent SHALL be visibly disabled.
+
+The reference editor defaults SHALL reproduce:
+
+~~~text
+compute.batch_size = {2048,4096,8192}
+compute.ubatch_size = {512,1024,2048,4096}
+constraint: compute.ubatch_size <= compute.batch_size
+~~~
+
+which previews 12 raw combinations, 11 valid Candidates, and one constrained rejection.
+
+The default workload suite SHALL provide:
+
+~~~text
+PP2K d0
+PP8K d0
+TG256 d4096
+TG256 d50%-available-context
+~~~
+
+which yields 44 microbenchmark cases for the 11 valid Candidates.
+
+SPEED-Bench workload definitions MAY be added in the same editor. They SHALL remain server-only workloads and SHALL NOT be included in the llama-bench case count.
+
+#### 42.11.3 Live execution
+
+The execution screen SHALL use the existing run/resume/pause/cancel endpoints. SSE is the primary live-update channel, with polling used as a resilience/fallback mechanism.
+
+The live screen SHALL make visible, when available, completed/total/incomplete cases, current Candidate and WorkloadCase, latest tokens/s, process and system CPU, GPU utilization, RAM/process RSS/VRAM, CPU/GPU temperature, GPU power, recent run status/quality, and persisted failure counts.
+
+No browser-only execution state is authoritative.
+
+#### 42.11.4 Result exploration
+
+For a two-dimensional view, the browser SHALL request the existing sparse matrix projection and render table/heatmap semantics from the returned coordinates.
+
+For spaces with more than two dimensions, each hidden dimension SHALL be either fixed by an exact filter or selected as an explicit facet. The UI SHALL NOT silently average hidden coordinates.
+
+Pareto visualization SHALL use the existing caller-defined M8 objectives and display only the non-dominated observed Candidate set. It SHALL NOT synthesize an overall benchmark score.
+
+#### 42.11.5 Candidate detail and comparison
+
+Candidate detail SHALL include immutable configuration, resolved production placement, PP/TG observations, measured decode throughput versus active context depth, CPU/GPU/memory/stability metrics, signed baseline deltas, compute-only request-latency estimation, and M9 server-validation history/controls.
+
+Advanced hashes/raw JSON SHALL be collapsed by default.
+
+Comparison SHALL support 2–5 selected Candidates. Values and signed deltas SHALL remain workload- and metric-specific. The UI SHALL NOT rank Candidates or declare a universal winner.
+
+#### 42.11.6 Frontend quality gates
+
+CI SHALL run:
+
+~~~text
+npm ci
+npm run typecheck
+npm run test
+npm run build
+~~~
+
+in addition to the Python lockfile, Ruff, strict mypy, and pytest gates.
+
 ## 43. Source launcher integration
 
 llama-profile-launcher is treated as an external source of production profiles.

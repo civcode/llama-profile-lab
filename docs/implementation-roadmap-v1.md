@@ -1074,6 +1074,8 @@ The local API binds to `127.0.0.1` by default through `llprof api`. Browser UI w
 
 ## 15. M11 — React frontend
 
+**Status: Complete**
+
 ### Objective
 
 Implement the agreed simple-form UX over the complete backend.
@@ -1163,24 +1165,38 @@ Display:
 
 ### Work items
 
-- [ ] frontend scaffold
-- [ ] API client
-- [ ] experiment list
-- [ ] experiment editor
-- [ ] parameter-dimension editor
-- [ ] workload editor
-- [ ] plan preview
-- [ ] live run view
-- [ ] matrix/heatmap
-- [ ] higher-dimensional slicing
-- [ ] candidate detail
-- [ ] comparison screen
-- [ ] baseline display
-- [ ] Pareto view
+- [x] frontend scaffold
+- [x] API client
+- [x] experiment list
+- [x] experiment editor
+- [x] parameter-dimension editor
+- [x] workload editor
+- [x] plan preview
+- [x] live run view
+- [x] matrix/heatmap
+- [x] higher-dimensional slicing
+- [x] candidate detail
+- [x] comparison screen
+- [x] baseline display
+- [x] Pareto view
 
 ### Acceptance gate
 
-The full V1 reference experiment can be created, planned, started, monitored, and analyzed from the browser without editing JSON or using SQL.
+Complete. The browser can perform the full reference workflow without editing JSON or using SQL:
+
+- select an existing launcher profile and inspect its effective settings;
+- construct the reference batch/ubatch grid with 12 raw combinations, 11 valid Candidates, and one constrained rejection;
+- preview the four-workload microbenchmark suite as 44 benchmark cases before execution;
+- optionally add server-only SPEED-Bench workloads without inflating the microbenchmark case count;
+- choose measurement and placement policy and create/plan the Experiment;
+- start, pause, resume, or cancel execution using registered binaries and the existing executor/host lock;
+- monitor current Candidate/WorkloadCase plus throughput, CPU, GPU, RAM/VRAM, temperature, power, run quality, and failures;
+- analyze sparse 2D matrices/heatmaps and higher-dimensional exact slices/facets;
+- inspect Candidate placement, workload/resource results, measured decode-depth curves, stability, baseline deltas, and request-latency estimates;
+- compare 2–5 Candidates without introducing an arbitrary overall winner;
+- inspect Pareto frontiers and invoke M9 server/SPEED-Bench finalist validation.
+
+Automated acceptance covers the reference 11-Candidate / 44-case plan through the browser form, API support routes, production static serving, TypeScript compilation, component tests, and production Vite build. Heavy real-model execution remains dependent on the local workstation binaries/models covered by the M5–M9 real-hardware acceptance notes.
 
 ---
 

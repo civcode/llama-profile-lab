@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. **M0–M4, M8 analysis, and M10 local HTTP API are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
+V1 is under active development. **M0–M4, M8 analysis, M10 local HTTP API, and M11 browser UI are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
 
 Project documents:
 
@@ -17,8 +17,9 @@ Project documents:
 
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
+- Node.js 22+ and npm for frontend development/builds
 
-llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs, M7 records CPU/process/RAM/GPU telemetry plus run-quality signals, M8 derives statistics and multidimensional comparisons, M9 manages finalist `llama-server` sessions plus SPEED-Bench validation including speculative-decoding acceptance metrics, and M10 exposes those same services through a local FastAPI/SSE interface for the upcoming browser UI.
+llama.cpp is optional for development and automated tests. M4 discovers exact local binaries, M5 executes planned microbenchmarks, M6 resolves full-production-context placement through a registered `llama-fit-params` binary before `llama-bench` runs, M7 records CPU/process/RAM/GPU telemetry plus run-quality signals, M8 derives statistics and multidimensional comparisons, M9 manages finalist `llama-server` sessions plus SPEED-Bench validation including speculative-decoding acceptance metrics, M10 exposes those same services through a local FastAPI/SSE interface, and M11 provides the browser UI over that service boundary.
 
 ## Development setup
 
@@ -34,6 +35,12 @@ Run the quality gates through the locked environment:
 uv run --frozen ruff check .
 uv run --frozen mypy src
 uv run --frozen pytest
+
+cd frontend
+npm ci
+npm run typecheck
+npm run test
+npm run build
 ~~~
 
 Verify the CLI entry point:
@@ -46,7 +53,8 @@ uv run --frozen llprof --version
 Dependency policy:
 
 - `pyproject.toml` defines project dependencies and allowed version ranges.
-- `uv.lock` is committed and defines the exact development/CI resolution.
+- `uv.lock` is committed and defines the exact Python development/CI resolution.
+- `frontend/package-lock.json` is committed and defines the exact frontend development/CI resolution.
 - development tools live in the standardized `dev` dependency group.
 - setuptools remains the Python build backend; uv manages Python, environments, dependency resolution, and command execution.
 
@@ -64,7 +72,7 @@ src/llama_profile_lab/
   cli/          llprof command-line interface
 
 migrations/     Numbered SQLite schema migrations
-frontend/       React frontend, introduced in a later milestone
+frontend/       React + TypeScript browser UI
 tests/          Unit and integration tests
 docs/           Technical specification and roadmap
 ~~~
@@ -142,6 +150,12 @@ llprof api \
   --port 8000 \
   --launcher-config /path/to/llama-profile-launcher/config/hosts/workstation.json \
   --database data/benchmarks.db
+
+llprof ui \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --launcher-config /path/to/llama-profile-launcher/config/hosts/workstation.json \
+  --database data/benchmarks.db
 ~~~
 
 Binary discovery fingerprints exact executables by SHA-256, captures version/help output, persists parsed supported arguments, and allows native/custom builds to be compared without assuming a global llama.cpp feature set.
@@ -159,6 +173,8 @@ M8 adds a read-only analysis layer over SQLite. Individual repetitions drive mea
 M9 validates selected finalists under a managed `llama-server`. Exact server and SPEED-Bench executables are fingerprinted and capability-checked, the existing resolved placement is frozen into the server argv, readiness is detected through `/health`, server and benchmark subprocess logs/results are persisted independently, and the server process group is cleaned up on completion or failure. SPEED-Bench normalizes prompt/decode throughput, latency, draft/accepted token counts, and acceptance rate while preserving its raw JSON. Candidate evaluation events record the finalist and server-validated stages append-only.
 
 M10 adds a local FastAPI boundary over the same services. Typed HTTP requests can create and plan experiments, inspect/register binaries, run/pause/resume/cancel benchmark execution, inspect Candidates/runs/telemetry, query M8 results and sparse matrices, and invoke M9 Candidate validation. Server-Sent Events expose changed progress snapshots without introducing a second durable scheduler. The server binds to `127.0.0.1` by default. An optional read-only `--launcher-config` exposes current launcher model/profile settings; launcher mutation/promotion remains a later milestone. Interactive API documentation is served at `/api/docs`.
+
+M11 adds the React + TypeScript browser workflow. The UI starts from launcher profiles, builds generic N-dimensional sweeps from backend parameter metadata, previews constraints and case counts, authors microbenchmark and optional SPEED-Bench workloads, controls execution, and visualizes live CPU/GPU/memory/thermal telemetry. Results include sparse matrices/heatmaps with exact higher-dimensional slicing or facets, Pareto frontiers, measured decode-depth curves, baseline-relative Candidate comparison, compute-only latency estimates, and finalist server validation. `llprof ui` serves the production bundle and API from one local origin. The browser never reads SQLite directly and does not silently average hidden search dimensions.
 
 ## Design principles
 
