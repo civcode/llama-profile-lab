@@ -125,6 +125,23 @@ def test_archive_and_full_export_cli_commands(tmp_path: Path) -> None:
     )
     assert archive_path.is_file()
 
+    restored_path = tmp_path / "restored-cli.db"
+    assert (
+        main(
+            [
+                "archive",
+                "--restore",
+                str(archive_path),
+                "--database",
+                str(restored_path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(
+        serialize_experiment_export(Database(restored_path), experiment_id)
+    )["experiment"]["id"] == experiment_id
+
 
 def test_archive_restore_verifies_snapshot_and_artifacts(tmp_path: Path) -> None:
     database, experiment_id = seed_analysis_experiment(tmp_path / "source.db")
