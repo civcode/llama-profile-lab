@@ -472,6 +472,8 @@ From a stored base Candidate and SearchSpace, llprof experiment plan creates exa
 
 ## 8. M4 — llama.cpp discovery and capability detection
 
+**Status: Complete**
+
 ### Objective
 
 Make llama-profile-lab aware of the actual llama.cpp binaries present on the machine, including custom branches.
@@ -507,14 +509,14 @@ Examples:
 
 ### Work items
 
-- [ ] binary registration
-- [ ] executable hashing
-- [ ] help/version invocation
-- [ ] capability parser
-- [ ] capability persistence
-- [ ] binary comparison logic
-- [ ] CLI command to inspect binaries
-- [ ] tests using captured help fixtures
+- [x] binary registration
+- [x] executable hashing
+- [x] help/version invocation
+- [x] capability parser
+- [x] capability persistence
+- [x] binary comparison logic
+- [x] CLI command to inspect binaries
+- [x] tests using captured help fixtures
 
 ### Acceptance gate
 

@@ -18,7 +18,7 @@ Project documents:
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
 
-llama.cpp is not required for the currently implemented milestones. Later milestones will integrate `llama-bench`, `llama-fit-params`, and `llama-server`.
+llama.cpp is optional for development and CI tests. M4 can discover and fingerprint local `llama-bench`, `llama-fit-params`, and `llama-server` executables when they are available; benchmark execution begins in a later milestone.
 
 ## Development setup
 
@@ -78,6 +78,8 @@ llprof --help
 llprof --version
 llprof experiment plan EXPERIMENT_ID --database data/benchmarks.db
 ~~~
+
+Binary discovery fingerprints exact executables by SHA-256, captures version/help output, persists parsed supported arguments, and allows native/custom builds to be compared without assuming a global llama.cpp feature set.
 
 The plan command expands the stored SearchSpace and WorkloadSuite, persists Candidates and concrete benchmark cases atomically, and does not launch llama.cpp.
 

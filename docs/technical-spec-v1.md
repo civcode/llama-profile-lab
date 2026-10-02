@@ -905,21 +905,28 @@ Each llama.cpp executable SHALL have a binary record containing:
 - build number if discoverable;
 - branch if discoverable;
 - dirty state if discoverable;
-- compiler/build information;
-- backend information;
+- compiler/build information when advertised;
+- backend information when advertised;
 - captured help/version output.
 
-Capabilities SHALL be detected per binary rather than assumed globally.
+The exact executable SHA-256 is the durable identity. Re-registering the same hash MAY refresh its current path and probe metadata without creating a second binary identity. A modified or custom executable receives a different binary ID even when its filename/tool kind is the same.
+
+Capabilities SHALL be detected per binary rather than assumed globally. The V1 discovery probe invokes metadata commands with argv arrays and `shell=False`, captures both stdout and stderr, and applies a bounded timeout.
 
 At minimum inspect:
 
-- llama-bench --help
-- llama-server --help
-- llama-fit-params --help where available
+- `llama-bench --help`
+- `llama-server --help`
+- `llama-fit-params --help` where available
+- `--version` for build metadata
 
-The UI MUST only expose unsupported parameters as unavailable for the selected binary.
+If `--help` exits unsuccessfully without producing output, discovery MAY retry `-h`. A non-zero help exit code with useful output does not by itself invalidate the capability surface.
 
-Custom Qwen branches and upstream builds may therefore coexist.
+Supported arguments are parsed from option declarations in the captured help text. Both short aliases and long-form names are retained. Raw help/version output remains persisted so future parsers can reinterpret historical discoveries.
+
+The UI MUST expose unsupported parameters as unavailable for the selected binary rather than silently dropping them.
+
+Custom Qwen branches and upstream builds may therefore coexist and can be compared by their advertised option sets.
 
 ## 20. llama.cpp adapters
 
@@ -2010,6 +2017,13 @@ Representative commands:
 llprof profile list
 llprof profile show qwen-flash-gsq-rco-iq3-128k
 
+llprof binary discover \
+  --search-dir /path/to/llama.cpp/build/bin \
+  --database data/benchmarks.db
+llprof binary inspect /path/to/llama-server --database data/benchmarks.db
+llprof binary list --database data/benchmarks.db
+llprof binary compare BIN_LEFT BIN_RIGHT --database data/benchmarks.db
+
 llprof experiment create
 llprof experiment plan EXPERIMENT --database data/benchmarks.db
 llprof experiment run EXPERIMENT
@@ -2342,7 +2356,7 @@ The implementation should protect these invariants:
 
 1. Candidate configuration is immutable.
 2. Workload identity is independent of measurement repetitions.
-3. Experiment definitions freeze when execution begins.
+3. Experiment definitions freeze when a complete plan is persisted.
 4. Completed runs are append-only.
 5. Placement requested by a Candidate is distinct from placement resolved on a host.
 6. Production context determines fitting; active depth determines workload.
