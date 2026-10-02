@@ -1,4 +1,4 @@
-"""Sequential llama-bench experiment execution and resume orchestration."""
+"""Sequential llama-bench execution with full-context placement resolution."""
 
 from __future__ import annotations
 
@@ -15,11 +15,23 @@ from llama_profile_lab.db import (
     EnvironmentRepository,
     ExperimentRepository,
     MeasurementPolicyRepository,
+    PlacementRepository,
     WorkloadCaseRepository,
 )
-from llama_profile_lab.db.records import BinaryRecord, RunStatus
+from llama_profile_lab.db.records import (
+    BinaryRecord,
+    ResolvedPlacementRecord,
+    RunStatus,
+)
 from llama_profile_lab.execution.host import detect_basic_host
 from llama_profile_lab.execution.lock import HostLock
+from llama_profile_lab.execution.placement import (
+    PlacementConfigurationError,
+    PlacementResolutionFailure,
+    PlacementResolver,
+    resolved_placement_from_record,
+    validate_fixed_placement,
+)
 from llama_profile_lab.execution.process import (
     ProcessResult,
     ProcessRunner,
@@ -52,7 +64,7 @@ class ExecutionSummary:
 
 
 class ExperimentExecutor:
-    """Execute incomplete planned cases sequentially on one locked host."""
+    """Execute incomplete cases sequentially with one placement per Candidate."""
 
     def __init__(
         self,
@@ -71,7 +83,9 @@ class ExperimentExecutor:
         *,
         binary_id: str,
         model_path: Path,
+        fit_binary_id: str | None = None,
         timeout_seconds: float | None = None,
+        fit_timeout_seconds: float | None = None,
         limit: int | None = None,
         resume: bool = False,
         cancel_event: Event | None = None,
@@ -85,7 +99,9 @@ class ExperimentExecutor:
                 experiment_id,
                 binary_id=binary_id,
                 model_path=model_path,
+                fit_binary_id=fit_binary_id,
                 timeout_seconds=timeout_seconds,
+                fit_timeout_seconds=fit_timeout_seconds,
                 limit=limit,
                 resume=resume,
                 cancel_event=cancel_event,
@@ -97,7 +113,9 @@ class ExperimentExecutor:
         *,
         binary_id: str,
         model_path: Path,
+        fit_binary_id: str | None,
         timeout_seconds: float | None,
+        fit_timeout_seconds: float | None,
         limit: int | None,
         resume: bool,
         cancel_event: Event | None,
@@ -106,7 +124,11 @@ class ExperimentExecutor:
             experiments = ExperimentRepository(connection)
             cases = BenchmarkCaseRepository(connection)
             runs = BenchmarkRunRepository(connection)
+            placements = PlacementRepository(connection)
             environment = EnvironmentRepository(connection)
+            candidates = CandidateRepository(connection)
+            workloads = WorkloadCaseRepository(connection)
+            policies = MeasurementPolicyRepository(connection)
 
             experiment = experiments.get(experiment_id)
             definition = experiments.get_definition(experiment_id)
@@ -125,14 +147,41 @@ class ExperimentExecutor:
                     f"allowed states are {sorted(allowed_states)}"
                 )
 
-            binary = environment.get_binary(binary_id)
-            if binary is None:
+            bench_binary = environment.get_binary(binary_id)
+            if bench_binary is None:
                 raise ExecutionError(f"binary not found: {binary_id}")
-            self._verify_binary(binary)
+            _verify_binary(bench_binary, expected_kind="llama-bench")
+
+            fit_binary: BinaryRecord | None = None
+            fixed_placement: ResolvedPlacementRecord | None = None
+            if definition.placement_policy.type == "per-candidate":
+                if fit_binary_id is None:
+                    raise ExecutionError(
+                        "per-candidate placement requires --fit-binary"
+                    )
+                fit_binary = environment.get_binary(fit_binary_id)
+                if fit_binary is None:
+                    raise ExecutionError(f"fit binary not found: {fit_binary_id}")
+                _verify_binary(fit_binary, expected_kind="llama-fit-params")
+            else:
+                fixed_placement = placements.get(
+                    definition.placement_policy.placement_id
+                )
+                if fixed_placement is None:
+                    raise ExecutionError(
+                        "fixed placement not found: "
+                        f"{definition.placement_policy.placement_id}"
+                    )
 
             resolved_model_path = model_path.expanduser().resolve()
             if not resolved_model_path.is_file():
                 raise ExecutionError(f"model does not exist: {resolved_model_path}")
+
+            policy = policies.get(definition.measurement_policy_id)
+            if policy is None:
+                raise ExecutionError(
+                    f"measurement policy not found: {definition.measurement_policy_id}"
+                )
 
             host = detect_basic_host()
             host_id = environment.put_host(
@@ -143,8 +192,17 @@ class ExperimentExecutor:
                 gpus=host.gpus,
                 os_info=host.os_info,
             )
+
+            placements.recover_orphaned()
             runs.recover_orphaned(experiment_id)
             experiments.mark_running(experiment_id)
+
+            resolver = PlacementResolver(
+                placements,
+                process_runner=self.process_runner,
+            )
+            placement_cache: dict[str, ResolvedPlacementRecord] = {}
+            placement_failures: dict[str, RunStatus] = {}
 
             pending = cases.list_incomplete(experiment_id)
             attempted = 0
@@ -158,31 +216,85 @@ class ExperimentExecutor:
                     limited = True
                     break
 
-                candidate = CandidateRepository(connection).get(case.candidate_id)
-                workload = WorkloadCaseRepository(connection).get(case.workload_case_id)
-                policy = MeasurementPolicyRepository(connection).get(
-                    definition.measurement_policy_id
-                )
-                if candidate is None or workload is None or policy is None:
+                candidate = candidates.get(case.candidate_id)
+                workload = workloads.get(case.workload_case_id)
+                if candidate is None or workload is None:
                     raise ExecutionError(
                         f"planned case {case.id} references missing immutable data"
                     )
 
                 attempted += 1
+
+                prior_placement_failure = placement_failures.get(case.candidate_id)
+                if prior_placement_failure is not None:
+                    cases.set_status(case.id, prior_placement_failure)
+                    failed += 1
+                    continue
+
+                placement_record = placement_cache.get(case.candidate_id)
+                if placement_record is None:
+                    try:
+                        if fixed_placement is not None:
+                            validate_fixed_placement(
+                                fixed_placement,
+                                candidate=candidate,
+                                host_id=host_id,
+                            )
+                            placement_record = fixed_placement
+                        else:
+                            if fit_binary is None:
+                                raise ExecutionError(
+                                    "fit binary disappeared during execution"
+                                )
+                            resolution = resolver.resolve_per_candidate(
+                                candidate_id=case.candidate_id,
+                                candidate=candidate,
+                                host_id=host_id,
+                                hardware_fingerprint=host.hardware_fingerprint,
+                                fit_binary=fit_binary,
+                                model_path=resolved_model_path,
+                                timeout_seconds=fit_timeout_seconds,
+                                cancel_event=cancel_event,
+                            )
+                            placement_record = resolution.record
+
+                        cases.bind_placement_for_candidate(
+                            experiment_id=experiment_id,
+                            candidate_id=case.candidate_id,
+                            placement_id=placement_record.id,
+                        )
+                        placement_cache[case.candidate_id] = placement_record
+                    except PlacementConfigurationError:
+                        placement_failures[case.candidate_id] = "invalid"
+                        cases.set_status(case.id, "invalid")
+                        failed += 1
+                        continue
+                    except PlacementResolutionFailure as exc:
+                        case_status = _placement_failure_case_status(exc)
+                        cases.set_status(case.id, case_status)
+                        failed += 1
+                        if case_status in {"interrupted", "cancelled"}:
+                            interrupted = True
+                            break
+                        placement_failures[case.candidate_id] = case_status
+                        continue
+
+                placement = resolved_placement_from_record(placement_record)
                 try:
                     argv = self.bench_adapter.build_argv(
-                        binary_path=Path(binary.path),
-                        capabilities=_binary_capabilities(binary),
+                        binary_path=Path(bench_binary.path),
+                        capabilities=_binary_capabilities(bench_binary),
                         model_path=resolved_model_path,
                         candidate=candidate,
                         workload=workload,
                         measurement_policy=policy,
+                        placement=placement,
                     )
                 except LlamaBenchConfigurationError as exc:
                     run_id = runs.create(
                         benchmark_case_id=case.id,
                         host_id=host_id,
-                        binary_id=binary.id,
+                        binary_id=bench_binary.id,
                         measurement_policy_id=definition.measurement_policy_id,
                         argv=(),
                         environment=_captured_environment(),
@@ -201,7 +313,7 @@ class ExperimentExecutor:
                 run_id = runs.create(
                     benchmark_case_id=case.id,
                     host_id=host_id,
-                    binary_id=binary.id,
+                    binary_id=bench_binary.id,
                     measurement_policy_id=definition.measurement_policy_id,
                     argv=argv,
                     environment=_captured_environment(),
@@ -224,6 +336,7 @@ class ExperimentExecutor:
                     cases.set_status(case.id, "benchmark_failed")
                     failed += 1
                     continue
+
                 terminal_status = _process_failure_status(process_result)
                 if terminal_status is not None:
                     runs.finish(
@@ -309,20 +422,23 @@ class ExperimentExecutor:
                 limited=limited,
             )
 
-    @staticmethod
-    def _verify_binary(binary: BinaryRecord) -> None:
-        if binary.kind != "llama-bench":
-            raise ExecutionError(
-                f"binary {binary.id} is {binary.kind}, not llama-bench"
-            )
-        path = Path(binary.path)
-        if not path.is_file():
-            raise ExecutionError(f"registered binary path does not exist: {path}")
-        current_hash = sha256_file(path)
-        if current_hash != binary.sha256:
-            raise ExecutionError(
-                "registered llama-bench binary changed on disk; re-run binary inspect"
-            )
+
+def _verify_binary(binary: BinaryRecord, *, expected_kind: str) -> None:
+    if binary.kind != expected_kind:
+        raise ExecutionError(
+            f"binary {binary.id} is {binary.kind}, not {expected_kind}"
+        )
+    path = Path(binary.path)
+    if not path.is_file():
+        raise ExecutionError(
+            f"registered {expected_kind} path does not exist: {path}"
+        )
+    current_hash = sha256_file(path)
+    if current_hash != binary.sha256:
+        raise ExecutionError(
+            f"registered {expected_kind} binary changed on disk; "
+            "re-run binary inspect"
+        )
 
 
 def _binary_capabilities(binary: BinaryRecord) -> CapabilitySet:
@@ -330,6 +446,16 @@ def _binary_capabilities(binary: BinaryRecord) -> CapabilitySet:
         dict(binary.capabilities),
         fallback_kind="llama-bench",
     )
+
+
+def _placement_failure_case_status(
+    failure: PlacementResolutionFailure,
+) -> RunStatus:
+    if failure.kind == "interrupted":
+        return "interrupted"
+    if failure.kind == "cancelled":
+        return "cancelled"
+    return "fit_failed"
 
 
 def _process_failure_status(result: ProcessResult) -> RunStatus | None:
