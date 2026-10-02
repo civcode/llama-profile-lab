@@ -1,0 +1,20 @@
+usage: llama-bench [options]
+
+  -m, --model <filename>              model path
+  -p, --n-prompt <n>                  prompt tokens
+  -n, --n-gen <n>                     generated tokens
+  -d, --n-depth <n>                   pre-filled KV depth
+  -b, --batch-size <n>                logical maximum batch size
+  -ub, --ubatch-size <n>              physical maximum batch size
+  -ctk, --cache-type-k <type>         KV cache K type
+  -ctv, --cache-type-v <type>         KV cache V type
+  -t, --threads <n>                   CPU threads
+  -ngl, --n-gpu-layers <n>           GPU layers
+  -fa, --flash-attn <on|off|auto>     flash attention mode
+  --fit-target <MiB>                  fitting target
+  --load-mode <mode>                  model load mode
+  --lazy-mode <mode>                  lazy tensor loading
+  --repetitions <n>                   repetitions
+  --output <format>                   output format
+  --no-warmup                         disable warmup
+  -pg <pp,tg>                         combined prompt + generation benchmark

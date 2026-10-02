@@ -1,0 +1,17 @@
+usage: llama-server [options]
+
+  -m, --model <filename>              model path
+  --host <host>                       bind host
+  --port <port>                       bind port
+  -c, --ctx-size <n>                  context size
+  -b, --batch-size <n>                logical maximum batch size
+  -ub, --ubatch-size <n>              physical maximum batch size
+  -ngl, --n-gpu-layers <n>           GPU layers
+  -fa, --flash-attn <on|off|auto>     flash attention mode
+  --fit <on|off>                      automatic fit
+  --fit-target <MiB>                  fitting target
+  --load-mode <mode>                  model load mode
+  --lazy-mode <mode>                  lazy tensor loading
+  --no-kv-unified                     disable unified KV
+  --spec-type <type>                  speculative decoder type
+  --spec-draft-n-max <n>              maximum draft tokens
