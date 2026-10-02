@@ -10,7 +10,6 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict
 
 type JsonScalar = str | int | float | bool | None
-type JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
 _NON_SEMANTIC_KEYS = frozenset({"label", "description", "display_order"})
 
@@ -31,7 +30,11 @@ def _strip_non_semantic(value: Any, excluded: frozenset[str]) -> Any:
 def canonical_json(value: Any) -> str:
     """Serialize a JSON-compatible value deterministically."""
     if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json", exclude_none=False)
+        value = value.model_dump(
+            mode="json",
+            exclude_none=False,
+            by_alias=True,
+        )
 
     return json.dumps(
         value,
@@ -50,7 +53,12 @@ def sha256_json(value: Any) -> str:
 class FrozenModel(BaseModel):
     """Base class for immutable, strict domain values."""
 
-    model_config = ConfigDict(\n        frozen=True,\n        extra="forbid",\n        populate_by_name=True,\n        serialize_by_alias=True,\n    )
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
 
 
 class ContentAddressedModel(FrozenModel):
@@ -60,7 +68,11 @@ class ContentAddressedModel(FrozenModel):
 
     def identity_payload(self) -> dict[str, Any]:
         """Return the semantic payload used for content identity."""
-        payload = self.model_dump(mode="json", exclude_none=False, by_alias=True)
+        payload = self.model_dump(
+            mode="json",
+            exclude_none=False,
+            by_alias=True,
+        )
         excluded = _NON_SEMANTIC_KEYS | self.identity_exclude
         stripped = _strip_non_semantic(payload, excluded)
         if not isinstance(stripped, dict):

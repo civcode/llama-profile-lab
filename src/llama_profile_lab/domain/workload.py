@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
+from pydantic import (
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
-from llama_profile_lab.domain.base import ContentAddressedModel, FrozenModel
+from llama_profile_lab.domain.base import (
+    ContentAddressedModel,
+    FrozenModel,
+    JsonScalar,
+)
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
+type RequestValue = JsonScalar
 
 
 class AbsoluteDepth(FrozenModel):
@@ -63,6 +76,13 @@ class CombinedSuiteCase(SuiteCaseBase):
     depth: DepthExpression
 
 
+class RequestParameter(FrozenModel):
+    """One immutable request parameter for SPEED-Bench."""
+
+    name: NonEmptyString
+    value: RequestValue
+
+
 class SpeedBenchConfig(FrozenModel):
     """End-to-end SPEED-Bench workload settings."""
 
@@ -71,7 +91,35 @@ class SpeedBenchConfig(FrozenModel):
     output_tokens: PositiveInt
     concurrency: PositiveInt = 1
     limit: PositiveInt | None = None
-    request: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    request: tuple[RequestParameter, ...] = ()
+
+    @field_validator("request", mode="before")
+    @classmethod
+    def normalize_request(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return tuple(
+                {"name": name, "value": parameter_value}
+                for name, parameter_value in sorted(value.items())
+            )
+        return value
+
+    @field_validator("request")
+    @classmethod
+    def validate_request(
+        cls,
+        value: tuple[RequestParameter, ...],
+    ) -> tuple[RequestParameter, ...]:
+        names = [item.name for item in value]
+        if len(names) != len(set(names)):
+            raise ValueError("request cannot contain duplicate parameter names")
+        return tuple(sorted(value, key=lambda item: item.name))
+
+    @field_serializer("request")
+    def serialize_request(
+        self,
+        value: tuple[RequestParameter, ...],
+    ) -> dict[str, RequestValue]:
+        return {item.name: item.value for item in value}
 
 
 class SpeedBenchSuiteCase(SuiteCaseBase):
@@ -92,7 +140,10 @@ class WorkloadSuite(ContentAddressedModel):
 
     identity_exclude = frozenset({"id"})
 
-    schema_name: Literal["llama-workload-suite"] = Field(\n        default="llama-workload-suite",\n        alias="schema",\n    )
+    schema_name: Literal["llama-workload-suite"] = Field(
+        default="llama-workload-suite",
+        alias="schema",
+    )
     version: Literal[1] = 1
     id: NonEmptyString
     description: NonEmptyString | None = None
@@ -102,7 +153,10 @@ class WorkloadSuite(ContentAddressedModel):
 class WorkloadCaseBase(ContentAddressedModel):
     """Concrete immutable workload common fields."""
 
-    schema_name: Literal["llama-workload-case"] = Field(\n        default="llama-workload-case",\n        alias="schema",\n    )
+    schema_name: Literal["llama-workload-case"] = Field(
+        default="llama-workload-case",
+        alias="schema",
+    )
     version: Literal[1] = 1
 
 

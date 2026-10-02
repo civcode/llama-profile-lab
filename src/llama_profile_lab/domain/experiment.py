@@ -52,7 +52,10 @@ type BaselinePolicy = Annotated[
 class ExperimentDefinition(FrozenModel):
     """Immutable experiment definition once execution begins."""
 
-    schema_name: Literal["llama-tuning-experiment"] = Field(\n        default="llama-tuning-experiment",\n        alias="schema",\n    )
+    schema_name: Literal["llama-tuning-experiment"] = Field(
+        default="llama-tuning-experiment",
+        alias="schema",
+    )
     version: Literal[1] = 1
     name: NonEmptyString
     base_candidate_id: NonEmptyString

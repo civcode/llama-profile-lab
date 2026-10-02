@@ -131,7 +131,10 @@ class ExtraArgument(FrozenModel):
 class Candidate(ContentAddressedModel):
     """One immutable point in the tunable production-configuration space."""
 
-    schema_name: Literal["llama-profile-candidate"] = Field(\n        default="llama-profile-candidate",\n        alias="schema",\n    )
+    schema_name: Literal["llama-profile-candidate"] = Field(
+        default="llama-profile-candidate",
+        alias="schema",
+    )
     version: Literal[1] = 1
     model: ModelSelection
     context: ContextConfig
