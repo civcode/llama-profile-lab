@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import cast
 
 from llama_profile_lab import __version__
-from llama_profile_lab.db import BenchmarkRunRepository, Database, EnvironmentRepository
+from llama_profile_lab.db import (
+    BenchmarkRunRepository,
+    Database,
+    EnvironmentRepository,
+    PlacementRepository,
+)
 from llama_profile_lab.db.records import BinaryRecord
 from llama_profile_lab.execution import (
     ExecutionError,
@@ -47,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_parser(commands)
     _add_binary_parser(commands)
     _add_run_parser(commands)
+    _add_placement_parser(commands)
     return parser
 
 
@@ -88,11 +94,20 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         help="Registered llama-bench binary ID.",
     )
     parser.add_argument(
+        "--fit-binary",
+        dest="fit_binary_id",
+        default=None,
+        help=(
+            "Registered llama-fit-params binary ID. Required for "
+            "per-candidate placement policy; unused for fixed placement."
+        ),
+    )
+    parser.add_argument(
         "--model-path",
         required=True,
         type=Path,
         help=(
-            "Target GGUF path for this M5 execution. "
+            "Target GGUF path for benchmark execution and placement fitting. "
             "Model-registry path resolution is introduced later."
         ),
     )
@@ -101,6 +116,12 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=None,
         help="Optional timeout for each llama-bench case.",
+    )
+    parser.add_argument(
+        "--fit-timeout-seconds",
+        type=float,
+        default=None,
+        help="Optional timeout for each llama-fit-params invocation.",
     )
     parser.add_argument(
         "--limit",
@@ -187,6 +208,29 @@ def _add_run_parser(
     _add_database_argument(show)
 
 
+def _add_placement_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    placement = commands.add_parser(
+        "placement",
+        help="Inspect cached resolved placements.",
+    )
+    placement_commands = placement.add_subparsers(dest="placement_command")
+
+    listing = placement_commands.add_parser(
+        "list",
+        help="List successful cached placements.",
+    )
+    _add_database_argument(listing)
+
+    show = placement_commands.add_parser(
+        "show",
+        help="Show one resolved placement.",
+    )
+    show.add_argument("placement_id")
+    _add_database_argument(show)
+
+
 def _add_database_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--database",
@@ -214,8 +258,10 @@ def _execute_command(
     experiment_id: str,
     *,
     binary_id: str,
+    fit_binary_id: str | None,
     model_path: Path,
     timeout_seconds: float | None,
+    fit_timeout_seconds: float | None,
     limit: int | None,
     resume: bool,
 ) -> int:
@@ -223,8 +269,10 @@ def _execute_command(
         summary = ExperimentExecutor(Database(database_path)).execute(
             experiment_id,
             binary_id=binary_id,
+            fit_binary_id=fit_binary_id,
             model_path=model_path,
             timeout_seconds=timeout_seconds,
+            fit_timeout_seconds=fit_timeout_seconds,
             limit=limit,
             resume=resume,
         )
@@ -292,6 +340,57 @@ def _run_show_command(
         print(stdout.rstrip())
         print("Stderr:")
         print(stderr.rstrip())
+    return 0
+
+
+def _placement_list_command(database_path: Path) -> int:
+    with Database(database_path).session() as connection:
+        records = PlacementRepository(connection).list()
+
+    if not records:
+        print("No cached resolved placements.")
+        return 0
+
+    for record in records:
+        print(
+            f"{record.id}  ctx={record.production_context_size}  "
+            f"ngl={record.n_gpu_layers}  candidate={record.candidate_id}"
+        )
+    return 0
+
+
+def _placement_show_command(database_path: Path, placement_id: str) -> int:
+    with Database(database_path).session() as connection:
+        record = PlacementRepository(connection).get(placement_id)
+
+    if record is None:
+        print(f"error: placement not found: {placement_id}", file=sys.stderr)
+        return 2
+
+    print(f"Placement: {record.id}")
+    print(f"Candidate: {record.candidate_id}")
+    print(f"Host: {record.host_id}")
+    print(f"Fit binary: {record.binary_id}")
+    print(f"Fit attempt: {record.fit_attempt_id or '-'}")
+    print(f"Production context: {record.production_context_size}")
+    print(f"GPU layers: {record.n_gpu_layers}")
+    print(f"CPU MoE: {record.n_cpu_moe}")
+    print(f"Split mode: {record.split_mode}")
+    print(f"Main GPU: {record.main_gpu}")
+    if record.devices == "auto":
+        print("Devices: auto")
+    else:
+        print(f"Devices: {','.join(record.devices)}")
+    print(
+        "Tensor split: "
+        + (
+            "auto"
+            if record.tensor_split is None
+            else ",".join(str(value) for value in record.tensor_split)
+        )
+    )
+    print(f"Tensor overrides: {len(record.override_tensor)}")
+    print(f"Created: {record.created_at}")
     return 0
 
 
@@ -448,8 +547,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.database,
                 args.experiment_id,
                 binary_id=args.binary_id,
+                fit_binary_id=args.fit_binary_id,
                 model_path=args.model_path,
                 timeout_seconds=args.timeout_seconds,
+                fit_timeout_seconds=args.fit_timeout_seconds,
                 limit=args.limit,
                 resume=args.experiment_command == "resume",
             )
@@ -470,5 +571,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run" and args.run_command == "show":
         return _run_show_command(args.database, args.run_id, include_logs=args.logs)
+
+    if args.command == "placement":
+        if args.placement_command == "list":
+            return _placement_list_command(args.database)
+        if args.placement_command == "show":
+            return _placement_show_command(args.database, args.placement_id)
 
     return 0
