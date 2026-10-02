@@ -17,6 +17,7 @@ import type {
   PlanPreview,
   PlanSummary,
   ProfileListResponse,
+  PromotionResponse,
   ResultRow,
   RunSummary,
   ServerValidationRequest
@@ -230,7 +231,18 @@ export const api = {
     }>("/api/candidates/" + encodeURIComponent(candidateId) + "/validate", {
       method: "POST",
       body: JSON.stringify(body)
-    })
+    }),
+  promoteCandidate: (
+    candidateId: string,
+    body: { experiment_id: string; source_profile_id?: string | null }
+  ) =>
+    request<PromotionResponse>(
+      "/api/candidates/" + encodeURIComponent(candidateId) + "/promote",
+      {
+        method: "POST",
+        body: JSON.stringify(body)
+      }
+    )
 };
 
 export function progressEvents(
