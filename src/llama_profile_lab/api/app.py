@@ -10,6 +10,7 @@ from typing import Annotated, Never
 
 from fastapi import FastAPI, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from llama_profile_lab.analysis import (
     AnalysisError,
@@ -65,6 +66,7 @@ def create_app(
     *,
     launcher_config_path: str | Path | None = None,
     operation_manager: OperationManager | None = None,
+    frontend_dist_path: str | Path | None = None,
 ) -> FastAPI:
     """Build a local API instance with explicit filesystem dependencies."""
     database = Database(Path(database_path))
@@ -91,6 +93,15 @@ def create_app(
 
     _register_exception_handlers(app)
     _register_routes(app, service)
+
+    frontend_dist = _resolve_frontend_dist(frontend_dist_path)
+    if frontend_dist is not None:
+        app.mount(
+            "/",
+            StaticFiles(directory=str(frontend_dist), html=True),
+            name="frontend",
+        )
+        app.state.frontend_dist = frontend_dist
     return app
 
 
@@ -99,7 +110,28 @@ def create_default_app() -> FastAPI:
     database = Path(os.environ.get("LLPROF_DATABASE", "data/benchmarks.db"))
     launcher_raw = os.environ.get("LLPROF_LAUNCHER_CONFIG")
     launcher = None if launcher_raw is None else Path(launcher_raw)
-    return create_app(database, launcher_config_path=launcher)
+    frontend_raw = os.environ.get("LLPROF_FRONTEND_DIST")
+    frontend = None if frontend_raw is None else Path(frontend_raw)
+    return create_app(
+        database,
+        launcher_config_path=launcher,
+        frontend_dist_path=frontend,
+    )
+
+
+def _resolve_frontend_dist(explicit: str | Path | None) -> Path | None:
+    if explicit is not None:
+        path = Path(explicit).expanduser().resolve()
+        if not path.is_dir():
+            raise ValueError(f"frontend dist directory does not exist: {path}")
+        if not (path / "index.html").is_file():
+            raise ValueError(f"frontend dist is missing index.html: {path}")
+        return path
+
+    source_tree = Path(__file__).resolve().parents[3] / "frontend" / "dist"
+    if source_tree.is_dir() and (source_tree / "index.html").is_file():
+        return source_tree
+    return None
 
 
 def _register_exception_handlers(app: FastAPI) -> None:
