@@ -15,8 +15,8 @@ from llama_profile_lab.db import (
 def test_initial_migration_creates_schema(tmp_path: Path) -> None:
     connection = connect_database(tmp_path / "benchmarks.db")
     try:
-        assert migrate(connection) == 2
-        assert schema_version(connection) == 2
+        assert migrate(connection) == 3
+        assert schema_version(connection) == 3
 
         tables = {
             row[0]
@@ -37,7 +37,7 @@ def test_initial_migration_creates_schema(tmp_path: Path) -> None:
             "telemetry_sample",
         } <= tables
 
-        assert migrate(connection) == 2
+        assert migrate(connection) == 3
     finally:
         connection.close()
 
