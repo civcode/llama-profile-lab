@@ -30,18 +30,18 @@ from llama_profile_lab.domain.measurement import (
     MeasurementPolicy,
 )
 from llama_profile_lab.domain.placement import ResolvedPlacement
+from llama_profile_lab.domain.search_space import (
+    GridStrategy,
+    SearchConstraint,
+    SearchDimension,
+    SearchSpace,
+)
 from llama_profile_lab.domain.telemetry import (
     GpuTelemetrySample,
     RunQuality,
     RunQualityAssessment,
     TelemetrySample,
     TelemetrySummary,
-)
-from llama_profile_lab.domain.search_space import (
-    GridStrategy,
-    SearchConstraint,
-    SearchDimension,
-    SearchSpace,
 )
 from llama_profile_lab.domain.workload import (
     AbsoluteDepth,
