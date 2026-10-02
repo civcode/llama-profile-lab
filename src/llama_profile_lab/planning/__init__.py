@@ -19,8 +19,8 @@ from llama_profile_lab.planning.parameters import (
 )
 from llama_profile_lab.planning.planner import (
     ExperimentPlan,
-    PlanSummary,
     PlannedCandidate,
+    PlanSummary,
     build_plan,
     plan_experiment,
     render_plan_summary,
