@@ -296,8 +296,6 @@ class ExperimentExecutor:
                 experiments.mark_paused(experiment_id)
             elif remaining == 0:
                 experiments.mark_completed(experiment_id)
-            elif failed:
-                experiments.mark_failed(experiment_id)
             else:
                 experiments.mark_paused(experiment_id)
 
