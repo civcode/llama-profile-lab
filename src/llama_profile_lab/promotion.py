@@ -118,6 +118,11 @@ class PromotionService:
         source_profile = self.profiles.resolve_snapshot(source_snapshot, profile_id)
         if source_profile is None:
             raise PromotionError(f"launcher profile not found: {profile_id}")
+        if source_profile.candidate != base_candidate:
+            raise PromotionError(
+                "launcher source profile changed since experiment creation; "
+                "create a new experiment from the current profile before promotion"
+            )
 
         changes, updates = _launcher_changes(source_profile, candidate)
         proposed_snapshot = _apply_model_arg_updates(
