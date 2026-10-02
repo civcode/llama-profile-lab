@@ -8,33 +8,6 @@ from pathlib import Path
 from typing import cast
 
 from llama_profile_lab.analysis import AnalysisFilter, AnalysisService, MatrixProjection
-from llama_profile_lab.db import (
-    BenchmarkCaseRepository,
-    BenchmarkRunRepository,
-    CandidateRepository,
-    Database,
-    EnvironmentRepository,
-    ExperimentRepository,
-    MeasurementPolicyRepository,
-    PlacementRepository,
-    SearchSpaceRepository,
-    TelemetryRepository,
-    WorkloadCaseRepository,
-    WorkloadSuiteRepository,
-    schema_version,
-    transaction,
-)
-from llama_profile_lab.db.records import BinaryRecord, ExperimentRecord
-from llama_profile_lab.domain import (
-    CandidateBaseline,
-    ExperimentDefinition,
-    FixedPlacementPolicy,
-)
-from llama_profile_lab.domain.base import JsonScalar
-from llama_profile_lab.execution import ServerValidationService
-from llama_profile_lab.llama import BinaryKind, probe_binary
-from llama_profile_lab.planning import PlanSummary, plan_experiment
-
 from llama_profile_lab.api.dto import (
     BenchmarkSampleDTO,
     BinaryDTO,
@@ -69,6 +42,31 @@ from llama_profile_lab.api.operations import (
     OperationSnapshot,
 )
 from llama_profile_lab.api.profiles import LauncherProfile, LauncherProfileProvider
+from llama_profile_lab.db import (
+    BenchmarkCaseRepository,
+    BenchmarkRunRepository,
+    CandidateRepository,
+    Database,
+    EnvironmentRepository,
+    ExperimentRepository,
+    MeasurementPolicyRepository,
+    PlacementRepository,
+    SearchSpaceRepository,
+    TelemetryRepository,
+    WorkloadSuiteRepository,
+    schema_version,
+    transaction,
+)
+from llama_profile_lab.db.records import BinaryRecord, ExperimentRecord
+from llama_profile_lab.domain import (
+    CandidateBaseline,
+    ExperimentDefinition,
+    FixedPlacementPolicy,
+)
+from llama_profile_lab.domain.base import JsonScalar
+from llama_profile_lab.execution import ServerValidationService
+from llama_profile_lab.llama import BinaryKind, probe_binary
+from llama_profile_lab.planning import PlanSummary, plan_experiment
 
 
 class ApiNotFoundError(RuntimeError):

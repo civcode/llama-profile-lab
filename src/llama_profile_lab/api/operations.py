@@ -11,11 +11,7 @@ from typing import Literal
 from uuid import uuid4
 
 from llama_profile_lab.db import Database, ExperimentRepository
-from llama_profile_lab.execution import (
-    ExecutionSummary,
-    ExperimentExecutor,
-)
-
+from llama_profile_lab.execution import ExecutionSummary, ExperimentExecutor
 
 OperationStatus = Literal[
     "running",
