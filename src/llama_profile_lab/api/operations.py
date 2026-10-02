@@ -14,7 +14,6 @@ from llama_profile_lab.db import Database, ExperimentRepository
 from llama_profile_lab.execution import (
     ExecutionSummary,
     ExperimentExecutor,
-    HostLockError,
 )
 
 
@@ -197,7 +196,7 @@ class OperationManager:
                 telemetry_interval_seconds=spec.telemetry_interval_seconds,
                 cancel_event=operation.cancel_event,
             )
-        except (Exception, HostLockError) as exc:
+        except Exception as exc:
             error = str(exc)
             self._mark_failed_if_running(operation.experiment_id)
 

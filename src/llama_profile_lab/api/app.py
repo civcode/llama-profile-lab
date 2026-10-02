@@ -6,7 +6,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Never
 
 from fastapi import FastAPI, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -357,7 +357,7 @@ async def _progress_events(
         await asyncio.sleep(0.25)
 
 
-def _raise_bad_request(exc: ValueError) -> object:
+def _raise_bad_request(exc: ValueError) -> Never:
     from fastapi import HTTPException
 
     raise HTTPException(status_code=400, detail=str(exc)) from exc

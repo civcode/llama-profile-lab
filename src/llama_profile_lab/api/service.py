@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
-from llama_profile_lab.analysis import AnalysisFilter, AnalysisService
+from llama_profile_lab.analysis import AnalysisFilter, AnalysisService, MatrixProjection
 from llama_profile_lab.db import (
     BenchmarkCaseRepository,
     BenchmarkRunRepository,
@@ -537,7 +537,7 @@ class ApiService:
         facet_path: str | None,
         filters: tuple[AnalysisFilter, ...],
         qualities: tuple[str, ...],
-    ) -> object:
+    ) -> MatrixProjection:
         self._require_experiment(experiment_id)
         return AnalysisService(self.database).matrix(
             experiment_id,
