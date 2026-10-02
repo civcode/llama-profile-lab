@@ -1,0 +1,18 @@
+[
+  {
+    "build_commit": "abc1234",
+    "build_number": 9000,
+    "model_filename": "/models/fake.gguf",
+    "n_batch": 4096,
+    "n_ubatch": 2048,
+    "n_prompt": 0,
+    "n_gen": 256,
+    "n_depth": 4096,
+    "avg_ns": 1000000000,
+    "stddev_ns": 10000000,
+    "avg_ts": 256.0,
+    "stddev_ts": 2.0,
+    "samples_ns": [1000000000, 990000000, 1010000000],
+    "samples_ts": [256.0, 258.585859, 253.465347]
+  }
+]
