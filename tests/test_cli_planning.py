@@ -9,7 +9,10 @@ from llama_profile_lab.db import Database
 from tests.test_planning_persistence import seed_reference_experiment
 
 
-def test_experiment_plan_command(\n    tmp_path: Path,\n    capsys: pytest.CaptureFixture[str],\n) -> None:
+def test_experiment_plan_command(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     database_path = tmp_path / "benchmarks.db"
     database = Database(database_path)
     experiment_id = seed_reference_experiment(database)
@@ -25,8 +28,7 @@ def test_experiment_plan_command(\n    tmp_path: Path,\n    capsys: pytest.Captu
     )
 
     assert result == 0
-    # Avoid depending on pytest's fixture protocol in the production type checker.
-    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    output = capsys.readouterr().out
     assert "Candidates: 11" in output
     assert "Benchmark cases: 44" in output
     assert "Rejected by constraints: 1" in output
