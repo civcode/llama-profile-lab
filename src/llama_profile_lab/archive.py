@@ -526,7 +526,21 @@ def _load_manifest(path: Path) -> ArchiveManifest:
             raise ArchiveError("malformed archive manifest file entry") from exc
         if archived.kind not in {"database", "artifact"}:
             raise ArchiveError(f"unsupported archive file kind: {archived.kind}")
+        archived_path = Path(archived.path)
+        if archived_path.is_absolute() or ".." in archived_path.parts:
+            raise ArchiveError(f"unsafe archive manifest path: {archived.path}")
+        if archived.kind == "database" and archived.path != "database.sqlite3":
+            raise ArchiveError("database manifest entry must be database.sqlite3")
+        if archived.kind == "artifact" and (
+            len(archived_path.parts) != 2 or archived_path.parts[0] != "artifacts"
+        ):
+            raise ArchiveError(
+                f"artifact manifest path must live under artifacts/: {archived.path}"
+            )
         files.append(archived)
+    paths = [item.path for item in files]
+    if len(paths) != len(set(paths)):
+        raise ArchiveError("archive manifest contains duplicate file paths")
     try:
         return ArchiveManifest(
             format=str(payload["format"]),
