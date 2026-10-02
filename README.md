@@ -18,7 +18,7 @@ Project documents:
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12+ (managed automatically by uv when needed)
 
-llama.cpp is optional for development and CI tests. M4 can discover and fingerprint local `llama-bench`, `llama-fit-params`, and `llama-server` executables when they are available; benchmark execution begins in a later milestone.
+llama.cpp is optional for development and CI tests. M4 can discover and fingerprint local `llama-bench`, `llama-fit-params`, and `llama-server` executables, and M5 can execute planned microbenchmarks with a registered `llama-bench` binary.
 
 ## Development setup
 
@@ -77,11 +77,25 @@ The planner milestone exposes persisted experiment planning in addition to the t
 llprof --help
 llprof --version
 llprof experiment plan EXPERIMENT_ID --database data/benchmarks.db
+
+llprof experiment run EXPERIMENT_ID \
+  --binary BIN_ID \
+  --model-path /path/to/model.gguf \
+  --database data/benchmarks.db
+
+llprof experiment resume EXPERIMENT_ID \
+  --binary BIN_ID \
+  --model-path /path/to/model.gguf \
+  --database data/benchmarks.db
+
+llprof run show RUN_ID --database data/benchmarks.db
 ~~~
 
 Binary discovery fingerprints exact executables by SHA-256, captures version/help output, persists parsed supported arguments, and allows native/custom builds to be compared without assuming a global llama.cpp feature set.
 
 The plan command expands the stored SearchSpace and WorkloadSuite, persists Candidates and concrete benchmark cases atomically, and does not launch llama.cpp.
+
+The M5 executor runs incomplete cases sequentially under a host lock, revalidates the registered binary SHA-256 before execution, persists stdout/stderr/raw JSON and individual repetitions, and resumes only cases without a successful prior run. Placement fitting is intentionally deferred to M6.
 
 ## Design principles
 

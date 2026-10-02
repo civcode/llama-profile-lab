@@ -946,6 +946,14 @@ Adapters consume typed domain objects and return argv arrays plus typed parsed r
 
 Long-form arguments SHALL be emitted wherever supported.
 
+The M5 LlamaBenchAdapter executes one concrete WorkloadCase per process invocation. It explicitly supplies prompt, generation, depth, batch, ubatch, KV-cache, repetition, and JSON-output settings so a single invocation produces exactly one normalized result object.
+
+M5 intentionally does not pass fit-target or otherwise invoke automatic placement fitting. Concrete placement resolution is introduced in M6. Explicit placement constraints already present on the Candidate may still be emitted where supported.
+
+Until model-registry/launcher path resolution is wired into the executor, the M5 CLI requires an explicit --model-path. The Candidate model identity remains the semantic configuration reference; the actual process argv is stored for provenance.
+
+llama-bench JSON output is preserved in benchmark_run.raw_result_json and stdout, while samples_ns/samples_ts are normalized into benchmark_sample rows and aggregate avg/stddev fields are stored as metrics.
+
 Example llama-bench argv:
 
 ~~~text
@@ -1025,6 +1033,14 @@ A single ProcessRunner abstraction SHALL own:
 - final status.
 
 The same abstraction SHALL be used for bench, fit, server, and helper processes.
+
+M5 launches every process in a new process group. Timeout, cancellation, and keyboard interruption first send SIGTERM to that group and escalate to SIGKILL after the configured grace period.
+
+A subprocess launch failure is persisted as benchmark_failed rather than leaving a running row behind.
+
+Immediately before benchmark execution, the selected registered llama-bench path SHALL be re-hashed and MUST still match its stored binary SHA-256. If it changed in place, execution stops and the user must register the new executable identity.
+
+M5 executes one benchmark case at a time and holds a shared host-execution lock across the execution session. The lock is shared across databases for the same local user so two databases cannot independently launch benchmark work and contaminate each other's measurements.
 
 ## 23. Host ownership and interference
 
@@ -1681,7 +1697,9 @@ V1 MAY initially implement fixed delay while preserving a policy model that can 
 
 SQLite is the checkpoint.
 
-On restart, the executor queries planned benchmark cases with no successful run and resumes them.
+On restart, the executor queries benchmark cases for which no successful completed run exists and resumes only those cases.
+
+Before resuming, stale benchmark_run rows still marked running for that experiment are finalized as interrupted. Their case returns to a retryable planned state unless a successful run already exists.
 
 A successfully completed case is not automatically rerun unless:
 
@@ -1689,7 +1707,7 @@ A successfully completed case is not automatically rerun unless:
 - the user asks for a rerun;
 - quality policy marks the previous observation insufficient.
 
-Interrupted and failed attempts remain visible.
+Interrupted and failed attempts remain visible as append-only run history. An individual OOM, timeout, parser failure, or benchmark failure leaves the experiment resumable rather than converting the whole experiment into orchestration-level failed state.
 
 ## 36. Screening and validation stages
 
@@ -2026,10 +2044,17 @@ llprof binary compare BIN_LEFT BIN_RIGHT --database data/benchmarks.db
 
 llprof experiment create
 llprof experiment plan EXPERIMENT --database data/benchmarks.db
-llprof experiment run EXPERIMENT
-llprof experiment pause EXPERIMENT
-llprof experiment resume EXPERIMENT
-llprof experiment status EXPERIMENT
+llprof experiment run EXPERIMENT \
+  --binary BIN_ID \
+  --model-path /path/to/model.gguf \
+  --database data/benchmarks.db
+
+llprof experiment resume EXPERIMENT \
+  --binary BIN_ID \
+  --model-path /path/to/model.gguf \
+  --database data/benchmarks.db
+
+llprof run show RUN --database data/benchmarks.db
 
 llprof results matrix EXPERIMENT
 llprof results compare EXPERIMENT

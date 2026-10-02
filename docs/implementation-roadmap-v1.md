@@ -526,6 +526,8 @@ The application can register both the native llama.cpp build and the custom Qwen
 
 ## 9. M5 — llama-bench execution engine
 
+**Status: Implementation Complete — Real-host acceptance pending**
+
 ### Objective
 
 Execute planned microbenchmarks safely and persist complete results.
@@ -594,23 +596,25 @@ Implement:
 
 ### Work items
 
-- [ ] ProcessRunner
-- [ ] host lock
-- [ ] LlamaBenchAdapter
-- [ ] candidate/workload to argv mapping
-- [ ] JSON parser
-- [ ] raw JSON preservation
-- [ ] individual sample insertion
-- [ ] aggregate metric extraction
-- [ ] failure classification
-- [ ] orphaned-run recovery
-- [ ] llprof experiment run
-- [ ] llprof experiment resume
-- [ ] llprof run show
+- [x] ProcessRunner
+- [x] host lock
+- [x] LlamaBenchAdapter
+- [x] candidate/workload to argv mapping
+- [x] JSON parser
+- [x] raw JSON preservation
+- [x] individual sample insertion
+- [x] aggregate metric extraction
+- [x] failure classification
+- [x] orphaned-run recovery
+- [x] llprof experiment run
+- [x] llprof experiment resume
+- [x] llprof run show
 
 ### Acceptance gate
 
-The batch/ubatch reference experiment can run against a real llama-bench binary without placement fitting, persist all repetitions, survive interruption, and resume only incomplete work.
+Automated acceptance is complete: the batch/ubatch reference plan executes through the real ProcessRunner against a llama-bench-compatible test executable, deliberately pauses after five cases, resumes the remaining thirty-nine cases, and verifies exactly forty-four successful runs and 132 individually persisted timed samples with no duplicate reruns.
+
+Real-host acceptance remains pending: run the same flow against a registered native/custom llama-bench executable and a real GGUF on the benchmark workstation, without placement fitting. That validation cannot be performed from GitHub CI because the workstation binaries and models are local.
 
 ---
 
