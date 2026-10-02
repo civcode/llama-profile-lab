@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  push:
   workflow_dispatch:
 
 permissions:
@@ -33,3 +34,34 @@ jobs:
 
       - name: Test
         run: uv run --frozen pytest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Frontend type check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Frontend test
+        working-directory: frontend
+        run: npm run test
+
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Emit frontend lock for bootstrap
+        working-directory: frontend
+        run: |
+          echo "LLPROF_LOCK_BEGIN"
+          base64 -w0 package-lock.json
+          echo
+          echo "LLPROF_LOCK_END"
