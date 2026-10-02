@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from llama_profile_lab.domain import (
-    AbsoluteDepth,
     DecodeWorkloadCase,
     FractionalDepth,
     PrefillSuiteCase,
