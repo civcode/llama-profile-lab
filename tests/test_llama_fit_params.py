@@ -91,7 +91,7 @@ def test_fit_argv_pins_full_production_context() -> None:
     assert "--kv-offload" in argv
     assert "--op-offload" in argv
     assert "--repack" in argv
-    assert "1" not in argv[argv.index("--repack") + 1 : argv.index("--repack") + 2]
+    assert ("--repack", "1") not in tuple(zip(argv, argv[1:]))
 
 
 def test_parser_extracts_concrete_placement() -> None:
@@ -145,3 +145,19 @@ def test_fit_argv_uses_negative_common_flags_when_disabled() -> None:
     assert "--no-op-offload" in argv
     assert "--no-host" in argv
     assert "--no-repack" in argv
+
+
+
+def test_parser_preserves_repeated_override_tensor_arguments() -> None:
+    output = (
+        "-c 131072 -ngl 42 "
+        "-ot 'blk\\.12\\..*=CPU' "
+        "-ot 'blk\\.13\\..*=CPU'\n"
+    )
+
+    result = LlamaFitParamsAdapter().parse_output(output, candidate=candidate())
+
+    assert result.placement.override_tensor == (
+        r"blk\.12\..*=CPU",
+        r"blk\.13\..*=CPU",
+    )
