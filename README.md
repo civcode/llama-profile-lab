@@ -10,6 +10,7 @@ V1 implementation is complete through M13. **The automated hardening/release sui
 
 Project documents:
 
+- [Getting started](docs/getting-started.md)
 - [V1 technical specification](docs/technical-spec-v1.md)
 - [V1 implementation roadmap](docs/implementation-roadmap-v1.md)
 - [V1 architecture](docs/architecture-v1.md)
