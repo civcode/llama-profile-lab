@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. The repository currently implements **M0 — Repository bootstrap** from the implementation roadmap.
+V1 is under active development. The repository currently implements **M0 — Repository bootstrap** and **M1 — Domain model and canonical identities** from the implementation roadmap.
 
 Project documents:
 
