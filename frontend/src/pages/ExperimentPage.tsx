@@ -259,6 +259,14 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
   const isActive =
     progress.operation &&
     ["running", "pausing", "cancelling"].includes(progress.operation.status);
+  const fixedPlacementId =
+    experiment.definition.placement_policy.type === "fixed"
+      ? experiment.definition.placement_policy.placement_id
+      : null;
+  const fixedPlacement =
+    fixedPlacementId === null
+      ? null
+      : placements.find((item) => item.id === fixedPlacementId) ?? null;
 
   return (
     <main className="page">
@@ -699,14 +707,8 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
             </table>
           </div>
           <JsonDetails label="Experiment definition" value={experiment} />
-          {experiment.definition.placement_policy.type === "fixed" ? (
-            <JsonDetails
-              label="Fixed placement"
-              value={placements.find(
-                (item) =>
-                  item.id === experiment.definition.placement_policy.placement_id
-              )}
-            />
+          {fixedPlacementId !== null ? (
+            <JsonDetails label="Fixed placement" value={fixedPlacement} />
           ) : null}
         </div>
       </section>
