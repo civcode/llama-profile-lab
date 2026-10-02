@@ -140,7 +140,17 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
   useEffect(() => {
     void refresh();
     const interval = window.setInterval(() => {
-      void api.progress(experimentId).then(setProgress).catch(() => undefined);
+      void Promise.all([
+        api.progress(experimentId),
+        api.runs(experimentId),
+        api.candidates(experimentId)
+      ])
+        .then(([progressValue, runValues, candidateValues]) => {
+          setProgress(progressValue);
+          setRuns(runValues);
+          setCandidates(candidateValues);
+        })
+        .catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(interval);
   }, [experimentId]);
