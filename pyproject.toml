@@ -5,7 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llama-profile-lab"
 version = "1.0.0"
-description = "Local experiment, benchmarking, and tuning environment for llama.cpp profiles."
+description = "Reproducible llama.cpp benchmarking, profiling, and configuration tuning with telemetry, analysis, validation, and launcher promotion."
+keywords = [
+  "llama.cpp",
+  "llm",
+  "benchmarking",
+  "inference",
+  "performance",
+  "profiling",
+  "tuning",
+  "telemetry",
+  "qwen",
+  "sqlite",
+]
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
