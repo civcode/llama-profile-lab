@@ -1,5 +1,7 @@
 """Tests for the bootstrap CLI."""
 
+from pathlib import Path
+
 import pytest
 
 from llama_profile_lab.cli.main import main
@@ -27,10 +29,10 @@ def test_version(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_ui_requires_built_frontend(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    missing = tmp_path.getbasetemp() / "missing-ui"
+    missing = tmp_path / "missing-ui"
     result = main(["ui", "--frontend-dir", str(missing)])
     assert result == 2
     assert "built frontend not found" in capsys.readouterr().err
