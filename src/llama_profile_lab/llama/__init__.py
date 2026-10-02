@@ -15,6 +15,12 @@ from llama_profile_lab.llama.capabilities import (
     compare_capabilities,
     parse_help_options,
 )
+from llama_profile_lab.llama.fit_params import (
+    LlamaFitParamsAdapter,
+    LlamaFitParamsConfigurationError,
+    LlamaFitParamsParseError,
+    LlamaFitParamsResult,
+)
 from llama_profile_lab.llama.discovery import (
     BinaryDiscoveryError,
     BinaryProbe,
@@ -32,6 +38,10 @@ __all__ = [
     "LlamaBenchParseError",
     "LlamaBenchResult",
     "LlamaBenchSample",
+    "LlamaFitParamsAdapter",
+    "LlamaFitParamsConfigurationError",
+    "LlamaFitParamsParseError",
+    "LlamaFitParamsResult",
     "BinaryDiscoveryError",
     "BinaryKind",
     "BinaryProbe",
