@@ -70,8 +70,9 @@ CI runs these gates together with the Python lock check, Ruff, strict mypy, and 
 The V1 UI provides:
 
 - an experiment list with profile, status, progress, baseline, and validation state;
-- form-driven experiment creation from a launcher profile;
+- form-driven experiment creation from a launcher profile whose typed Candidate mapping is supplied by the Python backend;
 - generic N-dimensional parameter sweeps driven by backend parameter metadata;
+- authoritative debounced plan previews from the same Python planning engine used for persisted experiments;
 - binary-capability-aware disabling of unsupported parameters;
 - workload editing for prefill, decode, combined, and optional SPEED-Bench cases;
 - pre-execution raw/valid Candidate, benchmark-case, and repetition counts;
@@ -85,4 +86,4 @@ The V1 UI provides:
 - comparison of 2–5 Candidates against the configured baseline;
 - M9 llama-server/SPEED-Bench finalist validation and validation history.
 
-Hashes, raw Candidate JSON, and detailed placement/configuration are collapsed under Advanced details by default. Failures stay visible because they are persisted experiment data.
+Content-address IDs, hashes, raw Candidate JSON, and detailed placement/configuration are collapsed under Advanced details by default; primary live views use Candidate ordinals and workload labels. Failures stay visible because they are persisted experiment data.

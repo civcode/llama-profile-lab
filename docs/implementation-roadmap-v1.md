@@ -1184,9 +1184,9 @@ Display:
 
 Complete. The browser can perform the full reference workflow without editing JSON or using SQL:
 
-- select an existing launcher profile and inspect its effective settings;
+- select an existing launcher profile, inspect its effective settings, and receive the backend-mapped typed base Candidate without duplicating launcher-to-domain translation in React;
 - construct the reference batch/ubatch grid with 12 raw combinations, 11 valid Candidates, and one constrained rejection;
-- preview the four-workload microbenchmark suite as 44 benchmark cases before execution;
+- preview the four-workload microbenchmark suite as 44 benchmark cases through the real planning engine rather than a browser-side approximation;
 - optionally add server-only SPEED-Bench workloads without inflating the microbenchmark case count;
 - choose measurement and placement policy and create/plan the Experiment;
 - start, pause, resume, or cancel execution using registered binaries and the existing executor/host lock;
@@ -1196,7 +1196,7 @@ Complete. The browser can perform the full reference workflow without editing JS
 - compare 2–5 Candidates without introducing an arbitrary overall winner;
 - inspect Pareto frontiers and invoke M9 server/SPEED-Bench finalist validation.
 
-Automated acceptance covers the reference 11-Candidate / 44-case plan through the browser form, API support routes, production static serving, TypeScript compilation, component tests, and production Vite build. Heavy real-model execution remains dependent on the local workstation binaries/models covered by the M5–M9 real-hardware acceptance notes.
+Automated acceptance covers the reference 11-Candidate / 44-case plan through the browser form, the authoritative planner-preview endpoint, API support routes, production static serving, direct React execution-control tests, TypeScript compilation, component tests, and production Vite build. Primary live views use Candidate ordinals and workload labels; content-address IDs remain confined to collapsed advanced/provenance details. Heavy real-model execution remains dependent on the local workstation binaries/models covered by the M5–M9 real-hardware acceptance notes.
 
 ---
 

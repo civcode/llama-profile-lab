@@ -3035,7 +3035,7 @@ V1 uses hash routing so static hosting does not require server-side SPA rewrites
 
 #### 42.11.2 Experiment editor
 
-The editor SHALL begin from the read-only launcher profile resource and construct an immutable Candidate snapshot.
+The editor SHALL begin from the read-only launcher profile resource. Launcher-to-Candidate translation SHALL occur in the Python launcher adapter/service layer, and the profile DTO SHALL include the typed base Candidate snapshot alongside the effective launcher arguments. React SHALL NOT duplicate Candidate defaulting or launcher-argument interpretation.
 
 Search dimensions SHALL be populated from backend ParameterDefinition metadata rather than a second hard-coded parameter catalog. The UI SHALL expose parameter label/category/path, comma-separated discrete values, backend string choices and numeric constraints where present, placement-affecting status, and exact binary capability support.
 
@@ -3050,6 +3050,8 @@ constraint: compute.ubatch_size <= compute.batch_size
 ~~~
 
 which previews 12 raw combinations, 11 valid Candidates, and one constrained rejection.
+
+Plan preview SHALL call the same pure Python planner used by persisted planning. The browser MAY debounce preview requests, but SHALL NOT maintain a second constraint/workload expansion implementation as the authoritative count. Preview therefore uses the real constraint parser, conditional-dimension logic, Candidate validation, workload expansion, deduplication, and server-only workload exclusion.
 
 The default workload suite SHALL provide:
 
@@ -3070,7 +3072,7 @@ The execution screen SHALL use the existing run/resume/pause/cancel endpoints. S
 
 The live screen SHALL make visible, when available, completed/total/incomplete cases, current Candidate and WorkloadCase, latest tokens/s, process and system CPU, GPU utilization, RAM/process RSS/VRAM, CPU/GPU temperature, GPU power, recent run status/quality, and persisted failure counts.
 
-No browser-only execution state is authoritative.
+No browser-only execution state is authoritative. Primary live views SHALL prefer stable human labels (Candidate ordinal and suite workload label) over content-address IDs. Exact IDs remain available only in advanced/provenance detail.
 
 #### 42.11.4 Result exploration
 
@@ -3098,6 +3100,8 @@ npm run typecheck
 npm run test
 npm run build
 ~~~
+
+Frontend acceptance SHALL also exercise start, pause, cancel, and resume actions through the API client and verify that live progress renders telemetry plus human-readable Candidate/workload labels without leaking raw content IDs into the normal control surface.
 
 in addition to the Python lockfile, Ruff, strict mypy, and pytest gates.
 
