@@ -116,7 +116,22 @@ TG256  @ depth 4096
 TG256  @ 50% context
 ~~~
 
-That produces **44 benchmark cases**: 11 Candidates × 4 workloads.
+Here, **PP** means *prompt processing* (prefill): how quickly the model reads an input prompt. `PP2048` therefore measures a 2,048-token prompt, while `PP8192` measures a larger 8,192-token prompt. These use depth 0 because the benchmark starts without an existing conversation history and measures the prompt itself being loaded into context.
+
+**TG** means *token generation* (decode): how quickly the model produces new tokens after context already exists. `TG256` means “generate 256 tokens.” The depth tells llama-bench how much context is already active before generation starts:
+
+| Workload | What it approximates | Why include it |
+| --- | --- | --- |
+| `PP2048 @ depth 0` | Reading a short/medium 2K-token prompt | Shows prompt-processing performance for common requests |
+| `PP8192 @ depth 0` | Reading a larger 8K-token prompt | Exposes configurations that behave differently on larger prefills |
+| `TG256 @ depth 4096` | Generating 256 tokens with about 4K tokens already in context | Measures decode performance early in a conversation |
+| `TG256 @ 50% context` | Generating 256 tokens around the middle of the Candidate's context window | Checks decode performance when the KV cache is substantially larger |
+
+The `50% context` form is relative to each Candidate's configured context size. During planning, llama-profile-lab converts it into a concrete token depth while reserving room for the generated tokens and any configured safety margin. For a 128K Candidate with the default zero safety margin, `TG256 @ 50% context` becomes a depth of 65,408 tokens rather than simply 65,536.
+
+These four cases give a useful first screen because they cover both major phases of inference—reading input and generating output—and test decode performance at both shallow and much deeper context. They are not universal requirements; choose workloads that resemble your real traffic once you understand the workflow.
+
+With 11 Candidates, these four workloads produce **44 benchmark cases**: 11 Candidates × 4 workloads.
 
 Use at least three repetitions for real comparisons. Before anything runs, use the plan/preview screen to confirm the Candidate and case counts look reasonable.
 
