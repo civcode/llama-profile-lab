@@ -168,7 +168,7 @@ def _required_int(mapping: dict[str, Any], key: str) -> int:
     value = mapping.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise SpeedBenchParseError(f"{key} must be a non-negative integer")
-    return value
+    return int(value)
 
 
 def _optional_int(mapping: dict[str, Any], key: str) -> int | None:
@@ -177,7 +177,7 @@ def _optional_int(mapping: dict[str, Any], key: str) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise SpeedBenchParseError(f"{key} must be a non-negative integer")
-    return value
+    return int(value)
 
 
 def _optional_float(mapping: dict[str, Any], key: str) -> float | None:
