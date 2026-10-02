@@ -75,6 +75,14 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
   const [paretoError, setParetoError] = useState<unknown>(null);
   const [objectiveA, setObjectiveA] = useState(0);
   const [objectiveB, setObjectiveB] = useState(2);
+  const [objectiveAMetric, setObjectiveAMetric] = useState("throughput.median");
+  const [objectiveBMetric, setObjectiveBMetric] = useState("throughput.median");
+  const [objectiveADirection, setObjectiveADirection] = useState<
+    "maximize" | "minimize"
+  >("maximize");
+  const [objectiveBDirection, setObjectiveBDirection] = useState<
+    "maximize" | "minimize"
+  >("maximize");
 
   async function refresh() {
     try {
@@ -118,6 +126,12 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
       if (!xPath && dimensions[0]) setXPath(dimensions[0].path);
       if (!yPath && dimensions[1]) setYPath(dimensions[1].path);
       else if (!yPath && dimensions[0]) setYPath(dimensions[0].path);
+
+      const workloadCount = experimentValue.workload_suite.cases.length;
+      if (workloadCount > 0) {
+        setObjectiveA((current) => Math.min(current, workloadCount - 1));
+        setObjectiveB((current) => Math.min(current, workloadCount - 1));
+      }
     } catch (reason) {
       setError(reason);
     }
@@ -126,7 +140,17 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
   useEffect(() => {
     void refresh();
     const interval = window.setInterval(() => {
-      void api.progress(experimentId).then(setProgress).catch(() => undefined);
+      void Promise.all([
+        api.progress(experimentId),
+        api.runs(experimentId),
+        api.candidates(experimentId)
+      ])
+        .then(([progressValue, runValues, candidateValues]) => {
+          setProgress(progressValue);
+          setRuns(runValues);
+          setCandidates(candidateValues);
+        })
+        .catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(interval);
   }, [experimentId]);
@@ -221,18 +245,26 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
     if (!experiment || experiment.workload_suite.cases.length < 2) return;
     try {
       setParetoError(null);
+      const objectiveALabel = workloadLabel(
+        experiment.workload_suite.cases[objectiveA],
+        objectiveA
+      );
+      const objectiveBLabel = workloadLabel(
+        experiment.workload_suite.cases[objectiveB],
+        objectiveB
+      );
       setPareto(
         await api.pareto(experiment.id, [
           {
-            key: workloadLabel(experiment.workload_suite.cases[objectiveA], objectiveA),
-            direction: "maximize",
-            metric: "throughput.median",
+            key: "X · " + objectiveALabel + " · " + objectiveAMetric,
+            direction: objectiveADirection,
+            metric: objectiveAMetric,
             filters: [{ path: "suite_case_index", value: objectiveA }]
           },
           {
-            key: workloadLabel(experiment.workload_suite.cases[objectiveB], objectiveB),
-            direction: "maximize",
-            metric: "throughput.median",
+            key: "Y · " + objectiveBLabel + " · " + objectiveBMetric,
+            direction: objectiveBDirection,
+            metric: objectiveBMetric,
             filters: [{ path: "suite_case_index", value: objectiveB }]
           }
         ])
@@ -668,9 +700,9 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
               Calculate
             </button>
           </div>
-          <div className="control-grid two">
+          <div className="control-grid three">
             <label className="field">
-              <span>Objective X</span>
+              <span>Objective X workload</span>
               <select
                 value={objectiveA}
                 onChange={(event) => setObjectiveA(Number(event.target.value))}
@@ -683,7 +715,34 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
               </select>
             </label>
             <label className="field">
-              <span>Objective Y</span>
+              <span>Objective X metric</span>
+              <select
+                value={objectiveAMetric}
+                onChange={(event) => setObjectiveAMetric(event.target.value)}
+              >
+                {metrics.map((item) => (
+                  <option value={item.name} key={item.name}>
+                    {item.label} {item.unit ? "(" + item.unit + ")" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Objective X direction</span>
+              <select
+                value={objectiveADirection}
+                onChange={(event) =>
+                  setObjectiveADirection(
+                    event.target.value as "maximize" | "minimize"
+                  )
+                }
+              >
+                <option value="maximize">Maximize</option>
+                <option value="minimize">Minimize</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Objective Y workload</span>
               <select
                 value={objectiveB}
                 onChange={(event) => setObjectiveB(Number(event.target.value))}
@@ -693,6 +752,33 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
                     {workloadLabel(item, index)}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Objective Y metric</span>
+              <select
+                value={objectiveBMetric}
+                onChange={(event) => setObjectiveBMetric(event.target.value)}
+              >
+                {metrics.map((item) => (
+                  <option value={item.name} key={item.name}>
+                    {item.label} {item.unit ? "(" + item.unit + ")" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Objective Y direction</span>
+              <select
+                value={objectiveBDirection}
+                onChange={(event) =>
+                  setObjectiveBDirection(
+                    event.target.value as "maximize" | "minimize"
+                  )
+                }
+              >
+                <option value="maximize">Maximize</option>
+                <option value="minimize">Minimize</option>
               </select>
             </label>
           </div>

@@ -120,6 +120,18 @@ describe("NewExperimentPage", () => {
         minimum: 1,
         maximum: null,
         string_choices: null
+      },
+      {
+        path: "speculative.draft_n_max",
+        label: "Maximum draft tokens",
+        category: "Speculative decoding",
+        value_types: ["int"],
+        cli_argument: "--spec-draft-n-max",
+        affects_placement: false,
+        supported_by: ["llama-server"],
+        minimum: 1,
+        maximum: null,
+        string_choices: null
       }
     ]);
     mocks.binaries.mockResolvedValue([
@@ -177,6 +189,41 @@ describe("NewExperimentPage", () => {
     expect(payload.workload_suite.cases).toHaveLength(4);
     expect(payload.measurement_policy.repetitions).toBe(3);
     await waitFor(() => expect(mocks.planExperiment).toHaveBeenCalledWith("exp-ui"));
+  });
+
+
+
+  it("removes an enabled dimension when the selected binary cannot execute it", async () => {
+    render(<NewExperimentPage />);
+    expect(await screen.findByText("11 valid candidates")).toBeInTheDocument();
+
+    const capabilityTarget = screen.getByLabelText("Capability target");
+    fireEvent.change(capabilityTarget, { target: { value: "" } });
+
+    const speculative = screen.getByRole("checkbox", {
+      name: /Maximum draft tokens/
+    });
+    expect(speculative).toBeEnabled();
+    fireEvent.click(speculative);
+    fireEvent.change(screen.getByLabelText("Maximum draft tokens values"), {
+      target: { value: "8" }
+    });
+    expect(speculative).toBeChecked();
+
+    fireEvent.change(capabilityTarget, { target: { value: "bench" } });
+
+    await waitFor(() => expect(speculative).not.toBeChecked());
+    expect(speculative).toBeDisabled();
+    expect(screen.getByText("Not supported by llama-bench")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const body = mocks.previewExperiment.mock.calls.at(-1)?.[0];
+      expect(
+        body.search_space.dimensions.some(
+          (item: { path: string }) => item.path === "speculative.draft_n_max"
+        )
+      ).toBe(false);
+    });
   });
 
   it("adds a server validation workload without inflating microbenchmark case count", async () => {

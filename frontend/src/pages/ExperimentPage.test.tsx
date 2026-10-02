@@ -226,9 +226,17 @@ function commonMocks() {
   });
   mocks.placements.mockResolvedValue([]);
   mocks.metrics.mockResolvedValue([
-    { name: "throughput.median", label: "Median throughput", unit: "tokens/s" }
+    { name: "throughput.median", label: "Median throughput", unit: "tokens/s" },
+    { name: "gpu.power.avg_w", label: "Average GPU power", unit: "W" }
   ]);
   mocks.matrix.mockRejectedValue(new Error("no completed runs"));
+  mocks.pareto.mockResolvedValue({
+    experiment_id: "exp-ui",
+    objectives: [],
+    evaluated_count: 0,
+    frontier: [],
+    excluded: {}
+  });
   mocks.progressEvents.mockReturnValue(() => undefined);
 }
 
@@ -345,6 +353,61 @@ describe("ExperimentPage execution controls", () => {
         "exp-ui",
         expect.any(Object),
         true
+      )
+    );
+  });
+
+
+  it("sends caller-defined Pareto workload, metric, and direction objectives", async () => {
+    mocks.experiment.mockResolvedValue({
+      ...experiment,
+      workload_count: 2,
+      benchmark_case_count: 2,
+      incomplete_case_count: 2,
+      workload_suite: {
+        ...experiment.workload_suite,
+        cases: [
+          ...experiment.workload_suite.cases,
+          {
+            kind: "microbench-prefill",
+            label: "PP2K @ d0",
+            safety_margin_tokens: 0,
+            prompt_tokens: 2048,
+            depth: { type: "absolute", tokens: 0 }
+          }
+        ]
+      }
+    });
+
+    render(<ExperimentPage experimentId="exp-ui" />);
+
+    expect(await screen.findByText("Pareto frontier")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Objective X metric"), {
+      target: { value: "gpu.power.avg_w" }
+    });
+    fireEvent.change(screen.getByLabelText("Objective X direction"), {
+      target: { value: "minimize" }
+    });
+    fireEvent.change(screen.getByLabelText("Objective Y workload"), {
+      target: { value: "1" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Calculate" }));
+
+    await waitFor(() =>
+      expect(mocks.pareto).toHaveBeenCalledWith(
+        "exp-ui",
+        [
+          expect.objectContaining({
+            direction: "minimize",
+            metric: "gpu.power.avg_w",
+            filters: [{ path: "suite_case_index", value: 0 }]
+          }),
+          expect.objectContaining({
+            direction: "maximize",
+            metric: "throughput.median",
+            filters: [{ path: "suite_case_index", value: 1 }]
+          })
+        ]
       )
     );
   });
