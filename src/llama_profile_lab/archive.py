@@ -127,6 +127,93 @@ class ArchiveService:
 
         return manifest
 
+    @staticmethod
+    def restore(
+        archive_path: Path,
+        database_path: Path,
+        *,
+        artifacts_dir: Path | None = None,
+    ) -> ArchiveManifest:
+        """Verify and restore a database snapshot from one llprof archive."""
+        source = archive_path.expanduser()
+        destination = database_path.expanduser()
+        if not source.is_file():
+            raise ArchiveError(f"archive does not exist: {source}")
+        if destination.exists():
+            raise ArchiveError(f"restore database already exists: {destination}")
+
+        with tempfile.TemporaryDirectory(prefix="llprof-restore-") as tempdir:
+            root = Path(tempdir)
+            try:
+                with tarfile.open(source, mode="r:*") as archive:
+                    members = archive.getmembers()
+                    _validate_archive_members(members)
+                    for member in members:
+                        if not member.isfile():
+                            continue
+                        extracted = archive.extractfile(member)
+                        if extracted is None:
+                            raise ArchiveError(
+                                f"cannot read archived file: {member.name}"
+                            )
+                        target = root / member.name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with target.open("wb") as handle:
+                            shutil.copyfileobj(extracted, handle)
+            except (OSError, tarfile.TarError) as exc:
+                raise ArchiveError(f"cannot read archive {source}: {exc}") from exc
+
+            manifest_path = root / "manifest.json"
+            snapshot_path = root / "database.sqlite3"
+            if not manifest_path.is_file() or not snapshot_path.is_file():
+                raise ArchiveError(
+                    "archive must contain manifest.json and database.sqlite3"
+                )
+            manifest = _load_manifest(manifest_path)
+            _verify_archive_files(root, manifest)
+
+            connection = sqlite3.connect(snapshot_path)
+            try:
+                integrity = connection.execute("PRAGMA integrity_check").fetchone()
+                if integrity is None or integrity[0] != "ok":
+                    raise ArchiveError("restored SQLite snapshot failed integrity_check")
+                row = connection.execute(
+                    "SELECT MAX(version) FROM schema_migration"
+                ).fetchone()
+                restored_version = 0 if row is None or row[0] is None else int(row[0])
+                if restored_version != manifest.schema_version:
+                    raise ArchiveError(
+                        "archive manifest schema version does not match snapshot"
+                    )
+            except sqlite3.Error as exc:
+                raise ArchiveError(
+                    f"restored database is not a valid llprof SQLite snapshot: {exc}"
+                ) from exc
+            finally:
+                connection.close()
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(snapshot_path, destination)
+
+            if artifacts_dir is not None:
+                artifact_root = root / "artifacts"
+                if artifact_root.is_dir():
+                    target_root = artifacts_dir.expanduser()
+                    target_root.mkdir(parents=True, exist_ok=True)
+                    for item in manifest.files:
+                        if item.kind != "artifact":
+                            continue
+                        source_artifact = root / item.path
+                        target = target_root / Path(item.path).name
+                        if target.exists():
+                            destination.unlink(missing_ok=True)
+                            raise ArchiveError(
+                                f"restored artifact already exists: {target}"
+                            )
+                        shutil.copy2(source_artifact, target)
+
+        return manifest
+
 
 def export_experiment(database: Database, experiment_id: str) -> dict[str, Any]:
     """Export all persisted rows needed to reconstruct one experiment's provenance."""
@@ -395,6 +482,75 @@ def _rows_in(
         query_template.format(placeholders),
         tuple(identifiers),
     )
+
+
+def _validate_archive_members(members: list[tarfile.TarInfo]) -> None:
+    allowed_roots = {"manifest.json", "database.sqlite3"}
+    for member in members:
+        path = Path(member.name)
+        if path.is_absolute() or ".." in path.parts:
+            raise ArchiveError(f"unsafe archive member path: {member.name}")
+        if member.issym() or member.islnk():
+            raise ArchiveError(f"archive links are not allowed: {member.name}")
+        if member.name in allowed_roots:
+            if not member.isfile():
+                raise ArchiveError(f"archive member must be a file: {member.name}")
+            continue
+        if len(path.parts) == 2 and path.parts[0] == "artifacts" and member.isfile():
+            continue
+        raise ArchiveError(f"unexpected archive member: {member.name}")
+
+
+def _load_manifest(path: Path) -> ArchiveManifest:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArchiveError(f"cannot read archive manifest: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("format") != "llprof-archive-v1":
+        raise ArchiveError("unsupported or malformed archive manifest")
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list):
+        raise ArchiveError("archive manifest files must be a list")
+    files: list[ArchiveFile] = []
+    for item in raw_files:
+        if not isinstance(item, dict):
+            raise ArchiveError("archive manifest file entry must be an object")
+        try:
+            archived = ArchiveFile(
+                path=str(item["path"]),
+                sha256=str(item["sha256"]),
+                size_bytes=int(item["size_bytes"]),
+                kind=str(item["kind"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ArchiveError("malformed archive manifest file entry") from exc
+        if archived.kind not in {"database", "artifact"}:
+            raise ArchiveError(f"unsupported archive file kind: {archived.kind}")
+        files.append(archived)
+    try:
+        return ArchiveManifest(
+            format=str(payload["format"]),
+            created_at=str(payload["created_at"]),
+            schema_version=int(payload["schema_version"]),
+            database_source=str(payload["database_source"]),
+            files=tuple(files),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ArchiveError("malformed archive manifest") from exc
+
+
+def _verify_archive_files(root: Path, manifest: ArchiveManifest) -> None:
+    expected_paths = {item.path for item in manifest.files}
+    if "database.sqlite3" not in expected_paths:
+        raise ArchiveError("archive manifest does not include database.sqlite3")
+    for item in manifest.files:
+        path = root / item.path
+        if not path.is_file():
+            raise ArchiveError(f"archive manifest file is missing: {item.path}")
+        if path.stat().st_size != item.size_bytes:
+            raise ArchiveError(f"archive file size mismatch: {item.path}")
+        if _sha256(path) != item.sha256:
+            raise ArchiveError(f"archive file hash mismatch: {item.path}")
 
 
 def _archive_file(path: Path, archived_path: str, kind: str) -> ArchiveFile:
