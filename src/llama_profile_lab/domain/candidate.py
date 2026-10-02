@@ -17,9 +17,9 @@ from pydantic import (
 from llama_profile_lab.domain.base import ContentAddressedModel, FrozenModel, JsonScalar
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
-ExtraArgValue: TypeAlias = JsonScalar | tuple[JsonScalar, ...]
-GpuLayerSetting: TypeAlias = NonNegativeInt | Literal["auto", "all"] | None
-DeviceSetting: TypeAlias = Literal["auto"] | tuple[NonEmptyString, ...]
+type ExtraArgValue = JsonScalar | tuple[JsonScalar, ...]
+type GpuLayerSetting = NonNegativeInt | Literal["auto", "all"] | None
+type DeviceSetting = Literal["auto"] | tuple[NonEmptyString, ...]
 
 
 class ModelSelection(FrozenModel):
