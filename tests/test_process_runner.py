@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from llama_profile_lab.execution import HostLock, HostLockError, ProcessRunner
+from llama_profile_lab.execution import (
+    HostLock,
+    HostLockError,
+    ProcessRunner,
+    ProcessRunnerError,
+)
 
 
 def test_process_runner_captures_stdout_stderr_and_exit_code() -> None:
@@ -45,3 +50,10 @@ def test_host_lock_is_exclusive(tmp_path: Path) -> None:
 
     with HostLock(path):
         assert path.exists()
+
+
+def test_process_runner_reports_launch_failure(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist"
+
+    with pytest.raises(ProcessRunnerError, match="failed to launch"):
+        ProcessRunner().run((str(missing),))
