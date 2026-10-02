@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -401,6 +401,52 @@ class ExperimentRepository:
             raise ValueError("experiment does not exist or is not draft")
 
 
+    def mark_running(self, identifier: str) -> None:
+        """Transition a resumable experiment into running state."""
+        cursor = self.connection.execute(
+            """
+            UPDATE experiment
+            SET status = 'running', completed_at = NULL
+            WHERE id = ?
+              AND status IN ('planned', 'paused', 'failed', 'running')
+            """,
+            (identifier,),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("experiment does not exist or is not resumable")
+
+    def mark_paused(self, identifier: str) -> None:
+        """Pause an executing experiment while retaining its persisted plan."""
+        cursor = self.connection.execute(
+            "UPDATE experiment SET status = 'paused' WHERE id = ? AND status = 'running'",
+            (identifier,),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("experiment does not exist or is not running")
+
+    def mark_completed(self, identifier: str) -> None:
+        """Mark an experiment completed after every case has a successful run."""
+        cursor = self.connection.execute(
+            """
+            UPDATE experiment
+            SET status = 'completed', completed_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (_utc_now(), identifier),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("experiment does not exist or is not running")
+
+    def mark_failed(self, identifier: str) -> None:
+        """Mark an experiment failed while preserving retryable case history."""
+        cursor = self.connection.execute(
+            "UPDATE experiment SET status = 'failed' WHERE id = ? AND status = 'running'",
+            (identifier,),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("experiment does not exist or is not running")
+
+
 class BenchmarkCaseRepository:
     """Persistence for planned benchmark cases."""
 
@@ -476,6 +522,68 @@ class BenchmarkCaseRepository:
         )
 
 
+    def list_incomplete(self, experiment_id: str) -> tuple[BenchmarkCaseRecord, ...]:
+        """List cases with no successful run, ordered by planned ordinal."""
+        rows = self.connection.execute(
+            """
+            SELECT bc.id, bc.experiment_id, bc.candidate_id, bc.workload_case_id,
+                   bc.placement_id, bc.case_hash, bc.status, bc.ordinal
+            FROM benchmark_case AS bc
+            WHERE bc.experiment_id = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM benchmark_run AS br
+                  WHERE br.benchmark_case_id = bc.id
+                    AND br.status = 'completed'
+              )
+            ORDER BY bc.ordinal
+            """,
+            (experiment_id,),
+        ).fetchall()
+        return tuple(
+            BenchmarkCaseRecord(
+                id=str(row["id"]),
+                experiment_id=str(row["experiment_id"]),
+                candidate_id=str(row["candidate_id"]),
+                workload_case_id=str(row["workload_case_id"]),
+                placement_id=row["placement_id"],
+                case_hash=str(row["case_hash"]),
+                status=row["status"],
+                ordinal=int(row["ordinal"]),
+            )
+            for row in rows
+        )
+
+    def count_incomplete(self, experiment_id: str) -> int:
+        """Count cases that still lack a successful run."""
+        row = self.connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM benchmark_case AS bc
+            WHERE bc.experiment_id = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM benchmark_run AS br
+                  WHERE br.benchmark_case_id = bc.id
+                    AND br.status = 'completed'
+              )
+            """,
+            (experiment_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        return int(row["count"])
+
+    def set_status(self, identifier: str, status: RunStatus) -> None:
+        """Update the latest execution state of a planned benchmark case."""
+        cursor = self.connection.execute(
+            "UPDATE benchmark_case SET status = ? WHERE id = ?",
+            (status, identifier),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"benchmark case not found: {identifier}")
+
+
 class BenchmarkRunRepository:
     """Persistence for append-only benchmark execution attempts."""
 
@@ -525,7 +633,7 @@ class BenchmarkRunRepository:
         exit_code: int | None,
         stdout: str = "",
         stderr: str = "",
-        raw_result: Mapping[str, Any] | None = None,
+        raw_result: Any = None,
         finished_at: str | None = None,
     ) -> None:
         if status in {"planned", "running"}:
@@ -544,12 +652,116 @@ class BenchmarkRunRepository:
                 exit_code,
                 stdout,
                 stderr,
-                canonical_json(dict(raw_result)) if raw_result is not None else None,
+                canonical_json(raw_result) if raw_result is not None else None,
                 identifier,
             ),
         )
         if cursor.rowcount != 1:
             raise ValueError("run does not exist or has already been finalized")
+
+    def add_samples(
+        self,
+        run_id: str,
+        samples: Sequence[tuple[int, float]],
+    ) -> None:
+        """Persist individual timed repetitions for one run."""
+        self.connection.executemany(
+            """
+            INSERT INTO benchmark_sample(
+                run_id, sample_index, elapsed_ns, tokens_per_second
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                (run_id, index, elapsed_ns, tokens_per_second)
+                for index, (elapsed_ns, tokens_per_second) in enumerate(samples)
+            ),
+        )
+
+    def add_metrics(
+        self,
+        run_id: str,
+        metrics: Mapping[str, int | float],
+    ) -> None:
+        """Persist normalized aggregate metrics from tool output."""
+        rows: list[tuple[str, str, float | None, int | None, str, str]] = []
+        for name, value in metrics.items():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                rows.append((run_id, name, None, value, "", "{}"))
+            else:
+                rows.append((run_id, name, float(value), None, "", "{}"))
+        self.connection.executemany(
+            """
+            INSERT INTO metric(
+                run_id, metric_name, value_real, value_integer, unit, dimensions_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def recover_orphaned(self, experiment_id: str) -> int:
+        """Convert stale running attempts into interrupted history before resume."""
+        rows = self.connection.execute(
+            """
+            SELECT br.id, br.benchmark_case_id
+            FROM benchmark_run AS br
+            JOIN benchmark_case AS bc ON bc.id = br.benchmark_case_id
+            WHERE bc.experiment_id = ? AND br.status = 'running'
+            """,
+            (experiment_id,),
+        ).fetchall()
+        if not rows:
+            return 0
+
+        now = _utc_now()
+        run_ids = [str(row["id"]) for row in rows]
+        case_ids = {str(row["benchmark_case_id"]) for row in rows}
+        self.connection.executemany(
+            """
+            UPDATE benchmark_run
+            SET status = 'interrupted', finished_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            ((now, run_id) for run_id in run_ids),
+        )
+        for case_id in case_ids:
+            successful = self.connection.execute(
+                """
+                SELECT 1 FROM benchmark_run
+                WHERE benchmark_case_id = ? AND status = 'completed'
+                LIMIT 1
+                """,
+                (case_id,),
+            ).fetchone()
+            if successful is None:
+                self.connection.execute(
+                    "UPDATE benchmark_case SET status = 'planned' WHERE id = ?",
+                    (case_id,),
+                )
+        return len(run_ids)
+
+    def samples(self, run_id: str) -> tuple[tuple[int, int, float], ...]:
+        """Return sample index, elapsed ns, and throughput for a run."""
+        rows = self.connection.execute(
+            """
+            SELECT sample_index, elapsed_ns, tokens_per_second
+            FROM benchmark_sample
+            WHERE run_id = ?
+            ORDER BY sample_index
+            """,
+            (run_id,),
+        ).fetchall()
+        return tuple(
+            (
+                int(row["sample_index"]),
+                int(row["elapsed_ns"]),
+                float(row["tokens_per_second"]),
+            )
+            for row in rows
+        )
 
     def get(self, identifier: str) -> BenchmarkRunRecord | None:
         row = self.connection.execute(
