@@ -18,6 +18,7 @@ from llama_profile_lab.db.repositories import (
     MeasurementPolicyRepository,
     PlacementRepository,
     SearchSpaceRepository,
+    TelemetryRepository,
     WorkloadCaseRepository,
     WorkloadSuiteRepository,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "Migration",
     "MigrationError",
     "SearchSpaceRepository",
+    "TelemetryRepository",
     "WorkloadCaseRepository",
     "WorkloadSuiteRepository",
     "connect_database",

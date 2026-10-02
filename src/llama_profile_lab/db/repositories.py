@@ -28,10 +28,12 @@ from llama_profile_lab.domain import (
     MeasurementPolicy,
     ResolvedPlacement,
     SearchSpace,
+    TelemetrySample,
     WorkloadSuite,
     canonical_json,
     sha256_json,
 )
+from llama_profile_lab.domain.telemetry import GpuTelemetrySample, RunQuality
 from llama_profile_lab.domain.workload import WorkloadCase
 
 _WORKLOAD_ADAPTER: TypeAdapter[WorkloadCase] = TypeAdapter(WorkloadCase)
@@ -1120,6 +1122,25 @@ class BenchmarkRunRepository:
                 metrics[str(row["metric_name"])] = float(real)
         return metrics
 
+    def set_quality(
+        self,
+        run_id: str,
+        *,
+        quality: RunQuality,
+        details: Mapping[str, Any],
+    ) -> None:
+        """Attach telemetry quality without changing benchmark success state."""
+        cursor = self.connection.execute(
+            """
+            UPDATE benchmark_run
+            SET quality = ?, quality_details_json = ?
+            WHERE id = ?
+            """,
+            (quality, canonical_json(dict(details)), run_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"benchmark run not found: {run_id}")
+
     def logs(self, run_id: str) -> tuple[str, str]:
         """Return captured stdout and stderr for one run."""
         row = self.connection.execute(
@@ -1135,7 +1156,7 @@ class BenchmarkRunRepository:
             """
             SELECT id, benchmark_case_id, host_id, binary_id,
                    measurement_policy_id, started_at, finished_at,
-                   duration_ns, status, exit_code
+                   duration_ns, status, exit_code, quality, quality_details_json
             FROM benchmark_run
             WHERE id = ?
             """,
@@ -1154,7 +1175,141 @@ class BenchmarkRunRepository:
             duration_ns=row["duration_ns"],
             status=row["status"],
             exit_code=row["exit_code"],
+            quality=row["quality"],
+            quality_details=(
+                None
+                if row["quality_details_json"] is None
+                else _loads_object(str(row["quality_details_json"]))
+            ),
         )
+
+
+class TelemetryRepository:
+    """Persistence for raw run telemetry observations."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def add_samples(
+        self,
+        run_id: str,
+        samples: Sequence[TelemetrySample],
+    ) -> None:
+        rows = []
+        for sample in samples:
+            extra = dict(sample.extra)
+            extra["phase"] = sample.phase
+            rows.append(
+                (
+                    run_id,
+                    sample.timestamp_ns,
+                    sample.cpu_system_pct,
+                    sample.cpu_user_pct,
+                    sample.cpu_system_mode_pct,
+                    sample.cpu_iowait_pct,
+                    sample.process_cpu_pct_normalized,
+                    sample.process_cpu_pct_raw,
+                    sample.process_user_time_ns,
+                    sample.process_system_time_ns,
+                    sample.process_threads,
+                    sample.cpu_freq_avg_hz,
+                    sample.cpu_freq_min_hz,
+                    sample.cpu_freq_max_hz,
+                    sample.cpu_temperature_c,
+                    sample.load_avg_1m,
+                    sample.load_avg_5m,
+                    sample.ram_used_bytes,
+                    sample.ram_available_bytes,
+                    sample.swap_used_bytes,
+                    sample.process_rss_bytes,
+                    canonical_json(
+                        [gpu.model_dump(mode="json") for gpu in sample.gpus]
+                    ),
+                    canonical_json(list(sample.cpu_per_core_pct)),
+                    canonical_json(extra),
+                )
+            )
+        self.connection.executemany(
+            """
+            INSERT INTO telemetry_sample(
+                run_id, timestamp_ns, cpu_system_pct, cpu_user_pct,
+                cpu_system_mode_pct, cpu_iowait_pct,
+                process_cpu_pct_normalized, process_cpu_pct_raw,
+                process_user_time_ns, process_system_time_ns,
+                process_threads, cpu_freq_avg_hz, cpu_freq_min_hz,
+                cpu_freq_max_hz, cpu_temperature_c, load_avg_1m,
+                load_avg_5m, ram_used_bytes, ram_available_bytes,
+                swap_used_bytes, process_rss_bytes, gpu_json,
+                cpu_per_core_json, extra_json
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?
+            )
+            """,
+            rows,
+        )
+
+    def samples(self, run_id: str) -> tuple[TelemetrySample, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT timestamp_ns, cpu_system_pct, cpu_user_pct,
+                   cpu_system_mode_pct, cpu_iowait_pct,
+                   process_cpu_pct_normalized, process_cpu_pct_raw,
+                   process_user_time_ns, process_system_time_ns,
+                   process_threads, cpu_freq_avg_hz, cpu_freq_min_hz,
+                   cpu_freq_max_hz, cpu_temperature_c, load_avg_1m,
+                   load_avg_5m, ram_used_bytes, ram_available_bytes,
+                   swap_used_bytes, process_rss_bytes, gpu_json,
+                   cpu_per_core_json, extra_json
+            FROM telemetry_sample
+            WHERE run_id = ?
+            ORDER BY timestamp_ns
+            """,
+            (run_id,),
+        ).fetchall()
+        result: list[TelemetrySample] = []
+        for row in rows:
+            extra = _loads_object(str(row["extra_json"]))
+            phase = extra.pop("phase", "during")
+            raw_gpus = json.loads(str(row["gpu_json"]))
+            if not isinstance(raw_gpus, list):
+                raise ValueError("persisted gpu_json must be a list")
+            raw_cores = json.loads(str(row["cpu_per_core_json"]))
+            if not isinstance(raw_cores, list):
+                raise ValueError("persisted cpu_per_core_json must be a list")
+            result.append(
+                TelemetrySample(
+                    timestamp_ns=int(row["timestamp_ns"]),
+                    phase=phase,
+                    cpu_system_pct=row["cpu_system_pct"],
+                    cpu_user_pct=row["cpu_user_pct"],
+                    cpu_system_mode_pct=row["cpu_system_mode_pct"],
+                    cpu_iowait_pct=row["cpu_iowait_pct"],
+                    process_cpu_pct_normalized=row["process_cpu_pct_normalized"],
+                    process_cpu_pct_raw=row["process_cpu_pct_raw"],
+                    process_user_time_ns=row["process_user_time_ns"],
+                    process_system_time_ns=row["process_system_time_ns"],
+                    process_threads=row["process_threads"],
+                    cpu_freq_avg_hz=row["cpu_freq_avg_hz"],
+                    cpu_freq_min_hz=row["cpu_freq_min_hz"],
+                    cpu_freq_max_hz=row["cpu_freq_max_hz"],
+                    cpu_temperature_c=row["cpu_temperature_c"],
+                    load_avg_1m=row["load_avg_1m"],
+                    load_avg_5m=row["load_avg_5m"],
+                    ram_used_bytes=row["ram_used_bytes"],
+                    ram_available_bytes=row["ram_available_bytes"],
+                    swap_used_bytes=row["swap_used_bytes"],
+                    process_rss_bytes=row["process_rss_bytes"],
+                    gpus=tuple(
+                        GpuTelemetrySample.model_validate(gpu)
+                        for gpu in raw_gpus
+                    ),
+                    cpu_per_core_pct=tuple(float(value) for value in raw_cores),
+                    extra=extra,
+                )
+            )
+        return tuple(result)
 
 
 class EnvironmentRepository:

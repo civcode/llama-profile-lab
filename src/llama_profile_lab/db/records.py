@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from llama_profile_lab.domain.telemetry import RunQuality
+
 ExperimentStatus = Literal[
     "draft",
     "planned",
@@ -86,6 +88,8 @@ class BenchmarkRunRecord:
     duration_ns: int | None
     status: RunStatus
     exit_code: int | None
+    quality: RunQuality | None
+    quality_details: Mapping[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)

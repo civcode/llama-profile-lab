@@ -16,6 +16,15 @@ from llama_profile_lab.execution.placement import (
     validate_fixed_placement,
 )
 from llama_profile_lab.execution.process import ProcessResult, ProcessRunner, ProcessRunnerError
+from llama_profile_lab.execution.telemetry import (
+    AutoGpuTelemetryProvider,
+    LinuxTelemetryProvider,
+    RunQualityPolicy,
+    TelemetryProvider,
+    TelemetrySampler,
+    classify_run_quality,
+    summarize_telemetry,
+)
 
 __all__ = [
     "BasicHostInfo",
@@ -24,6 +33,7 @@ __all__ = [
     "ExperimentExecutor",
     "HostLock",
     "HostLockError",
+    "LinuxTelemetryProvider",
     "PlacementConfigurationError",
     "PlacementResolution",
     "PlacementResolutionFailure",
@@ -31,7 +41,13 @@ __all__ = [
     "ProcessResult",
     "ProcessRunner",
     "ProcessRunnerError",
+    "RunQualityPolicy",
+    "TelemetryProvider",
+    "TelemetrySampler",
+    "AutoGpuTelemetryProvider",
+    "classify_run_quality",
     "detect_basic_host",
     "resolved_placement_from_record",
+    "summarize_telemetry",
     "validate_fixed_placement",
 ]

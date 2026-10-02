@@ -30,6 +30,13 @@ from llama_profile_lab.domain.measurement import (
     MeasurementPolicy,
 )
 from llama_profile_lab.domain.placement import ResolvedPlacement
+from llama_profile_lab.domain.telemetry import (
+    GpuTelemetrySample,
+    RunQuality,
+    RunQualityAssessment,
+    TelemetrySample,
+    TelemetrySummary,
+)
 from llama_profile_lab.domain.search_space import (
     GridStrategy,
     SearchConstraint,
@@ -71,6 +78,7 @@ __all__ = [
     "FixedPlacementPolicy",
     "FractionalDepth",
     "FrozenModel",
+    "GpuTelemetrySample",
     "GridStrategy",
     "MeasurementPolicy",
     "ModelSelection",
@@ -78,6 +86,8 @@ __all__ = [
     "PlacementConfig",
     "PlacementConstraints",
     "ResolvedPlacement",
+    "RunQuality",
+    "RunQualityAssessment",
     "PrefillSuiteCase",
     "PrefillWorkloadCase",
     "SearchConstraint",
@@ -88,6 +98,8 @@ __all__ = [
     "SpeedBenchConfig",
     "SpeedBenchSuiteCase",
     "SpeedBenchWorkloadCase",
+    "TelemetrySample",
+    "TelemetrySummary",
     "WorkloadEnvelope",
     "WorkloadSuite",
     "canonical_json",
