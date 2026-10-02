@@ -335,6 +335,70 @@ class ExperimentRepository:
             completed_at=row["completed_at"],
         )
 
+    def add_candidate(
+        self,
+        *,
+        experiment_id: str,
+        candidate_id: str,
+        ordinal: int,
+        generation_metadata: Mapping[str, Any],
+    ) -> None:
+        """Link one generated Candidate to an experiment."""
+        self.connection.execute(
+            """
+            INSERT INTO experiment_candidate(
+                experiment_id, candidate_id, ordinal, generation_metadata_json
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                experiment_id,
+                candidate_id,
+                ordinal,
+                canonical_json(dict(generation_metadata)),
+            ),
+        )
+
+    def add_workload(
+        self,
+        *,
+        experiment_id: str,
+        candidate_id: str,
+        workload_case_id: str,
+        suite_case_index: int,
+        expansion_provenance: Mapping[str, Any],
+    ) -> None:
+        """Link one Candidate-dependent concrete workload to an experiment."""
+        self.connection.execute(
+            """
+            INSERT INTO experiment_workload(
+                experiment_id, candidate_id, workload_case_id,
+                suite_case_index, expansion_provenance_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                experiment_id,
+                candidate_id,
+                workload_case_id,
+                suite_case_index,
+                canonical_json(dict(expansion_provenance)),
+            ),
+        )
+
+    def mark_planned(self, identifier: str) -> None:
+        """Freeze a draft experiment after its complete plan is persisted."""
+        cursor = self.connection.execute(
+            """
+            UPDATE experiment
+            SET status = 'planned', frozen_at = ?
+            WHERE id = ? AND status = 'draft'
+            """,
+            (_utc_now(), identifier),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("experiment does not exist or is not draft")
+
 
 class BenchmarkCaseRepository:
     """Persistence for planned benchmark cases."""
