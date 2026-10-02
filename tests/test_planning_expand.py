@@ -96,6 +96,8 @@ def test_conditional_dimension_does_not_multiply_when_disabled() -> None:
             ),
         )
     )
-    expansion = expand_search_space(base_candidate(), search)\n
+
+    expansion = expand_search_space(base_candidate(), search)
+
     assert expansion.raw_combinations == 4
     assert len(expansion.candidates) == 4
