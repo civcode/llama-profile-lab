@@ -10,7 +10,11 @@ from typing import Any, Literal
 from llama_profile_lab.db import PlacementRepository
 from llama_profile_lab.db.records import BinaryRecord, ResolvedPlacementRecord
 from llama_profile_lab.domain import Candidate, ResolvedPlacement, sha256_json
-from llama_profile_lab.execution.process import ProcessRunner, ProcessRunnerError
+from llama_profile_lab.execution.process import (
+    ProcessResult,
+    ProcessRunner,
+    ProcessRunnerError,
+)
 from llama_profile_lab.llama import CapabilitySet, sha256_file
 from llama_profile_lab.llama.fit_params import (
     LlamaFitParamsAdapter,
@@ -83,14 +87,18 @@ class PlacementResolver:
                 f"model does not exist: {resolved_model_path}"
             )
 
-        request = placement_request(
-            candidate_id=candidate_id,
+        cache_key = placement_cache_key(
             candidate=candidate,
             hardware_fingerprint=hardware_fingerprint,
             fit_binary=fit_binary,
             model_path=resolved_model_path,
         )
-        placement_hash = sha256_json(request)
+        placement_hash = sha256_json(cache_key)
+        request = placement_request(
+            candidate_id=candidate_id,
+            cache_key=cache_key,
+            model_path=resolved_model_path,
+        )
         cached = self.repository.find_by_hash(placement_hash)
         if cached is not None:
             return PlacementResolution(record=cached, cache_hit=True)
@@ -217,29 +225,26 @@ class PlacementResolver:
         return PlacementResolution(record=record, cache_hit=False)
 
 
-def placement_request(
+def placement_cache_key(
     *,
-    candidate_id: str,
     candidate: Candidate,
     hardware_fingerprint: str,
     fit_binary: BinaryRecord,
     model_path: Path,
 ) -> dict[str, Any]:
-    """Build the deterministic cache-key document for one fit request."""
+    """Build only the fit-relevant, deterministic placement cache identity."""
     stat = model_path.stat()
     return {
-        "schema": "llama-placement-request",
+        "schema": "llama-placement-cache-key",
         "version": 1,
-        "candidate_id": candidate_id,
         "target_model_id": candidate.model.target_model_id,
-        "production_context_size": candidate.context.size,
-        "host_hardware_fingerprint": hardware_fingerprint,
-        "fit_binary_sha256": fit_binary.sha256,
         "model_artifact": {
-            "path": str(model_path),
             "size_bytes": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
         },
+        "production_context_size": candidate.context.size,
+        "host_hardware_fingerprint": hardware_fingerprint,
+        "fit_binary_sha256": fit_binary.sha256,
         "fit_input": {
             "context": {
                 "cache_type_k": candidate.context.cache_type_k,
@@ -267,6 +272,22 @@ def placement_request(
                 for extra in candidate.extra_args
             },
         },
+    }
+
+
+def placement_request(
+    *,
+    candidate_id: str,
+    cache_key: dict[str, Any],
+    model_path: Path,
+) -> dict[str, Any]:
+    """Add non-identity provenance to the persisted placement request."""
+    return {
+        "schema": "llama-placement-request",
+        "version": 1,
+        "source_candidate_id": candidate_id,
+        "model_path": str(model_path),
+        "cache_key": cache_key,
     }
 
 
@@ -337,12 +358,9 @@ def _capabilities(binary: BinaryRecord) -> CapabilitySet:
     )
 
 
-def _fit_process_failure_kind(process: object) -> PlacementFailureKind | None:
-    # Typed this way to keep the lifecycle mapping independent of persistence DTOs.
-    from llama_profile_lab.execution.process import ProcessResult
-
-    if not isinstance(process, ProcessResult):
-        raise TypeError("expected ProcessResult")
+def _fit_process_failure_kind(
+    process: ProcessResult,
+) -> PlacementFailureKind | None:
     if process.interrupted:
         return "interrupted"
     if process.cancelled:
