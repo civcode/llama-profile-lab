@@ -232,6 +232,9 @@ class ExperimentExecutor:
             limited = False
 
             for case in pending:
+                if cancel_event is not None and cancel_event.is_set():
+                    interrupted = True
+                    break
                 if limit is not None and attempted >= limit:
                     limited = True
                     break
