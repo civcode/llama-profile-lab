@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import http.client
 import os
 import signal
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Event
@@ -178,14 +177,30 @@ class ManagedServerProcess:
 
 
 def _health_ready(url: str) -> bool:
-    request = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=1.0) as response:
-            return response.status == 200
-    except urllib.error.HTTPError as exc:
-        return exc.code == 200
-    except (urllib.error.URLError, TimeoutError, OSError):
+    prefix = "http://"
+    if not url.startswith(prefix):
         return False
+    authority, separator, raw_path = url.removeprefix(prefix).partition("/")
+    if not separator:
+        raw_path = ""
+    host, colon, raw_port = authority.rpartition(":")
+    if not colon or not host:
+        return False
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return False
+
+    connection = http.client.HTTPConnection(host, port, timeout=1.0)
+    try:
+        connection.request("GET", "/" + raw_path)
+        response = connection.getresponse()
+        response.read()
+        return response.status == 200
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        connection.close()
 
 
 def _signal_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
