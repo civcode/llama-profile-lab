@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from statistics import fmean
 
 from llama_profile_lab.analysis import (
     DEFAULT_METRIC_REGISTRY,
@@ -426,6 +427,13 @@ class ApiService:
                 raw_ts = latest_metrics.get("avg_ts")
                 if raw_ts is not None:
                     latest_tokens_per_second = float(raw_ts)
+                else:
+                    samples = BenchmarkRunRepository(connection).samples(latest_run_id)
+                    if samples:
+                        latest_tokens_per_second = fmean(
+                            float(tokens_per_second)
+                            for _, _, tokens_per_second in samples
+                        )
 
         return ExperimentProgressDTO(
             experiment_id=experiment_id,
