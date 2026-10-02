@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Literal
 
 from llama_profile_lab.db import (
     CandidateRepository,
@@ -33,10 +34,15 @@ from llama_profile_lab.execution.placement import (
     resolved_placement_from_record,
     validate_fixed_placement,
 )
-from llama_profile_lab.execution.process import ProcessRunner, ProcessRunnerError
+from llama_profile_lab.execution.process import (
+    ProcessResult,
+    ProcessRunner,
+    ProcessRunnerError,
+)
 from llama_profile_lab.execution.server_process import (
     ManagedServerProcess,
     ServerProcessError,
+    ServerProcessOutcome,
 )
 from llama_profile_lab.llama import (
     CapabilitySet,
@@ -348,7 +354,7 @@ class ServerValidationService:
             benchmark_ids: list[str] = []
             terminal_status: ServerRunStatus = "completed"
             failure_reason: str | None = None
-            outcome = None
+            outcome: ServerProcessOutcome
             try:
                 server.start()
                 ready_at = server.wait_ready(
@@ -531,7 +537,7 @@ class ServerValidationService:
         return final_status, reason
 
 
-def _speed_process_status(process: Any) -> ServerBenchmarkStatus:
+def _speed_process_status(process: ProcessResult) -> ServerBenchmarkStatus:
     if process.interrupted:
         return "interrupted"
     if process.cancelled:
@@ -554,7 +560,7 @@ def _server_error_status(exc: ServerProcessError) -> ServerRunStatus:
 
 
 def _select_placement(
-    connection: Any,
+    connection: sqlite3.Connection,
     repository: PlacementRepository,
     *,
     experiment_id: str,
@@ -590,7 +596,7 @@ def _select_placement(
 
 
 def _speed_workloads(
-    connection: Any,
+    connection: sqlite3.Connection,
     repository: WorkloadCaseRepository,
     *,
     experiment_id: str,
@@ -651,7 +657,10 @@ def _verify_binary(binary: BinaryRecord, expected_kind: str) -> None:
         )
 
 
-def _capabilities(binary: BinaryRecord, expected_kind: str) -> CapabilitySet:
+def _capabilities(
+    binary: BinaryRecord,
+    expected_kind: Literal["llama-server", "speed-bench"],
+) -> CapabilitySet:
     if expected_kind not in {"llama-server", "speed-bench"}:
         raise ValueError(f"unsupported capability kind: {expected_kind}")
     return CapabilitySet.from_mapping(

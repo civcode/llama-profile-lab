@@ -125,17 +125,14 @@ def parse_speed_bench_json(text: str) -> SpeedBenchResult:
         raise SpeedBenchParseError("SPEED-Bench output must contain one overall summary")
     row = overall_rows[0]
 
+    avg_latency = _optional_float(row, "avg_latency")
     normalized = SpeedBenchSummary(
         requests=_required_int(row, "requests"),
         turns=_required_int(row, "turns"),
         failed=_required_int(row, "failed"),
         avg_prompt_ts=_optional_float(row, "avg_prompt_t_s"),
         avg_pred_ts=_optional_float(row, "avg_pred_t_s"),
-        avg_latency_ms=(
-            None
-            if _optional_float(row, "avg_latency") is None
-            else _optional_float(row, "avg_latency") * 1000.0
-        ),
+        avg_latency_ms=None if avg_latency is None else avg_latency * 1000.0,
         draft_n=_required_int(row, "draft_n"),
         accepted_n=_required_int(row, "accepted"),
         accept_rate=_optional_float(row, "accept_rate"),

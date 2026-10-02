@@ -25,6 +25,8 @@ from llama_profile_lab.domain import (
     PrefillSuiteCase,
     SearchDimension,
     SearchSpace,
+    SpeedBenchConfig,
+    SpeedBenchSuiteCase,
     WorkloadSuite,
 )
 from llama_profile_lab.planning import plan_experiment
@@ -162,3 +164,69 @@ def test_reference_experiment_persists_eleven_candidates_and_44_cases(
             ).fetchall()
         }
         assert tg_mid_depths == {65408}
+
+
+
+def test_speed_bench_workload_is_persisted_without_llama_bench_case(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "server-workload.db")
+    base = Candidate(
+        model=ModelSelection(target_model_id="model:server"),
+        context=ContextConfig(
+            size=8192,
+            cache_type_k="q8_0",
+            cache_type_v="q8_0",
+        ),
+        compute=ComputeConfig(batch_size=2048, ubatch_size=512),
+        placement=PlacementConfig(
+            mode="fit",
+            fit=FitConfig(target_mib=256, min_context=4096),
+        ),
+    )
+    search = SearchSpace(
+        dimensions=(SearchDimension(path="compute.batch_size", values=(2048,)),)
+    )
+    suite = WorkloadSuite(
+        id="server-only",
+        cases=(
+            SpeedBenchSuiteCase(
+                speed_bench=SpeedBenchConfig(
+                    bench="throughput_1k",
+                    categories=("all",),
+                    output_tokens=128,
+                )
+            ),
+        ),
+    )
+    policy = MeasurementPolicy(repetitions=3)
+
+    with database.session() as connection:
+        candidate_id = CandidateRepository(connection).put(base)
+        search_id = SearchSpaceRepository(connection).put(search)
+        suite_id = WorkloadSuiteRepository(connection).put(suite)
+        policy_id = MeasurementPolicyRepository(connection).put(policy)
+        experiment_id = ExperimentRepository(connection).create(
+            ExperimentDefinition(
+                name="server-only workload",
+                base_candidate_id=candidate_id,
+                search_space_id=search_id,
+                workload_suite_id=suite_id,
+                measurement_policy_id=policy_id,
+            )
+        )
+        summary = plan_experiment(connection, experiment_id)
+        workload_count = connection.execute(
+            "SELECT COUNT(*) FROM experiment_workload WHERE experiment_id = ?",
+            (experiment_id,),
+        ).fetchone()[0]
+        benchmark_count = connection.execute(
+            "SELECT COUNT(*) FROM benchmark_case WHERE experiment_id = ?",
+            (experiment_id,),
+        ).fetchone()[0]
+
+    assert summary.candidate_count == 1
+    assert summary.unique_workload_count == 1
+    assert summary.benchmark_case_count == 0
+    assert workload_count == 1
+    assert benchmark_count == 0

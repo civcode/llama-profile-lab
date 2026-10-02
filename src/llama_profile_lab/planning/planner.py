@@ -16,6 +16,7 @@ from llama_profile_lab.db import (
     transaction,
 )
 from llama_profile_lab.domain import Candidate, SearchSpace, WorkloadSuite
+from llama_profile_lab.domain.workload import SpeedBenchWorkloadCase
 from llama_profile_lab.planning.expand import (
     CandidatePoint,
     PlanningError,
@@ -46,7 +47,12 @@ class ExperimentPlan:
 
     @property
     def benchmark_case_count(self) -> int:
-        return sum(len(candidate.workloads) for candidate in self.candidates)
+        return sum(
+            1
+            for candidate in self.candidates
+            for workload in candidate.workloads
+            if not isinstance(workload.case, SpeedBenchWorkloadCase)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,13 +159,14 @@ def plan_experiment(
                     suite_case_index=workload.suite_case_index,
                     expansion_provenance=workload.provenance,
                 )
-                benchmark_repo.put_planned(
-                    experiment_id=experiment_id,
-                    candidate_id=candidate_id,
-                    workload_case_id=workload_id,
-                    ordinal=case_ordinal,
-                )
-                case_ordinal += 1
+                if not isinstance(workload.case, SpeedBenchWorkloadCase):
+                    benchmark_repo.put_planned(
+                        experiment_id=experiment_id,
+                        candidate_id=candidate_id,
+                        workload_case_id=workload_id,
+                        ordinal=case_ordinal,
+                    )
+                    case_ordinal += 1
 
         experiments.mark_planned(experiment_id)
 

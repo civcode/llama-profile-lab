@@ -187,6 +187,7 @@ class LlamaServerAdapter:
             false_option="--no-kv-offload",
             false_fallbacks=("-nkvo",),
             value=candidate.context.kv_offload,
+            default_value=True,
         )
         _append_boolean_pair(
             argv,
@@ -196,6 +197,7 @@ class LlamaServerAdapter:
             false_option="--no-kv-unified",
             false_fallbacks=("-no-kvu",),
             value=candidate.context.kv_unified,
+            default_value=True,
         )
         _append_boolean_pair(
             argv,
@@ -205,6 +207,7 @@ class LlamaServerAdapter:
             false_option="--no-op-offload",
             false_fallbacks=(),
             value=not candidate.compute.no_op_offload,
+            default_value=True,
         )
         _append_boolean_pair(
             argv,
@@ -214,6 +217,7 @@ class LlamaServerAdapter:
             false_option="--no-repack",
             false_fallbacks=("-nr",),
             value=candidate.compute.repack,
+            default_value=True,
         )
         if candidate.compute.no_host:
             _append_flag(argv, capabilities, "--no-host", ())
@@ -341,11 +345,22 @@ def _append_boolean_pair(
     false_option: str,
     false_fallbacks: tuple[str, ...],
     value: bool,
+    default_value: bool,
 ) -> None:
-    if value:
-        _append_flag(argv, capabilities, true_option, true_fallbacks)
-    else:
-        _append_flag(argv, capabilities, false_option, false_fallbacks)
+    preferred = true_option if value else false_option
+    fallbacks = true_fallbacks if value else false_fallbacks
+    if capabilities.supports(preferred):
+        argv.append(preferred)
+        return
+    for fallback in fallbacks:
+        if capabilities.supports(fallback):
+            argv.append(fallback)
+            return
+    if value == default_value:
+        return
+    raise LlamaServerConfigurationError(
+        f"server binary cannot represent required boolean option {preferred}"
+    )
 
 
 def _append_extra(
