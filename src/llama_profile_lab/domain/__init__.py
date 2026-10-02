@@ -29,6 +29,7 @@ from llama_profile_lab.domain.measurement import (
     AdaptiveMeasurementPolicy,
     MeasurementPolicy,
 )
+from llama_profile_lab.domain.placement import ResolvedPlacement
 from llama_profile_lab.domain.search_space import (
     GridStrategy,
     SearchConstraint,
@@ -76,6 +77,7 @@ __all__ = [
     "PerCandidatePlacementPolicy",
     "PlacementConfig",
     "PlacementConstraints",
+    "ResolvedPlacement",
     "PrefillSuiteCase",
     "PrefillWorkloadCase",
     "SearchConstraint",
