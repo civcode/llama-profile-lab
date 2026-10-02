@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  push:
   workflow_dispatch:
 
 permissions:
@@ -57,4 +56,3 @@ jobs:
       - name: Frontend build
         working-directory: frontend
         run: npm run build
-
