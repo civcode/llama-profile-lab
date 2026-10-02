@@ -17,6 +17,7 @@ from llama_profile_lab.archive import (
     serialize_experiment_export,
 )
 from llama_profile_lab.cli.main import main
+from llama_profile_lab.db import Database
 from tests.analysis_helpers import seed_analysis_experiment
 
 
