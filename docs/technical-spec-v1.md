@@ -1,0 +1,2319 @@
+# llama-profile-lab — V1 Technical Specification
+
+Status: Draft for implementation  
+Repository: civcode/llama-profile-lab  
+CLI name: llprof  
+Primary implementation language: Python 3.12+  
+Primary datastore: SQLite  
+UI: local web application backed by the same Python service and SQLite database
+
+## 1. Purpose
+
+llama-profile-lab is a local experiment, benchmarking, and tuning environment for llama.cpp profiles.
+
+Its purpose is not merely to run llama-bench. It should provide a reproducible scientific record of model-performance experiments across:
+
+- model and quantization choices;
+- llama.cpp runtime parameters;
+- placement and memory-fitting choices;
+- prompt/prefill workloads;
+- token-generation workloads;
+- context depths;
+- speculative decoding configurations;
+- CPU and GPU utilization;
+- llama.cpp builds;
+- hardware and driver changes;
+- repeated measurements over time.
+
+The system must make simple experiments easy while retaining enough structure to represent arbitrary N-dimensional parameter sweeps and workload spaces.
+
+The primary UX principle is:
+
+> Simple experiments should feel like filling out a small form, while the underlying model remains expressive enough for arbitrarily high-dimensional sweeps.
+
+Users should normally think in terms such as “vary batch size and ubatch size” and “measure four workloads,” not database IDs, hashes, or llama.cpp implementation details.
+
+## 2. V1 goals
+
+V1 SHALL support:
+
+1. Importing and resolving model profiles from llama-profile-launcher.
+2. Defining a base candidate and varying one or more tunable parameters.
+3. N-dimensional grid search with constraints.
+4. Candidate generation independent of workload generation.
+5. llama-fit-params placement resolution against the production context size.
+6. Frozen-placement llama-bench execution.
+7. Prompt-processing and token-generation benchmarks.
+8. Multiple context depths.
+9. Multiple repetitions and preservation of every individual sample.
+10. CPU and GPU telemetry during runs.
+11. SQLite persistence of all experiment metadata, plans, execution records, raw results, normalized metrics, failures, and provenance.
+12. Resumable experiments.
+13. Comparison against a baseline candidate.
+14. Pareto-style analysis across competing metrics.
+15. Full llama-server validation for finalists.
+16. SPEED-Bench support for end-to-end and speculative-decoding validation.
+17. A CLI suitable for scripting and automation.
+18. A local browser UI suitable for experiment creation and multidimensional result exploration.
+19. Capability detection per llama.cpp binary.
+20. Long-form llama.cpp arguments wherever a long form exists.
+
+## 3. Non-goals for V1
+
+V1 does not need:
+
+- distributed execution across multiple hosts;
+- remote multi-user authentication;
+- cloud-hosted persistence;
+- generic cluster scheduling;
+- automatic modification of llama-profile-launcher profiles without an explicit user action;
+- Bayesian optimization;
+- a plugin system for arbitrary inference engines other than llama.cpp;
+- a literal visualization of dimensions above three.
+
+The architecture SHOULD leave room for these features without requiring a redesign of the persistence model.
+
+## 4. Core conceptual model
+
+The system models benchmarking as observations over three independent spaces:
+
+~~~text
+Candidate space
+    ×
+Workload space
+    ×
+Execution environment
+    ↓
+Observation vector
+~~~
+
+A candidate is one concrete point in the tunable-parameter space.
+
+A workload case is one concrete point in the workload space.
+
+An execution environment includes the host, llama.cpp binary/build, resolved placement, measurement policy, and runtime state.
+
+An observation may contain multiple values:
+
+~~~text
+tokens/s
+elapsed time
+CPU utilization
+GPU utilization
+VRAM
+RAM
+power
+temperature
+clock rates
+speculative acceptance
+latency
+...
+~~~
+
+The persistence layer MUST store observed points, not dense matrices or tensors. Matrix, cube, tensor, heatmap, slice, and projection views are derived from stored observations.
+
+This makes sparse search spaces natural and allows higher-order searches without schema changes.
+
+## 5. Architectural principles
+
+### 5.1 Planning and execution are separate
+
+The planner is pure application logic.
+
+It SHALL:
+
+- resolve a source profile;
+- apply experiment dimensions;
+- validate constraints;
+- create immutable candidates;
+- expand workload suites into concrete workload cases;
+- determine whether placement resolution is required;
+- create planned benchmark cases;
+- persist the plan before execution begins.
+
+The planner SHALL NOT launch subprocesses.
+
+The executor SHALL consume planned work from SQLite.
+
+### 5.2 Experiments are immutable after execution begins
+
+Before execution, a draft experiment may be edited.
+
+When the first run starts, the experiment definition is frozen.
+
+Changing a frozen experiment means cloning it into a new experiment.
+
+### 5.3 Historical observations are append-only
+
+Completed benchmark runs SHALL NOT be overwritten.
+
+A rerun creates a new run.
+
+Failures are retained as data.
+
+### 5.4 Raw measurements are authoritative
+
+Optimization objectives are analysis policies, not properties of a run.
+
+The system MUST preserve the underlying observations so results can later be reevaluated using different objectives.
+
+For example, the same historical data may later be used to optimize for:
+
+- highest prefill throughput;
+- highest decode throughput;
+- request latency;
+- CPU usage below a threshold;
+- lowest power;
+- best long-context behavior;
+- a Pareto frontier across multiple metrics.
+
+### 5.5 Requested placement and resolved placement are different entities
+
+A candidate stores the requested placement policy.
+
+llama-fit-params produces a resolved placement for a particular host/build/configuration.
+
+The resolved placement is stored separately and referenced by benchmark runs.
+
+### 5.6 Production context and active depth are different concepts
+
+Candidate context size represents production maximum context.
+
+Workload depth represents active context at the point being benchmarked.
+
+Production context SHALL be used when resolving memory placement.
+
+Active depth SHALL be used for llama-bench workload execution.
+
+### 5.7 SQLite is the canonical experiment record
+
+JSON, JSONL, CSV, logs, and reports are import/export or artifact formats.
+
+SQLite is the source of truth for experiment history.
+
+## 6. Technology decisions
+
+### 6.1 Backend
+
+- Python 3.12+
+- Pydantic v2 for public schemas and validation
+- sqlite3 from the standard library for core persistence
+- FastAPI for the local HTTP API
+- subprocess-based process execution with shell disabled
+- standard logging with structured context
+- pathlib for paths
+- hashlib for content identities
+- JSON canonicalization for content-addressed objects
+
+SQLAlchemy is not required in V1.
+
+A thin repository layer SHALL isolate raw SQL from domain logic.
+
+### 6.2 Frontend
+
+- React
+- TypeScript
+- a small charting library selected during implementation
+- API served by the local Python process
+- local-only binding to 127.0.0.1 by default
+
+### 6.3 CLI
+
+Executable name:
+
+~~~text
+llprof
+~~~
+
+The CLI and web UI MUST use the same service/domain layer.
+
+Neither surface may contain independent experiment logic.
+
+## 7. Repository structure
+
+Recommended initial structure:
+
+~~~text
+llama-profile-lab/
+  pyproject.toml
+  README.md
+
+  docs/
+    technical-spec-v1.md
+
+  src/
+    llama_profile_lab/
+      domain/
+        candidate.py
+        workload.py
+        experiment.py
+        search_space.py
+        placement.py
+        measurement.py
+        run.py
+        parameters.py
+
+      planning/
+        planner.py
+        expand.py
+        constraints.py
+        strategies.py
+
+      execution/
+        process.py
+        executor.py
+        scheduler.py
+        lock.py
+        telemetry.py
+
+      llama/
+        capabilities.py
+        args.py
+        bench.py
+        fit_params.py
+        server.py
+        speed_bench.py
+        launcher.py
+
+      db/
+        connection.py
+        repositories.py
+        migrations.py
+
+      analysis/
+        metrics.py
+        statistics.py
+        pareto.py
+        latency.py
+        projections.py
+
+      api/
+        app.py
+        experiments.py
+        runs.py
+        results.py
+        profiles.py
+
+      cli/
+        main.py
+
+  migrations/
+    001_initial.sql
+    002_telemetry.sql
+    ...
+
+  frontend/
+    ...
+
+  tests/
+    unit/
+    integration/
+    fixtures/
+~~~
+
+## 8. Canonical JSON and content identities
+
+Candidates, workload cases, measurement policies, and other reusable immutable definitions SHALL have canonical JSON representations.
+
+Canonicalization:
+
+~~~python
+json.dumps(
+    value,
+    sort_keys=True,
+    separators=(",", ":"),
+    ensure_ascii=False,
+)
+~~~
+
+Identity:
+
+~~~text
+sha256(canonical_json_utf8)
+~~~
+
+A short display ID MAY use a prefix of the SHA-256 hash, but the full hash SHALL be stored.
+
+Content hashes SHALL exclude labels, descriptions, display order, experiment names, timestamps, and other non-semantic metadata.
+
+Run identity is different: the same condition may be executed many times, so each run receives a unique event ID.
+
+## 9. Candidate schema
+
+A Candidate is an immutable performance-relevant configuration.
+
+Candidate schema version 1:
+
+~~~json
+{
+  "schema": "llama-profile-candidate",
+  "version": 1,
+
+  "model": {
+    "target_model_id": "model:sha256:...",
+    "draft_model_id": null
+  },
+
+  "context": {
+    "size": 131072,
+    "cache_type_k": "f16",
+    "cache_type_v": "f16",
+    "kv_offload": true,
+    "kv_unified": true
+  },
+
+  "compute": {
+    "flash_attn": "on",
+    "batch_size": 4096,
+    "ubatch_size": 2048,
+    "threads": 16,
+    "load_mode": "mmap",
+    "lazy_mode": "on",
+    "repack": true,
+    "no_host": false,
+    "no_op_offload": false
+  },
+
+  "placement": {
+    "mode": "fit",
+
+    "fit": {
+      "target_mib": 256,
+      "min_context": 4096
+    },
+
+    "constraints": {
+      "n_gpu_layers": "auto",
+      "n_cpu_moe": 0,
+      "split_mode": "layer",
+      "main_gpu": 0,
+      "devices": "auto",
+      "tensor_split": null,
+      "override_tensor": []
+    }
+  },
+
+  "server": {
+    "parallel": 1
+  },
+
+  "speculative": {
+    "enabled": false,
+    "type": null,
+    "draft_n_max": null
+  },
+
+  "extra_args": {}
+}
+~~~
+
+### 9.1 Candidate validation
+
+At minimum:
+
+- context.size > 0
+- batch_size > 0
+- ubatch_size > 0
+- ubatch_size <= batch_size
+- threads > 0 when set
+- server.parallel >= 1
+- speculative.draft_n_max is null when speculative is disabled
+- placement.fit is non-null when placement.mode is fit
+- fixed-placement-only fields are rejected when incompatible with the selected mode
+- parameter registry constraints are satisfied
+
+### 9.2 Effective defaults
+
+Performance-relevant defaults SHALL be resolved before Candidate creation whenever feasible.
+
+The system MUST distinguish:
+
+- source profile did not specify a value;
+- launcher inheritance supplied a value;
+- llama.cpp binary default supplied a value;
+- the user explicitly overrode a value;
+- the system derived a value.
+
+Provenance MAY be stored separately from Candidate identity.
+
+### 9.3 extra_args
+
+extra_args is an escape hatch for supported llama.cpp options not yet represented by typed Candidate fields.
+
+Requirements:
+
+- values participate in Candidate hashing;
+- shell strings are forbidden;
+- each item is represented as an argument name plus typed/string value;
+- capability checks still apply;
+- the UI places these values in an Advanced section.
+
+## 10. Parameter registry
+
+Performance parameters SHALL be described centrally.
+
+Example conceptual definition:
+
+~~~python
+ParameterDefinition(
+    path="compute.ubatch_size",
+    value_type=int,
+    cli_argument="--ubatch-size",
+    minimum=1,
+    affects_placement=True,
+    supported_by={
+        "llama-bench",
+        "llama-server",
+        "llama-fit-params",
+    },
+    category="Compute",
+    label="Physical batch size",
+)
+~~~
+
+A speculative parameter:
+
+~~~python
+ParameterDefinition(
+    path="speculative.draft_n_max",
+    value_type=int,
+    cli_argument="--spec-draft-n-max",
+    affects_placement=False,
+    supported_by={"llama-server"},
+    category="Speculative decoding",
+    condition="speculative.enabled == true",
+)
+~~~
+
+The registry is the source for:
+
+- backend validation;
+- search-space validation;
+- CLI argument generation;
+- capability matching;
+- frontend controls;
+- descriptions and categories;
+- whether changing a value requires refitting;
+- applicability conditions.
+
+## 11. Search-space schema
+
+A SearchSpace represents an N-dimensional tunable parameter space.
+
+~~~json
+{
+  "schema": "llama-search-space",
+  "version": 1,
+
+  "dimensions": [
+    {
+      "path": "compute.batch_size",
+      "values": [2048, 4096, 8192]
+    },
+    {
+      "path": "compute.ubatch_size",
+      "values": [512, 1024, 2048, 4096]
+    }
+  ],
+
+  "constraints": [
+    "compute.ubatch_size <= compute.batch_size"
+  ],
+
+  "strategy": {
+    "type": "grid"
+  }
+}
+~~~
+
+V1 SHALL implement deterministic grid expansion.
+
+The architecture SHALL allow future strategies such as:
+
+- random sampling;
+- coarse-to-fine search;
+- successive halving;
+- Latin hypercube sampling;
+- Bayesian optimization.
+
+Search strategy changes SHALL NOT alter Candidate identity or persistence.
+
+### 11.1 Conditional dimensions
+
+The schema SHALL support dimensions that only apply when a condition is true.
+
+Example:
+
+~~~json
+{
+  "path": "speculative.draft_n_max",
+  "values": [1, 2, 3, 4],
+  "condition": "speculative.enabled == true"
+}
+~~~
+
+### 11.2 Constraint language
+
+V1 MAY implement constraints using an internal typed expression model rather than evaluating arbitrary Python.
+
+Arbitrary eval SHALL NOT be used.
+
+The initial implementation only needs:
+
+- equality and inequality;
+- numeric comparison;
+- boolean conjunction/disjunction;
+- membership;
+- references to Candidate paths.
+
+## 12. WorkloadSuite schema
+
+A WorkloadSuite is human-authored and may contain relative depth expressions.
+
+Example:
+
+~~~json
+{
+  "schema": "llama-workload-suite",
+  "version": 1,
+
+  "id": "batch-ubatch-screen-v1",
+  "description": "Screen batch and ubatch tradeoffs",
+
+  "cases": [
+    {
+      "label": "pp-2k",
+      "kind": "microbench-prefill",
+      "prompt_tokens": 2048,
+      "depth": {
+        "type": "absolute",
+        "tokens": 0
+      }
+    },
+    {
+      "label": "pp-8k",
+      "kind": "microbench-prefill",
+      "prompt_tokens": 8192,
+      "depth": {
+        "type": "absolute",
+        "tokens": 0
+      }
+    },
+    {
+      "label": "tg-short",
+      "kind": "microbench-decode",
+      "generate_tokens": 256,
+      "depth": {
+        "type": "absolute",
+        "tokens": 4096
+      }
+    },
+    {
+      "label": "tg-mid",
+      "kind": "microbench-decode",
+      "generate_tokens": 256,
+      "depth": {
+        "type": "fraction",
+        "value": 0.50
+      }
+    }
+  ]
+}
+~~~
+
+## 13. WorkloadCase schema
+
+WorkloadSuite entries are expanded against a Candidate into immutable concrete WorkloadCases.
+
+No percentages, symbolic values, or implicit defaults remain after expansion.
+
+### 13.1 Prefill case
+
+~~~json
+{
+  "schema": "llama-workload-case",
+  "version": 1,
+  "kind": "microbench-prefill",
+  "prompt_tokens": 2048,
+  "generate_tokens": 0,
+  "depth_tokens": 32768
+}
+~~~
+
+### 13.2 Decode case
+
+~~~json
+{
+  "schema": "llama-workload-case",
+  "version": 1,
+  "kind": "microbench-decode",
+  "prompt_tokens": 0,
+  "generate_tokens": 256,
+  "depth_tokens": 65408
+}
+~~~
+
+### 13.3 Combined case
+
+~~~json
+{
+  "schema": "llama-workload-case",
+  "version": 1,
+  "kind": "microbench-combined",
+  "prompt_tokens": 8192,
+  "generate_tokens": 512,
+  "depth_tokens": 16384
+}
+~~~
+
+### 13.4 SPEED-Bench case
+
+~~~json
+{
+  "schema": "llama-workload-case",
+  "version": 1,
+  "kind": "speed-bench",
+
+  "speed_bench": {
+    "bench": "throughput_32k",
+    "categories": ["all"],
+    "output_tokens": 1024,
+    "concurrency": 1,
+    "limit": 16,
+    "request": {
+      "temperature": 0
+    }
+  }
+}
+~~~
+
+## 14. Relative-depth expansion
+
+For a microbenchmark suite entry with a fractional depth:
+
+~~~text
+available_depth =
+    candidate.context.size
+    - prompt_tokens
+    - generate_tokens
+    - safety_margin_tokens
+
+depth_tokens =
+    floor(available_depth × fraction)
+~~~
+
+Every concrete workload MUST satisfy:
+
+~~~text
+depth_tokens
++ prompt_tokens
++ generate_tokens
+<= candidate.context.size
+~~~
+
+Expansion provenance SHALL be recorded separately from workload identity.
+
+Example provenance:
+
+~~~json
+{
+  "suite_id": "batch-ubatch-screen-v1",
+  "suite_case_index": 3,
+  "candidate_context_size": 131072,
+  "original_depth": {
+    "type": "fraction",
+    "value": 0.5
+  }
+}
+~~~
+
+Labels and expansion metadata do not participate in WorkloadCase hashing.
+
+## 15. MeasurementPolicy schema
+
+Measurement policy is deliberately separate from workload identity.
+
+~~~json
+{
+  "schema": "llama-measurement-policy",
+  "version": 1,
+
+  "warmup": true,
+  "repetitions": 3,
+  "delay_seconds": 0,
+
+  "adaptive": null
+}
+~~~
+
+Future adaptive policy example:
+
+~~~json
+{
+  "warmup": true,
+  "repetitions": null,
+  "delay_seconds": 0,
+
+  "adaptive": {
+    "minimum_repetitions": 3,
+    "maximum_repetitions": 10,
+    "target_relative_error": 0.01
+  }
+}
+~~~
+
+Fixed repetitions are sufficient for initial V1 execution, but the domain model SHOULD permit adaptive stopping.
+
+## 16. Experiment schema
+
+An Experiment connects a base Candidate, a SearchSpace, a WorkloadSuite, a MeasurementPolicy, and execution policy.
+
+~~~json
+{
+  "schema": "llama-tuning-experiment",
+  "version": 1,
+
+  "name": "Flash Next 128K batch/ubatch sweep",
+
+  "base_candidate_id": "cand_...",
+
+  "search_space_id": "space_...",
+  "workload_suite_id": "suite_...",
+  "measurement_policy_id": "measure_...",
+
+  "placement_policy": {
+    "type": "per-candidate"
+  },
+
+  "baseline": {
+    "type": "base-candidate"
+  }
+}
+~~~
+
+Supported placement policies in V1:
+
+### per-candidate
+
+Every candidate that changes placement-sensitive parameters is resolved independently against the production context.
+
+This is the normal deployment-optimization mode.
+
+### fixed
+
+All candidates use a specified resolved placement.
+
+This is useful for controlled parameter-isolation experiments.
+
+~~~json
+{
+  "placement_policy": {
+    "type": "fixed",
+    "placement_id": "place_..."
+  }
+}
+~~~
+
+## 17. Batch/ubatch example
+
+For Flash Next 128K:
+
+~~~text
+batch_size  = 2048, 4096, 8192
+ubatch_size = 512, 1024, 2048, 4096
+
+constraint:
+ubatch_size <= batch_size
+~~~
+
+This yields eleven valid Candidate points.
+
+With four screening workloads:
+
+~~~text
+PP2048 @ d0
+PP8192 @ d0
+TG256  @ d4096
+TG256  @ d50%
+~~~
+
+the plan contains:
+
+~~~text
+11 candidates × 4 workloads = 44 benchmark cases
+~~~
+
+With three repetitions:
+
+~~~text
+44 cases × 3 samples = 132 timed samples
+~~~
+
+The 2D matrix is a presentation of these observations, not their storage form.
+
+Adding KV type produces a 3D space. Adding flash attention, fit target, context, or another parameter produces higher orders without changing the observation model.
+
+## 18. Model identity
+
+A model record SHALL be content-based where practical.
+
+Store:
+
+- logical model ID;
+- architecture;
+- parameter count;
+- quantization;
+- metadata JSON;
+- total size;
+- file records.
+
+For split GGUFs, each shard SHALL be represented in model_file.
+
+A model identity MUST reflect all required shards.
+
+A speculative draft model is another model record referenced by model ID rather than an arbitrary path.
+
+## 19. Binary/build identity and capability detection
+
+Each llama.cpp executable SHALL have a binary record containing:
+
+- path;
+- SHA-256;
+- size;
+- mtime;
+- tool kind;
+- git commit if discoverable;
+- build number if discoverable;
+- branch if discoverable;
+- dirty state if discoverable;
+- compiler/build information;
+- backend information;
+- captured help/version output.
+
+Capabilities SHALL be detected per binary rather than assumed globally.
+
+At minimum inspect:
+
+- llama-bench --help
+- llama-server --help
+- llama-fit-params --help where available
+
+The UI MUST only expose unsupported parameters as unavailable for the selected binary.
+
+Custom Qwen branches and upstream builds may therefore coexist.
+
+## 20. llama.cpp adapters
+
+llama.cpp behavior SHALL be encapsulated behind adapters:
+
+~~~text
+LlamaBenchAdapter
+LlamaFitParamsAdapter
+LlamaServerAdapter
+SpeedBenchAdapter
+LauncherProfileAdapter
+~~~
+
+The experiment engine SHALL NOT know llama.cpp CLI spellings.
+
+Adapters consume typed domain objects and return argv arrays plus typed parsed results.
+
+Long-form arguments SHALL be emitted wherever supported.
+
+Example llama-bench argv:
+
+~~~text
+llama-bench
+--model /path/model.gguf
+--flash-attn on
+--cache-type-k q8_0
+--cache-type-v q8_0
+--batch-size 4096
+--ubatch-size 1024
+--n-gpu-layers 47
+--n-prompt 0
+--n-gen 256
+--n-depth 32768
+--repetitions 7
+--output json
+~~~
+
+argv arrays, not shell strings, are authoritative.
+
+## 21. Placement resolution
+
+The normal V1 deployment workflow is:
+
+~~~text
+Candidate
+   ↓
+llama-fit-params using production context
+   ↓
+ResolvedPlacement
+   ↓
+llama-bench at selected active depths
+~~~
+
+A ResolvedPlacement SHALL record:
+
+- candidate ID;
+- host ID;
+- fit binary ID;
+- production context size;
+- requested fit target;
+- resolved n_gpu_layers;
+- n_cpu_moe;
+- split mode;
+- main GPU;
+- tensor split;
+- tensor overrides;
+- relevant resolved context parameters;
+- complete argv;
+- stdout;
+- stderr;
+- exit status;
+- raw parsed result if available;
+- creation timestamp.
+
+A shallow llama-bench invocation SHALL NOT be allowed to silently refit placement for a production-context experiment.
+
+Once placement has been resolved, llama-bench runs use the concrete placement.
+
+## 22. Process execution
+
+All subprocesses SHALL use argv arrays and shell=False.
+
+A single ProcessRunner abstraction SHALL own:
+
+- start timestamp;
+- PID;
+- stdout capture;
+- stderr capture;
+- exit code;
+- timeout;
+- process-group handling;
+- graceful termination;
+- forced termination;
+- cancellation;
+- cleanup;
+- final status.
+
+The same abstraction SHALL be used for bench, fit, server, and helper processes.
+
+## 23. Host ownership and interference
+
+By default, a performance experiment owns the benchmark host.
+
+The scheduler SHALL acquire a host-level lock before running performance work.
+
+V1 SHALL execute only one benchmark case at a time by default.
+
+The scheduler SHOULD detect:
+
+- an existing llama-server;
+- significant external GPU utilization;
+- significant external CPU utilization;
+- insufficient free memory.
+
+Policy may be configured to:
+
+- warn;
+- wait;
+- proceed and mark the run noisy;
+- fail before execution.
+
+## 24. Run states
+
+A run SHALL have a typed state.
+
+Minimum states:
+
+~~~text
+planned
+running
+completed
+oom
+timeout
+invalid
+fit_failed
+load_failed
+benchmark_failed
+parser_failed
+interrupted
+cancelled
+~~~
+
+Failures are persisted and never discarded.
+
+An orphaned running row found after application restart SHALL be converted to interrupted unless the process can be positively reattached.
+
+## 25. Experiment states
+
+Recommended experiment state machine:
+
+~~~text
+draft
+  ↓
+planned
+  ↓
+running
+  ├── paused
+  │     ↓
+  │   running
+  ↓
+completed
+
+running → cancelled
+running → failed
+~~~
+
+“failed” means the orchestration itself could not continue, not merely that one candidate was OOM.
+
+Experiments may complete with failed individual cases.
+
+## 26. Telemetry
+
+Telemetry is first-class because Flash Next and other architectures may use both CPU and GPU substantially.
+
+Sampling SHALL be performed independently of benchmark computation.
+
+Default target sampling interval:
+
+~~~text
+1000 ms
+~~~
+
+A configurable interval down to approximately 500 ms MAY be supported.
+
+### 26.1 CPU telemetry
+
+Capture when available:
+
+- total system CPU utilization percent;
+- CPU user percent;
+- CPU system percent;
+- CPU iowait percent;
+- process CPU percent normalized to the whole machine;
+- process CPU percent in raw per-core convention;
+- process user time;
+- process system time;
+- process thread count;
+- per-core utilization;
+- average/min/max CPU frequency;
+- CPU/package temperature;
+- load averages;
+- CPU package power when reliably available.
+
+Normalized process CPU semantics:
+
+~~~text
+0–100% represents fraction of total machine CPU capacity
+~~~
+
+Raw process CPU semantics MAY additionally preserve the Linux convention where one fully used logical CPU equals 100%.
+
+### 26.2 Memory telemetry
+
+Capture:
+
+- RAM used;
+- RAM available;
+- swap used;
+- process RSS;
+- process virtual memory where useful.
+
+### 26.3 GPU telemetry
+
+For every relevant GPU capture when available:
+
+- utilization percent;
+- VRAM used;
+- VRAM total;
+- temperature;
+- power;
+- GPU clock;
+- memory clock;
+- throttling indicators where available.
+
+### 26.4 Telemetry providers
+
+Initial abstraction:
+
+~~~python
+class TelemetryProvider:
+    def snapshot(self, process_id: int | None) -> TelemetrySample:
+        ...
+~~~
+
+Initial implementation SHOULD use Linux /proc and /sys for portable CPU/process data.
+
+Vendor-specific GPU or power providers may be layered on top.
+
+### 26.5 Run-quality classification
+
+Derived run quality MAY include:
+
+~~~text
+clean
+noisy
+thermal_throttle
+external_cpu_load
+external_gpu_load
+telemetry_incomplete
+~~~
+
+The raw run remains stored regardless of quality classification.
+
+## 27. Derived run summaries
+
+For each completed run derive and persist or expose:
+
+Performance:
+
+- mean tokens/s;
+- median tokens/s;
+- standard deviation;
+- coefficient of variation;
+- min;
+- max;
+- sample count.
+
+CPU:
+
+- mean/peak system CPU;
+- mean/peak process CPU;
+- CPU user time;
+- CPU system time;
+- average/min CPU frequency;
+- average/max CPU temperature;
+- CPU seconds per 1000 tokens where applicable.
+
+GPU:
+
+- mean/peak utilization;
+- peak VRAM;
+- average/max temperature;
+- average power;
+- energy estimate where sampling permits.
+
+These values are derived from preserved raw samples and can be recomputed.
+
+## 28. SQLite design principles
+
+SQLite SHALL run with:
+
+~~~sql
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
+~~~
+
+Schema changes SHALL use numbered migrations.
+
+CREATE TABLE IF NOT EXISTS is not a migration strategy.
+
+One database SHOULD contain all experiments for a host/project installation.
+
+Recommended default location is configurable; a user-data location is preferable to placing runtime data in the source repository.
+
+## 29. Core SQLite tables
+
+The exact DDL belongs in implementation migrations, but V1 SHALL represent at least the following entities.
+
+### host
+
+~~~text
+id
+hostname
+hardware_fingerprint
+cpu_json
+ram_bytes
+gpu_json
+os_json
+created_at
+~~~
+
+### binary
+
+~~~text
+id
+sha256
+kind
+path
+size_bytes
+mtime_ns
+git_commit
+git_branch
+git_dirty
+build_number
+build_info_json
+capabilities_json
+created_at
+~~~
+
+### model
+
+~~~text
+id
+identity_hash
+architecture
+parameter_count
+quantization
+size_bytes
+metadata_json
+created_at
+~~~
+
+### model_file
+
+~~~text
+id
+model_id
+part_index
+path
+sha256
+size_bytes
+~~~
+
+### candidate
+
+~~~text
+id
+config_hash UNIQUE
+target_model_id
+draft_model_id
+context_size
+batch_size
+ubatch_size
+cache_type_k
+cache_type_v
+flash_attn
+fit_target_mib
+config_json
+created_at
+~~~
+
+Frequently queried fields are normalized into typed columns.
+
+The complete canonical Candidate remains in config_json.
+
+### workload_suite
+
+~~~text
+id
+definition_hash
+name
+definition_json
+created_at
+~~~
+
+### workload_case
+
+~~~text
+id
+workload_hash UNIQUE
+kind
+prompt_tokens
+generate_tokens
+depth_tokens
+definition_json
+created_at
+~~~
+
+### measurement_policy
+
+~~~text
+id
+policy_hash UNIQUE
+definition_json
+created_at
+~~~
+
+### experiment
+
+~~~text
+id
+name
+status
+base_candidate_id
+search_space_json
+workload_suite_id
+measurement_policy_id
+placement_policy_json
+baseline_json
+created_at
+frozen_at
+completed_at
+~~~
+
+### experiment_candidate
+
+~~~text
+experiment_id
+candidate_id
+ordinal
+generation_metadata_json
+~~~
+
+### experiment_workload
+
+~~~text
+experiment_id
+workload_case_id
+suite_case_index
+expansion_provenance_json
+~~~
+
+### resolved_placement
+
+~~~text
+id
+placement_hash
+candidate_id
+host_id
+binary_id
+production_context_size
+n_gpu_layers
+n_cpu_moe
+split_mode
+main_gpu
+tensor_split_json
+override_tensor_json
+argv_json
+stdout
+stderr
+exit_code
+raw_result_json
+created_at
+~~~
+
+### benchmark_case
+
+~~~text
+id
+experiment_id
+candidate_id
+workload_case_id
+placement_id
+case_hash
+status
+ordinal
+~~~
+
+### benchmark_run
+
+~~~text
+id
+benchmark_case_id
+host_id
+binary_id
+measurement_policy_id
+started_at
+finished_at
+duration_ns
+status
+exit_code
+argv_json
+environment_json
+stdout
+stderr
+raw_result_json
+quality
+quality_details_json
+~~~
+
+### benchmark_sample
+
+~~~text
+run_id
+sample_index
+elapsed_ns
+tokens_per_second
+~~~
+
+### telemetry_sample
+
+~~~text
+run_id
+timestamp_ns
+
+cpu_system_pct
+cpu_user_pct
+cpu_system_mode_pct
+cpu_iowait_pct
+process_cpu_pct_normalized
+process_cpu_pct_raw
+process_user_time_ns
+process_system_time_ns
+process_threads
+cpu_freq_avg_hz
+cpu_freq_min_hz
+cpu_freq_max_hz
+cpu_temperature_c
+load_avg_1m
+load_avg_5m
+
+ram_used_bytes
+ram_available_bytes
+swap_used_bytes
+process_rss_bytes
+
+gpu_json
+cpu_per_core_json
+extra_json
+~~~
+
+### metric
+
+A generic fact table MAY be used for secondary or server metrics:
+
+~~~text
+run_id
+metric_name
+value_real
+value_integer
+unit
+dimensions_json
+~~~
+
+High-value frequently queried metrics SHOULD remain normalized where appropriate.
+
+### server_run
+
+~~~text
+id
+experiment_id
+candidate_id
+placement_id
+host_id
+server_binary_id
+target_model_id
+draft_model_id
+spec_type
+spec_draft_n_max
+argv_json
+started_at
+ready_at
+finished_at
+status
+stdout
+stderr
+~~~
+
+### server_benchmark
+
+~~~text
+id
+server_run_id
+workload_case_id
+avg_prompt_ts
+avg_pred_ts
+avg_latency_ms
+draft_n
+accepted_n
+accept_rate
+raw_json
+created_at
+~~~
+
+### candidate_evaluation
+
+~~~text
+id
+experiment_id
+candidate_id
+stage
+decision
+reason
+metrics_json
+created_at
+~~~
+
+## 30. SQLite indexes
+
+At minimum:
+
+~~~sql
+CREATE INDEX idx_run_case
+ON benchmark_run(benchmark_case_id);
+
+CREATE INDEX idx_run_started
+ON benchmark_run(started_at);
+
+CREATE INDEX idx_sample_run
+ON benchmark_sample(run_id);
+
+CREATE INDEX idx_telemetry_run
+ON telemetry_sample(run_id, timestamp_ns);
+
+CREATE INDEX idx_case_candidate
+ON benchmark_case(candidate_id);
+
+CREATE INDEX idx_placement_candidate
+ON resolved_placement(candidate_id);
+
+CREATE UNIQUE INDEX idx_candidate_hash
+ON candidate(config_hash);
+
+CREATE UNIQUE INDEX idx_workload_hash
+ON workload_case(workload_hash);
+~~~
+
+Additional indexes SHALL be added based on observed query patterns rather than speculative over-indexing.
+
+## 31. Raw data retention
+
+The database SHALL preserve:
+
+- complete candidate JSON;
+- complete workload JSON;
+- complete measurement-policy JSON;
+- argv arrays;
+- environment snapshots;
+- raw llama-bench JSON;
+- raw SPEED-Bench JSON;
+- stdout;
+- stderr;
+- individual samples;
+- telemetry.
+
+This allows future parsers and analysis code to reinterpret historical runs.
+
+Large future artifacts such as profiles or traces SHOULD live outside SQLite and be referenced by:
+
+- path;
+- SHA-256;
+- media/type;
+- size;
+- run ID.
+
+## 32. Time and units
+
+All timestamps SHALL be stored in UTC.
+
+External timestamp form SHOULD be RFC3339 with subsecond precision where useful.
+
+Durations SHOULD use integer nanoseconds when directly measured.
+
+Storage units:
+
+- bytes, not formatted GiB strings;
+- tokens;
+- nanoseconds;
+- Hz;
+- Celsius;
+- watts when available.
+
+Human-readable unit conversion belongs in presentation code.
+
+## 33. Scheduling and ordering
+
+The planner SHALL generate a deterministic candidate order for a deterministic search strategy.
+
+The scheduler MAY support reordered execution for environmental-bias reduction.
+
+If randomized ordering is used:
+
+- the seed MUST be stored;
+- generated order MUST be persisted.
+
+A useful finalist-validation option is reverse-order rerunning to identify thermal/order bias.
+
+## 34. Warmup and thermal policy
+
+llama-bench warmup SHALL remain enabled by default.
+
+MeasurementPolicy may additionally define:
+
+- fixed delay between cases;
+- fixed delay between candidates;
+- future temperature-threshold cooldown.
+
+V1 MAY initially implement fixed delay while preserving a policy model that can later support thermal stabilization.
+
+## 35. Resumability
+
+SQLite is the checkpoint.
+
+On restart, the executor queries planned benchmark cases with no successful run and resumes them.
+
+A successfully completed case is not automatically rerun unless:
+
+- the experiment policy explicitly requests another run;
+- the user asks for a rerun;
+- quality policy marks the previous observation insufficient.
+
+Interrupted and failed attempts remain visible.
+
+## 36. Screening and validation stages
+
+The system SHALL distinguish microbenchmark screening from server validation.
+
+Typical workflow:
+
+~~~text
+Generate candidates
+    ↓
+Smoke test / fit
+    ↓
+Microbenchmark screening
+    ↓
+Full PP/TG depth measurements
+    ↓
+Pareto/frontier analysis
+    ↓
+Finalists
+    ↓
+llama-server + SPEED-Bench
+    ↓
+Candidate promotion
+~~~
+
+The UI SHOULD expose statuses such as:
+
+~~~text
+planned
+screened
+finalist
+server-validated
+promoted
+~~~
+
+These are experiment/evaluation concepts, not replacements for raw run status.
+
+## 37. Speculative decoding
+
+MTP and other speculative-decoding parameters are server-validation concerns unless a future benchmark tool directly supports them.
+
+llama-bench SHALL be used for raw target-model PP/TG screening.
+
+llama-server + SPEED-Bench SHALL be used to measure:
+
+- actual delivered decode throughput;
+- prompt throughput;
+- request latency;
+- draft acceptance;
+- speculative speedup.
+
+Candidate configuration still contains speculative settings so full deployment configurations remain reproducible.
+
+## 38. Analysis model
+
+Analysis consumes immutable observations and SHALL NOT mutate raw data.
+
+V1 analysis should support:
+
+- absolute metrics;
+- relative-to-baseline metrics;
+- matrix projections;
+- N-dimensional filtering;
+- 2D slices of higher-order spaces;
+- Pareto frontier calculation;
+- stability filtering;
+- historical comparison by build;
+- request-latency estimation.
+
+### 38.1 Request latency model
+
+For prompt P and generation G:
+
+~~~text
+prefill_time ≈ P / PP(P, initial_depth)
+
+decode_time ≈ sum over generated tokens of:
+    1 / TG(current_depth)
+
+request_time =
+    prefill_time + decode_time
+~~~
+
+Measured depth curves may be interpolated.
+
+This allows analysis of PP/TG tradeoffs without inventing an arbitrary weighted score.
+
+## 39. Pareto analysis
+
+Raw candidates may be compared across multiple objectives.
+
+Examples:
+
+Maximize:
+
+- PP tokens/s;
+- TG tokens/s.
+
+Minimize:
+
+- CPU utilization;
+- VRAM;
+- RAM;
+- power;
+- latency.
+
+The application SHOULD identify non-dominated candidates rather than presenting one universal “best” configuration.
+
+A separate user-selected objective policy may choose among frontier candidates.
+
+## 40. Frontend UX
+
+### 40.1 Experiment list
+
+Show:
+
+- name;
+- source profile/model;
+- status;
+- completed/total cases;
+- created time;
+- baseline;
+- validation state.
+
+### 40.2 New experiment
+
+Primary form:
+
+1. Select launcher profile.
+2. Show resolved production settings.
+3. Select parameters to vary.
+4. Enter/select values.
+5. Show constraints and valid candidate count.
+6. Select workloads.
+7. Select measurement policy.
+8. Select placement mode.
+9. Preview case/repetition count.
+10. Save or run.
+
+Advanced llama.cpp details stay collapsed by default.
+
+### 40.3 Search-space editor
+
+For each selected dimension display:
+
+- friendly label;
+- candidate values;
+- source/current value;
+- validation constraints;
+- whether variation triggers refitting.
+
+Example:
+
+~~~text
+Batch size
+2048, 4096, 8192
+
+UBatch size
+512, 1024, 2048, 4096
+
+11 valid candidates
+1 invalid combination removed
+~~~
+
+### 40.4 Workload editor
+
+Present workload concepts, not raw flags:
+
+~~~text
+Prefill
+[x] 2K prompt at empty context
+[x] 8K prompt at empty context
+
+Decode
+[x] 256 tokens at 4K context
+[x] 256 tokens at 50% context
+~~~
+
+### 40.5 Placement choice
+
+Expose:
+
+~~~text
+Re-fit each candidate
+Measures deployable configurations.
+
+Keep placement fixed
+Isolates parameter effects.
+~~~
+
+Per-candidate fitting is the default optimization mode.
+
+### 40.6 Experiment preview
+
+Before execution show:
+
+- base profile;
+- dimensions;
+- constraints;
+- candidate count;
+- workload count;
+- benchmark case count;
+- repetition count;
+- placement policy;
+- measurement policy.
+
+### 40.7 Live execution page
+
+Show:
+
+- progress;
+- current candidate;
+- current workload;
+- latest result;
+- CPU process/system load;
+- GPU load;
+- VRAM;
+- RAM;
+- temperatures;
+- power where available;
+- completed/failed/pending counts.
+
+Raw logs live under an Advanced section.
+
+### 40.8 Matrix result view
+
+For a 2D search:
+
+~~~text
+Metric: PP8192 tokens/s
+
+             UBatch
+Batch      512    1024    2048    4096
+2048        ...     ...     ...      —
+4096        ...     ...     ...     ...
+8192        ...     ...     ...     ...
+~~~
+
+Metric selection may switch among:
+
+- PP/TG throughput;
+- CPU utilization;
+- process CPU;
+- GPU utilization;
+- VRAM;
+- RAM;
+- temperature;
+- power;
+- estimated request latency.
+
+### 40.9 Higher-dimensional exploration
+
+Use:
+
+- X dimension;
+- Y dimension;
+- metric;
+- filters;
+- facets.
+
+Example:
+
+~~~text
+X axis: batch_size
+Y axis: ubatch_size
+Metric: PP8192
+
+KV K: q8_0
+KV V: q8_0
+Fit target: 256
+
+Facet by: cache_type_k
+~~~
+
+There is no requirement to draw literal 4D+ objects.
+
+### 40.10 Candidate comparison
+
+Allow selecting several candidates and comparing:
+
+- configuration differences;
+- PP workloads;
+- TG depth curve;
+- CPU;
+- GPU;
+- memory;
+- stability;
+- request-latency estimates;
+- server validation.
+
+### 40.11 Baseline comparison
+
+Every experiment may designate a baseline, usually the source launcher profile.
+
+Result views SHOULD support relative display:
+
+~~~text
+PP8K       +7.4%
+TG65K      -1.8%
+CPU        +14.0%
+VRAM       +0.8 GiB
+~~~
+
+### 40.12 Promotion
+
+A validated candidate may be promoted toward llama-profile-launcher.
+
+V1 SHOULD first generate a patch/diff rather than silently changing launcher configuration.
+
+Promotion records:
+
+- experiment ID;
+- candidate ID;
+- source profile;
+- old profile snapshot;
+- proposed new profile snapshot;
+- supporting validation results;
+- timestamp.
+
+## 41. CLI UX
+
+Representative commands:
+
+~~~text
+llprof profile list
+llprof profile show qwen-flash-gsq-rco-iq3-128k
+
+llprof experiment create
+llprof experiment plan EXPERIMENT
+llprof experiment run EXPERIMENT
+llprof experiment pause EXPERIMENT
+llprof experiment resume EXPERIMENT
+llprof experiment status EXPERIMENT
+
+llprof results matrix EXPERIMENT
+llprof results compare EXPERIMENT
+llprof run show RUN
+
+llprof ui
+llprof archive
+~~~
+
+A direct non-interactive creation command SHOULD eventually support:
+
+~~~text
+llprof experiment create \
+  --profile qwen-flash-gsq-rco-iq3-128k \
+  --vary compute.batch_size=2048,4096,8192 \
+  --vary compute.ubatch_size=512,1024,2048,4096 \
+  --suite batch-ubatch-screen-v1
+~~~
+
+The CLI may expose IDs, but user-facing listing and lookup should accept friendly names where unambiguous.
+
+## 42. Local HTTP API
+
+Initial REST resources:
+
+~~~text
+GET    /api/health
+
+GET    /api/profiles
+GET    /api/profiles/{id}
+
+GET    /api/binaries
+GET    /api/models
+
+POST   /api/experiments
+GET    /api/experiments
+GET    /api/experiments/{id}
+POST   /api/experiments/{id}/plan
+POST   /api/experiments/{id}/run
+POST   /api/experiments/{id}/pause
+POST   /api/experiments/{id}/resume
+POST   /api/experiments/{id}/cancel
+POST   /api/experiments/{id}/clone
+
+GET    /api/experiments/{id}/candidates
+GET    /api/experiments/{id}/runs
+GET    /api/experiments/{id}/results
+GET    /api/experiments/{id}/matrix
+
+GET    /api/runs/{id}
+GET    /api/runs/{id}/telemetry
+
+POST   /api/candidates/{id}/validate
+POST   /api/candidates/{id}/promote
+~~~
+
+A WebSocket or Server-Sent Events endpoint MAY be added for live progress.
+
+The REST database model SHALL not leak directly to the frontend; API DTOs provide a stable boundary.
+
+## 43. Source launcher integration
+
+llama-profile-launcher is treated as an external source of production profiles.
+
+The LauncherProfileAdapter SHALL:
+
+- load the configured launcher JSON;
+- resolve defaults;
+- resolve profile inheritance;
+- resolve model-specific args;
+- preserve the source snapshot;
+- map performance-relevant settings into Candidate fields;
+- retain non-benchmark profile data for provenance;
+- report unsupported/unknown fields.
+
+The benchmark database MUST not depend on launcher files remaining unchanged after import.
+
+## 44. Reproducibility metadata
+
+Each run SHOULD be reconstructable from stored data.
+
+At minimum retain:
+
+- source experiment;
+- Candidate canonical JSON;
+- WorkloadCase canonical JSON;
+- MeasurementPolicy;
+- ResolvedPlacement;
+- model file hashes;
+- binary hashes/build information;
+- host fingerprint;
+- argv;
+- relevant environment variables;
+- timestamps;
+- telemetry;
+- raw output.
+
+A path change alone should not change model or candidate identity.
+
+## 45. Environmental variables and secrets
+
+Environment variables passed to subprocesses SHALL be captured selectively.
+
+Known secrets such as Hugging Face tokens MUST NOT be persisted.
+
+Environment capture must use an allowlist or redaction policy.
+
+## 46. Security model
+
+V1 is local-first.
+
+Defaults:
+
+- API binds only to 127.0.0.1;
+- no remote network exposure;
+- no shell=True;
+- no arbitrary eval;
+- subprocess paths are explicit;
+- experiment expressions are parsed by a restricted evaluator;
+- destructive launcher-profile updates require explicit user action.
+
+If remote access is added later, authentication/authorization becomes a separate explicit mode.
+
+## 47. Logging
+
+Use Python logging with structured context.
+
+Useful fields:
+
+- experiment ID;
+- candidate ID;
+- workload ID;
+- benchmark case ID;
+- run ID;
+- process ID.
+
+Console logs are diagnostic.
+
+SQLite remains the authoritative experiment record.
+
+## 48. Artifacts and database size
+
+Small raw results and logs may live directly in SQLite.
+
+Large future artifacts should live in an artifact directory and have a database record containing:
+
+- run ID;
+- path;
+- SHA-256;
+- size;
+- media/type;
+- creation time.
+
+An archive operation SHALL checkpoint WAL and produce a consistent database snapshot.
+
+## 49. Testing strategy
+
+### 49.1 Unit tests
+
+Cover:
+
+- canonical hashing;
+- Candidate validation;
+- SearchSpace expansion;
+- constraints;
+- conditional dimensions;
+- workload depth expansion;
+- parameter registry;
+- llama.cpp argv generation;
+- output parsers;
+- Pareto calculations;
+- latency calculations;
+- state transitions.
+
+### 49.2 Golden parser fixtures
+
+Store representative llama.cpp outputs as fixtures for:
+
+- llama-bench JSON;
+- fit-params output;
+- server startup output;
+- SPEED-Bench JSON;
+- failures/OOM.
+
+Parsers SHALL be testable without invoking llama.cpp.
+
+### 49.3 Integration tests
+
+Use fake executables/scripts to test:
+
+- process management;
+- timeout;
+- interrupt;
+- stdout/stderr capture;
+- status persistence;
+- resume behavior;
+- telemetry lifecycle.
+
+Real llama.cpp integration tests may be optional and host-dependent.
+
+### 49.4 Migration tests
+
+A migration test SHALL create an old schema, migrate forward, and verify data remains readable.
+
+## 50. Initial implementation sequence
+
+Implementation should proceed in this order:
+
+### Phase 1 — Core domain
+
+- Pydantic schemas
+- canonical serialization/hashing
+- ParameterRegistry
+- Candidate
+- SearchSpace
+- WorkloadSuite
+- WorkloadCase
+- MeasurementPolicy
+
+### Phase 2 — Persistence
+
+- SQLite connection configuration
+- migration framework
+- initial schema
+- repositories
+- immutable object persistence
+- experiment planning persistence
+
+### Phase 3 — Planning
+
+- launcher-profile adapter
+- grid expansion
+- constraint evaluation
+- workload expansion
+- benchmark-case generation
+- dry-run/plan output
+
+At this point a batch/ubatch experiment can be completely planned without launching anything.
+
+### Phase 4 — llama-bench execution
+
+- binary discovery/capability detection
+- LlamaBenchAdapter
+- ProcessRunner
+- JSON parser
+- benchmark samples
+- run lifecycle
+- resume
+
+At this point the system is a useful microbenchmark runner.
+
+### Phase 5 — Placement
+
+- llama-fit-params adapter
+- placement hashing/cache
+- per-candidate placement resolution
+- fixed-placement mode
+
+### Phase 6 — Telemetry
+
+- Linux process/system CPU
+- RAM
+- GPU provider
+- summary metrics
+- run-quality classification
+
+### Phase 7 — Analysis
+
+- matrix projections
+- baseline deltas
+- Pareto frontier
+- request-latency model
+- CSV/JSON exports
+
+### Phase 8 — Server validation
+
+- llama-server lifecycle
+- readiness detection
+- SPEED-Bench adapter
+- MTP results
+- acceptance rate
+
+### Phase 9 — Local UI
+
+- FastAPI endpoints
+- React experiment editor
+- plan preview
+- execution progress
+- matrix/heatmap
+- higher-dimensional slicing
+- candidate comparison
+- promotion diff
+
+## 51. V1 acceptance criteria
+
+V1 is complete when the following end-to-end scenario works without manual database editing:
+
+1. User selects the existing Flash Next 128K launcher profile.
+2. User chooses to vary batch_size over 2048/4096/8192.
+3. User chooses to vary ubatch_size over 512/1024/2048/4096.
+4. The planner removes combinations where ubatch > batch.
+5. The UI reports eleven valid candidates.
+6. User selects PP2K, PP8K, TG256@4K, and TG256@50%.
+7. The UI reports 44 benchmark cases.
+8. Each candidate is fit against the 128K production context when per-candidate fitting is selected.
+9. The concrete placement is frozen for that candidate's llama-bench workloads.
+10. llama-bench uses long-form arguments wherever available.
+11. Three or more repetitions are persisted individually.
+12. CPU system load and benchmark-process CPU load are captured.
+13. GPU telemetry is captured when available.
+14. Failed/OOM cases remain queryable.
+15. The run can be interrupted and resumed without losing completed work.
+16. Results can be displayed as a batch × ubatch matrix for any selected metric.
+17. Results can be filtered by workload.
+18. Candidate comparison shows PP, TG, CPU, GPU, memory, and stability.
+19. A Pareto view identifies non-dominated candidates without forcing a universal winner.
+20. Selected finalists can be validated via llama-server/SPEED-Bench.
+21. A validated candidate can generate a proposed llama-profile-launcher configuration diff.
+22. Six months later, the database contains enough information to understand exactly what was run, with which model/build/hardware/configuration, and to recompute analysis using new objectives.
+
+## 52. Design invariant summary
+
+The implementation should protect these invariants:
+
+1. Candidate configuration is immutable.
+2. Workload identity is independent of measurement repetitions.
+3. Experiment definitions freeze when execution begins.
+4. Completed runs are append-only.
+5. Placement requested by a Candidate is distinct from placement resolved on a host.
+6. Production context determines fitting; active depth determines workload.
+7. N-dimensional search spaces are stored as observed points, not dense tensors.
+8. Raw observations are preserved independently of optimization policy.
+9. SQLite is the canonical scientific record.
+10. CLI and web UI share one domain/service layer.
+11. llama.cpp argument spelling is isolated behind adapters.
+12. Long-form llama.cpp arguments are preferred wherever supported.
+13. CPU is a first-class resource metric alongside GPU.
+14. Failures are data.
+15. Every result should be explainable and reproducible from stored provenance.
