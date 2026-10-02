@@ -3159,6 +3159,38 @@ llprof archive \
 
 Before snapshotting, the archive service performs a full WAL checkpoint. The database copy is then created through SQLite's backup API, not by copying live database files. The archive contains `database.sqlite3`, `manifest.json`, and optional artifact files. The manifest records archive format, creation time, schema version, source database, file sizes, and SHA-256 hashes.
 
+### 42.13 V1 hardening and release (M13)
+
+M13 adds release-safety behavior around the completed V1 workflow.
+
+Archive restore uses the existing M12 archive format. Restore SHALL reject unsafe member paths, links, missing required files, malformed manifests, size/hash mismatches, SQLite integrity failures, and manifest/schema-version mismatches before writing the destination database. Restore SHALL NOT overwrite an existing database path.
+
+Launcher promotion SHALL compare the current launcher profile's performance Candidate with the experiment's frozen base Candidate. If that source profile has drifted since experiment creation, promotion SHALL fail rather than silently generating a patch against a different baseline.
+
+The V1 CLI adds:
+
+~~~text
+llprof database check --database data/benchmarks.db
+
+llprof archive \
+  --restore experiment-archive.tar.gz \
+  --database data/restored.db
+~~~
+
+Database diagnostics report:
+
+- schema version;
+- SQLite integrity result;
+- foreign-key violations;
+- page count, page size, freelist count;
+- logical database bytes and current WAL bytes;
+- table row counts;
+- representative EXPLAIN QUERY PLAN output for critical workflow queries.
+
+Release hardening tests cover every historical migration prefix upgrading to the current schema, interruption/resume and stale running-state recovery, persisted OOM observations, malformed llama-bench JSON, unsupported argument surfaces, native/custom binary capability differences, server startup failure, noisy/incomplete telemetry, launcher-profile drift, archive restore verification, database growth reporting, and representative indexed query plans.
+
+The package version for the V1 release line is `1.0.0`. The final `v1.0.0` tag is gated on the primary-workstation acceptance scenario in section 51 and the release checklist, because CI does not contain the required production Qwen models or target workstation hardware.
+
 ## 43. Source launcher integration
 
 llama-profile-launcher is treated as an external source of production profiles.
