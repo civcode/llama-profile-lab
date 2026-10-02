@@ -6,7 +6,7 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 ## Status
 
-V1 is under active development. **M0–M4, M8 analysis, M10 local HTTP API, and M11 browser UI are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
+V1 is under active development. **M0–M4, M8 analysis, M10 local HTTP API, M11 browser UI, and M12 launcher promotion/archive/export are complete. M5 — llama-bench execution, M6 — placement resolution, M7 — CPU/GPU telemetry/run quality, and M9 — llama-server/SPEED-Bench finalist validation are implementation-complete with automated acceptance; their final real-workstation acceptance remains pending where hardware/model execution is required.**
 
 Project documents:
 
@@ -156,6 +156,20 @@ llprof ui \
   --port 8000 \
   --launcher-config /path/to/llama-profile-launcher/config/hosts/workstation.json \
   --database data/benchmarks.db
+
+llprof profile promote EXPERIMENT_ID CANDIDATE_ID \
+  --launcher-config /path/to/llama-profile-launcher/config/hosts/workstation.json \
+  --output candidate.patch \
+  --database data/benchmarks.db
+
+llprof experiment export EXPERIMENT_ID \
+  --output experiment.json \
+  --database data/benchmarks.db
+
+llprof archive \
+  --output experiment-archive.tar.gz \
+  --artifact /path/to/optional/artifact \
+  --database data/benchmarks.db
 ~~~
 
 Binary discovery fingerprints exact executables by SHA-256, captures version/help output, persists parsed supported arguments, and allows native/custom builds to be compared without assuming a global llama.cpp feature set.
@@ -175,6 +189,8 @@ M9 validates selected finalists under a managed `llama-server`. Exact server and
 M10 adds a local FastAPI boundary over the same services. Typed HTTP requests can create and plan experiments, inspect/register binaries, run/pause/resume/cancel benchmark execution, inspect Candidates/runs/telemetry, query M8 results and sparse matrices, and invoke M9 Candidate validation. Server-Sent Events expose changed progress snapshots without introducing a second durable scheduler. The server binds to `127.0.0.1` by default. An optional read-only `--launcher-config` exposes current launcher model/profile settings; launcher mutation/promotion remains a later milestone. Interactive API documentation is served at `/api/docs`.
 
 M11 adds the React + TypeScript browser workflow. The Python launcher adapter supplies the typed base Candidate, while the UI builds generic N-dimensional sweeps from backend parameter metadata and asks the real planner for preview counts. It authors microbenchmark and optional SPEED-Bench workloads, controls execution, and visualizes live CPU/GPU/memory/thermal telemetry. Results include sparse matrices/heatmaps with exact higher-dimensional slicing or facets, Pareto frontiers, measured decode-depth curves, baseline-relative Candidate comparison, compute-only latency estimates, and finalist server validation. `llprof ui` serves the production bundle and API from one local origin. The browser never reads SQLite directly and does not silently average hidden search dimensions.
+
+M12 closes the experiment lifecycle without silently editing production configuration. A server-validated Candidate can generate and persist a launcher-profile proposal containing the exact source snapshot, proposed snapshot, argument-level changes, validation provenance, and a unified JSON patch. The Candidate page exposes the same review-first workflow. `llprof experiment export` emits complete experiment provenance, while `llprof archive` checkpoints WAL, takes a consistent SQLite backup, optionally includes artifacts, and writes a SHA-256 manifest.
 
 ## Design principles
 
