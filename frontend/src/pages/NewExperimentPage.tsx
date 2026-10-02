@@ -346,10 +346,9 @@ export function NewExperimentPage() {
     }
   }
 
-  const microbenchCount = workloads.filter(
-    (item) => item.kind !== "speed-bench"
+  const serverWorkloadCount = workloads.filter(
+    (item) => item.kind === "speed-bench"
   ).length;
-  const serverWorkloadCount = workloads.length - microbenchCount;
   const sampleCount = (preview?.benchmark_case_count ?? 0) * repetitions;
 
   return (
@@ -763,7 +762,7 @@ export function NewExperimentPage() {
         </div>
         <div className="plan-numbers">
           <div>
-            <strong>{preview?.candidate_count ?? 0 * microbenchCount}</strong>
+            <strong>{preview?.benchmark_case_count ?? 0}</strong>
             <span>benchmark cases</span>
           </div>
           <div>
@@ -786,7 +785,8 @@ export function NewExperimentPage() {
           className="button button-primary button-large"
           disabled={
             saving ||
-            preview?.candidate_count ?? 0 === 0 ||
+            previewing ||
+            (preview?.candidate_count ?? 0) === 0 ||
             (placementMode === "fixed" && !fixedPlacementId)
           }
           onClick={saveAndPlan}

@@ -292,7 +292,11 @@ def _flash_attn(
     args: dict[str, JsonScalar],
 ) -> Literal["on", "off", "auto"]:
     value = _string_arg(args, "--flash-attn", "auto")
-    return value if value in {"on", "off", "auto"} else "auto"
+    if value == "on":
+        return "on"
+    if value == "off":
+        return "off"
+    return "auto"
 
 
 def _gpu_layers(

@@ -275,6 +275,22 @@ def test_health_profiles_binary_registration_and_experiment_planning(
     assert len(api_request(app, "GET", "/api/binaries").json()["items"]) == 1
     assert api_request(app, "GET", "/api/models").json()["items"] == []
 
+    preview_payload = experiment_payload("HTTP preview")
+    preview = api_request(
+        app,
+        "POST",
+        "/api/experiments/preview",
+        body={
+            "base_candidate": preview_payload["base_candidate"],
+            "search_space": preview_payload["search_space"],
+            "workload_suite": preview_payload["workload_suite"],
+        },
+    )
+    assert preview.status_code == 200
+    assert preview.json()["raw_combinations"] == 1
+    assert preview.json()["candidate_count"] == 1
+    assert preview.json()["benchmark_case_count"] == 1
+
     created = api_request(
         app,
         "POST",
