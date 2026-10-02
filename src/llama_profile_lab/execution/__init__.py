@@ -16,6 +16,17 @@ from llama_profile_lab.execution.placement import (
     validate_fixed_placement,
 )
 from llama_profile_lab.execution.process import ProcessResult, ProcessRunner, ProcessRunnerError
+from llama_profile_lab.execution.server_process import (
+    ManagedServerProcess,
+    ServerProcessError,
+    ServerProcessOutcome,
+)
+from llama_profile_lab.execution.server_validation import (
+    ServerComparison,
+    ServerValidationError,
+    ServerValidationService,
+    ServerValidationSummary,
+)
 from llama_profile_lab.execution.telemetry import (
     AutoGpuTelemetryProvider,
     LinuxTelemetryProvider,
@@ -33,6 +44,7 @@ __all__ = [
     "ExperimentExecutor",
     "HostLock",
     "HostLockError",
+    "ManagedServerProcess",
     "LinuxTelemetryProvider",
     "PlacementConfigurationError",
     "PlacementResolution",
@@ -41,6 +53,12 @@ __all__ = [
     "ProcessResult",
     "ProcessRunner",
     "ProcessRunnerError",
+    "ServerComparison",
+    "ServerProcessError",
+    "ServerProcessOutcome",
+    "ServerValidationError",
+    "ServerValidationService",
+    "ServerValidationSummary",
     "RunQualityPolicy",
     "TelemetryProvider",
     "TelemetrySampler",

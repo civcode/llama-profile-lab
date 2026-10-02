@@ -32,6 +32,8 @@ from llama_profile_lab.execution import (
     ExecutionSummary,
     ExperimentExecutor,
     HostLockError,
+    ServerValidationError,
+    ServerValidationService,
 )
 from llama_profile_lab.llama import (
     BinaryDiscoveryError,
@@ -44,7 +46,13 @@ from llama_profile_lab.llama import (
 )
 from llama_profile_lab.planning import PlanningError, plan_experiment, render_plan_summary
 
-_BINARY_KIND_CHOICES = ("auto", "llama-bench", "llama-fit-params", "llama-server")
+_BINARY_KIND_CHOICES = (
+    "auto",
+    "llama-bench",
+    "llama-fit-params",
+    "llama-server",
+    "speed-bench",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_parser(commands)
     _add_placement_parser(commands)
     _add_results_parser(commands)
+    _add_server_parser(commands)
     return parser
 
 
@@ -359,6 +368,51 @@ def _add_analysis_filters(parser: argparse.ArgumentParser) -> None:
         default=[],
         help="Include only this run-quality label; may be repeated.",
     )
+
+
+def _add_server_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    server = commands.add_parser(
+        "server",
+        help="Validate finalist Candidates with llama-server and SPEED-Bench.",
+    )
+    server_commands = server.add_subparsers(dest="server_command")
+
+    validate = server_commands.add_parser(
+        "validate",
+        help="Launch one finalist Candidate and execute its SPEED-Bench workloads.",
+    )
+    validate.add_argument("experiment_id")
+    validate.add_argument("candidate_id")
+    validate.add_argument("--server-binary", required=True, dest="server_binary_id")
+    validate.add_argument(
+        "--speed-bench-binary",
+        required=True,
+        dest="speed_bench_binary_id",
+    )
+    validate.add_argument("--model-path", required=True, type=Path)
+    validate.add_argument("--draft-model-path", type=Path, default=None)
+    validate.add_argument("--placement", dest="placement_id", default=None)
+    validate.add_argument("--model-name", default=None)
+    validate.add_argument("--host", default="127.0.0.1")
+    validate.add_argument("--port", type=int, default=8080)
+    validate.add_argument("--readiness-timeout-seconds", type=float, default=300.0)
+    validate.add_argument("--request-timeout-seconds", type=float, default=600.0)
+    validate.add_argument("--benchmark-timeout-seconds", type=float, default=None)
+    validate.add_argument("--workload-case", dest="workload_case_id", default=None)
+    _add_database_argument(validate)
+
+    compare = server_commands.add_parser(
+        "compare",
+        help="Compare completed baseline and speculative server measurements.",
+    )
+    compare.add_argument("experiment_id")
+    compare.add_argument("baseline_candidate_id")
+    compare.add_argument("speculative_candidate_id")
+    compare.add_argument("--workload-case", dest="workload_case_id", default=None)
+    compare.add_argument("--category", default="all")
+    _add_database_argument(compare)
 
 
 def _add_database_argument(parser: argparse.ArgumentParser) -> None:
@@ -748,6 +802,103 @@ def _format_number(value: float) -> str:
     return f"{value:.6g}"
 
 
+def _server_validate_command(
+    database_path: Path,
+    experiment_id: str,
+    candidate_id: str,
+    *,
+    server_binary_id: str,
+    speed_bench_binary_id: str,
+    model_path: Path,
+    draft_model_path: Path | None,
+    placement_id: str | None,
+    model_name: str | None,
+    host: str,
+    port: int,
+    readiness_timeout_seconds: float,
+    request_timeout_seconds: float,
+    benchmark_timeout_seconds: float | None,
+    workload_case_id: str | None,
+) -> int:
+    try:
+        summary = ServerValidationService(Database(database_path)).validate(
+            experiment_id,
+            candidate_id=candidate_id,
+            server_binary_id=server_binary_id,
+            speed_bench_binary_id=speed_bench_binary_id,
+            model_path=model_path,
+            draft_model_path=draft_model_path,
+            placement_id=placement_id,
+            model_name=model_name,
+            host=host,
+            port=port,
+            readiness_timeout_seconds=readiness_timeout_seconds,
+            request_timeout_seconds=request_timeout_seconds,
+            benchmark_timeout_seconds=benchmark_timeout_seconds,
+            workload_case_id=workload_case_id,
+        )
+    except (ServerValidationError, HostLockError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Server run: {summary.server_run_id}")
+    print(f"Candidate: {summary.candidate_id}")
+    print(f"SPEED-Bench invocations: {len(summary.benchmark_ids)}")
+    print(f"Speculative: {'yes' if summary.speculative else 'no'}")
+    print(f"Status: {'completed' if summary.completed else 'failed'}")
+    return 0 if summary.completed else 1
+
+
+def _server_compare_command(
+    database_path: Path,
+    experiment_id: str,
+    baseline_candidate_id: str,
+    speculative_candidate_id: str,
+    *,
+    workload_case_id: str | None,
+    category: str,
+) -> int:
+    try:
+        result = ServerValidationService(Database(database_path)).compare(
+            experiment_id,
+            baseline_candidate_id=baseline_candidate_id,
+            speculative_candidate_id=speculative_candidate_id,
+            workload_case_id=workload_case_id,
+            category=category,
+        )
+    except ServerValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Workload: {result.workload_case_id}")
+    print(f"Category: {result.category}")
+    print(f"Baseline Candidate: {result.baseline_candidate_id}")
+    print(f"Speculative Candidate: {result.speculative_candidate_id}")
+    print(f"Baseline prompt t/s: {_optional_number(result.baseline_prompt_ts)}")
+    print(f"Speculative prompt t/s: {_optional_number(result.speculative_prompt_ts)}")
+    print(f"Baseline decode t/s: {_optional_number(result.baseline_pred_ts)}")
+    print(f"Speculative decode t/s: {_optional_number(result.speculative_pred_ts)}")
+    print(f"Baseline latency ms: {_optional_number(result.baseline_latency_ms)}")
+    print(f"Speculative latency ms: {_optional_number(result.speculative_latency_ms)}")
+    print(f"Decode speedup: {_optional_ratio(result.decode_speedup)}")
+    print(f"Latency speedup: {_optional_ratio(result.latency_speedup)}")
+    print(f"Drafted tokens: {result.draft_n if result.draft_n is not None else '-'}")
+    print(f"Accepted tokens: {result.accepted_n if result.accepted_n is not None else '-'}")
+    print(
+        "Acceptance rate: "
+        + ("-" if result.accept_rate is None else f"{result.accept_rate:.4f}")
+    )
+    return 0
+
+
+def _optional_number(value: float | None) -> str:
+    return "-" if value is None else _format_number(value)
+
+
+def _optional_ratio(value: float | None) -> str:
+    return "-" if value is None else f"{value:.4f}x"
+
+
 def _placement_list_command(database_path: Path) -> int:
     with Database(database_path).session() as connection:
         records = PlacementRepository(connection).list()
@@ -920,7 +1071,7 @@ def _capabilities_from_record(record: BinaryRecord) -> CapabilitySet:
 
 
 def _record_kind(value: str) -> BinaryKind:
-    if value not in {"llama-bench", "llama-fit-params", "llama-server"}:
+    if value not in {"llama-bench", "llama-fit-params", "llama-server", "speed-bench"}:
         raise ValueError(f"unknown persisted binary kind: {value}")
     return cast(BinaryKind, value)
 
@@ -983,6 +1134,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _placement_list_command(args.database)
         if args.placement_command == "show":
             return _placement_show_command(args.database, args.placement_id)
+
+    if args.command == "server":
+        if args.server_command == "validate":
+            return _server_validate_command(
+                args.database,
+                args.experiment_id,
+                args.candidate_id,
+                server_binary_id=args.server_binary_id,
+                speed_bench_binary_id=args.speed_bench_binary_id,
+                model_path=args.model_path,
+                draft_model_path=args.draft_model_path,
+                placement_id=args.placement_id,
+                model_name=args.model_name,
+                host=args.host,
+                port=args.port,
+                readiness_timeout_seconds=args.readiness_timeout_seconds,
+                request_timeout_seconds=args.request_timeout_seconds,
+                benchmark_timeout_seconds=args.benchmark_timeout_seconds,
+                workload_case_id=args.workload_case_id,
+            )
+        if args.server_command == "compare":
+            return _server_compare_command(
+                args.database,
+                args.experiment_id,
+                args.baseline_candidate_id,
+                args.speculative_candidate_id,
+                workload_case_id=args.workload_case_id,
+                category=args.category,
+            )
 
     if args.command == "results":
         if args.results_command == "metrics":
