@@ -99,11 +99,7 @@ def inspect_database(database: Database) -> DatabaseDiagnostics:
             """
         ).fetchall()
         row_counts = {
-            str(row["name"]): int(
-                connection.execute(
-                    f'SELECT COUNT(*) FROM "{str(row["name"])}"'
-                ).fetchone()[0]
-            )
+            str(row["name"]): _table_count(connection, str(row["name"]))
             for row in rows
         }
         plans = tuple(
@@ -125,6 +121,13 @@ def inspect_database(database: Database) -> DatabaseDiagnostics:
         row_counts=row_counts,
         query_plans=plans,
     )
+
+
+def _table_count(connection: sqlite3.Connection, table: str) -> int:
+    row = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
+    if row is None:
+        raise RuntimeError(f"SQLite did not return a count for {table}")
+    return int(row[0])
 
 
 def _pragma_int(connection: sqlite3.Connection, name: str) -> int:
