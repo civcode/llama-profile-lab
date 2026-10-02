@@ -35,6 +35,7 @@ from llama_profile_lab.domain import (
     WorkloadSuite,
 )
 from llama_profile_lab.execution import detect_basic_host
+from tests.analysis_helpers import candidate_id_for, seed_analysis_experiment
 from tests.test_execution_engine import (
     write_fake_fit_params,
     write_fake_llama_bench,
@@ -601,3 +602,120 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def test_ui_support_metadata_analysis_and_static_serving(tmp_path: Path) -> None:
+    database, experiment_id = seed_analysis_experiment(tmp_path / "ui-api.db")
+    app = create_app(database.path)
+
+    parameters = api_request(app, "GET", "/api/parameters")
+    assert parameters.status_code == 200
+    assert any(
+        item["path"] == "compute.batch_size"
+        for item in parameters.json()["items"]
+    )
+
+    metrics = api_request(app, "GET", "/api/metrics")
+    assert metrics.status_code == 200
+    assert any(
+        item["name"] == "throughput.median"
+        for item in metrics.json()["items"]
+    )
+
+    experiment = api_request(app, "GET", f"/api/experiments/{experiment_id}")
+    assert experiment.status_code == 200
+    payload = experiment.json()
+    assert payload["base_candidate"]["compute"]["batch_size"] == 4096
+    assert len(payload["search_space"]["dimensions"]) == 2
+    assert len(payload["workload_suite"]["cases"]) == 4
+    assert payload["measurement_policy"]["repetitions"] == 3
+
+    candidate_id = candidate_id_for(
+        database,
+        experiment_id,
+        batch=8192,
+        ubatch=2048,
+    )
+
+    comparison = api_request(
+        app,
+        "GET",
+        f"/api/experiments/{experiment_id}/compare",
+        query=[
+            ("candidate_id", candidate_id),
+            ("metric", "throughput.median"),
+        ],
+    )
+    assert comparison.status_code == 200
+    assert comparison.json()["candidate_id"] == candidate_id
+    assert comparison.json()["deltas"]
+
+    pareto = api_request(
+        app,
+        "POST",
+        f"/api/experiments/{experiment_id}/pareto",
+        body={
+            "objectives": [
+                {
+                    "key": "pp8k",
+                    "direction": "maximize",
+                    "metric": "throughput.median",
+                    "filters": [{"path": "suite_case_index", "value": 1}],
+                },
+                {
+                    "key": "tg4k",
+                    "direction": "maximize",
+                    "metric": "throughput.median",
+                    "filters": [{"path": "suite_case_index", "value": 2}],
+                },
+            ],
+            "filters": [],
+            "qualities": ["clean"],
+        },
+    )
+    assert pareto.status_code == 200
+    assert pareto.json()["frontier"]
+
+    latency = api_request(
+        app,
+        "GET",
+        f"/api/experiments/{experiment_id}/latency",
+        query=[
+            ("candidate_id", candidate_id),
+            ("prompt_tokens", "4096"),
+            ("generate_tokens", "64"),
+            ("decode_start_depth_tokens", "4096"),
+        ],
+    )
+    assert latency.status_code == 200
+    assert latency.json()["total_seconds"] > 0
+
+    progress = api_request(
+        app,
+        "GET",
+        f"/api/experiments/{experiment_id}/progress",
+    )
+    assert progress.status_code == 200
+    assert progress.json()["latest_run_id"] is not None
+    assert progress.json()["latest_tokens_per_second"] is not None
+    assert progress.json()["latest_metrics"]
+
+    history = api_request(
+        app,
+        "GET",
+        f"/api/experiments/{experiment_id}/candidates/{candidate_id}/validation",
+    )
+    assert history.status_code == 200
+    assert history.json()["evaluations"] == []
+    assert history.json()["benchmarks"] == []
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<h1>llama-profile-lab UI</h1>", encoding="utf-8")
+    static_app = create_app(
+        tmp_path / "static.db",
+        frontend_dist_path=dist,
+    )
+    root = api_request(static_app, "GET", "/")
+    assert root.status_code == 200
+    assert "llama-profile-lab UI" in root.text
