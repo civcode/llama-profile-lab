@@ -1,1 +1,93 @@
-"""Domain models for candidates, workloads, experiments, and measurements."""
+"""Immutable domain models for experiment planning and measurement."""
+
+from llama_profile_lab.domain.base import (
+    ContentAddressedModel,
+    FrozenModel,
+    canonical_json,
+    sha256_json,
+)
+from llama_profile_lab.domain.candidate import (
+    Candidate,
+    ComputeConfig,
+    ContextConfig,
+    ExtraArgument,
+    FitConfig,
+    ModelSelection,
+    PlacementConfig,
+    PlacementConstraints,
+    ServerConfig,
+    SpeculativeConfig,
+)
+from llama_profile_lab.domain.experiment import (
+    BaseCandidateBaseline,
+    CandidateBaseline,
+    ExperimentDefinition,
+    FixedPlacementPolicy,
+    PerCandidatePlacementPolicy,
+)
+from llama_profile_lab.domain.measurement import (
+    AdaptiveMeasurementPolicy,
+    MeasurementPolicy,
+)
+from llama_profile_lab.domain.search_space import (
+    GridStrategy,
+    SearchConstraint,
+    SearchDimension,
+    SearchSpace,
+)
+from llama_profile_lab.domain.workload import (
+    AbsoluteDepth,
+    CombinedSuiteCase,
+    CombinedWorkloadCase,
+    DecodeSuiteCase,
+    DecodeWorkloadCase,
+    FractionalDepth,
+    PrefillSuiteCase,
+    PrefillWorkloadCase,
+    SpeedBenchConfig,
+    SpeedBenchSuiteCase,
+    SpeedBenchWorkloadCase,
+    WorkloadEnvelope,
+    WorkloadSuite,
+)
+
+__all__ = [
+    "AbsoluteDepth",
+    "AdaptiveMeasurementPolicy",
+    "BaseCandidateBaseline",
+    "Candidate",
+    "CandidateBaseline",
+    "CombinedSuiteCase",
+    "CombinedWorkloadCase",
+    "ComputeConfig",
+    "ContentAddressedModel",
+    "ContextConfig",
+    "DecodeSuiteCase",
+    "DecodeWorkloadCase",
+    "ExperimentDefinition",
+    "ExtraArgument",
+    "FitConfig",
+    "FixedPlacementPolicy",
+    "FractionalDepth",
+    "FrozenModel",
+    "GridStrategy",
+    "MeasurementPolicy",
+    "ModelSelection",
+    "PerCandidatePlacementPolicy",
+    "PlacementConfig",
+    "PlacementConstraints",
+    "PrefillSuiteCase",
+    "PrefillWorkloadCase",
+    "SearchConstraint",
+    "SearchDimension",
+    "SearchSpace",
+    "ServerConfig",
+    "SpeculativeConfig",
+    "SpeedBenchConfig",
+    "SpeedBenchSuiteCase",
+    "SpeedBenchWorkloadCase",
+    "WorkloadEnvelope",
+    "WorkloadSuite",
+    "canonical_json",
+    "sha256_json",
+]
