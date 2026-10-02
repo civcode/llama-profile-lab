@@ -11,11 +11,18 @@ from typing import Annotated, Never
 from fastapi import FastAPI, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from llama_profile_lab.analysis import AnalysisError, MatrixProjection
+from llama_profile_lab.analysis import (
+    AnalysisError,
+    CandidateComparison,
+    LatencyEstimate,
+    MatrixProjection,
+    ParetoResult,
+)
 from llama_profile_lab.api.dto import (
     BinaryInspectRequest,
     BinaryListResponse,
     CandidateListResponse,
+    CandidateValidationHistoryDTO,
     ExecutionRequest,
     ExperimentCloneRequest,
     ExperimentCreateRequest,
@@ -24,7 +31,12 @@ from llama_profile_lab.api.dto import (
     ExperimentProgressDTO,
     HealthResponse,
     LauncherProfileDTO,
+    MetricListResponse,
     ModelListResponse,
+    ParameterListResponse,
+    ParetoRequestDTO,
+    PlacementDTO,
+    PlacementListResponse,
     PlanSummaryDTO,
     ProfileListResponse,
     ResultsResponse,
@@ -125,6 +137,14 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
     @app.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(schema_version=service.health())
+
+    @app.get("/api/parameters", response_model=ParameterListResponse)
+    def parameters() -> ParameterListResponse:
+        return service.list_parameters()
+
+    @app.get("/api/metrics", response_model=MetricListResponse)
+    def metrics() -> MetricListResponse:
+        return service.list_metrics()
 
     @app.get("/api/profiles", response_model=ProfileListResponse)
     def profiles() -> ProfileListResponse:
@@ -311,6 +331,91 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
         if not isinstance(result, MatrixProjection):
             raise TypeError("analysis service returned non-matrix result")
         return result
+
+    @app.get(
+        "/api/experiments/{experiment_id}/compare",
+        response_model=CandidateComparison,
+    )
+    def experiment_compare(
+        experiment_id: str,
+        candidate_id: str,
+        metrics: Annotated[list[str], Query(alias="metric")],
+        baseline_candidate_id: str | None = None,
+        filters: Annotated[list[str] | None, Query(alias="filter")] = None,
+        qualities: Annotated[list[str] | None, Query(alias="quality")] = None,
+    ) -> CandidateComparison:
+        try:
+            parsed = parse_filters(tuple(filters or ()))
+        except ValueError as exc:
+            return _raise_bad_request(exc)
+        if not metrics:
+            return _raise_bad_request(ValueError("at least one metric is required"))
+        return service.compare_candidate(
+            experiment_id,
+            candidate_id=candidate_id,
+            metric_names=tuple(metrics),
+            baseline_candidate_id=baseline_candidate_id,
+            filters=parsed,
+            qualities=tuple(qualities or ()),
+        )
+
+    @app.post(
+        "/api/experiments/{experiment_id}/pareto",
+        response_model=ParetoResult,
+    )
+    def experiment_pareto(
+        experiment_id: str,
+        request: ParetoRequestDTO,
+    ) -> ParetoResult:
+        try:
+            return service.pareto(experiment_id, request)
+        except ValueError as exc:
+            return _raise_bad_request(exc)
+
+    @app.get(
+        "/api/experiments/{experiment_id}/latency",
+        response_model=LatencyEstimate,
+    )
+    def experiment_latency(
+        experiment_id: str,
+        candidate_id: str,
+        prompt_tokens: Annotated[int, Query(gt=0)],
+        generate_tokens: Annotated[int, Query(gt=0)],
+        decode_start_depth_tokens: Annotated[int | None, Query(ge=0)] = None,
+        filters: Annotated[list[str] | None, Query(alias="filter")] = None,
+        qualities: Annotated[list[str] | None, Query(alias="quality")] = None,
+    ) -> LatencyEstimate:
+        try:
+            parsed = parse_filters(tuple(filters or ()))
+        except ValueError as exc:
+            return _raise_bad_request(exc)
+        return service.latency(
+            experiment_id,
+            candidate_id=candidate_id,
+            prompt_tokens=prompt_tokens,
+            generate_tokens=generate_tokens,
+            decode_start_depth_tokens=decode_start_depth_tokens,
+            filters=parsed,
+            qualities=tuple(qualities or ()),
+        )
+
+    @app.get("/api/placements", response_model=PlacementListResponse)
+    def placements() -> PlacementListResponse:
+        return service.list_placements()
+
+    @app.get("/api/placements/{placement_id}", response_model=PlacementDTO)
+    def placement(placement_id: str) -> PlacementDTO:
+        return service.get_placement(placement_id)
+
+    @app.get(
+        "/api/experiments/{experiment_id}/candidates/{candidate_id}/validation",
+        response_model=CandidateValidationHistoryDTO,
+    )
+    def candidate_validation_history(
+        experiment_id: str,
+        candidate_id: str,
+    ) -> CandidateValidationHistoryDTO:
+        return service.validation_history(experiment_id, candidate_id)
 
     @app.get("/api/runs/{run_id}", response_model=RunDetailDTO)
     def run(run_id: str) -> RunDetailDTO:
