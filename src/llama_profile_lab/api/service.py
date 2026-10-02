@@ -6,14 +6,24 @@ import json
 import sqlite3
 from pathlib import Path
 
-from llama_profile_lab.analysis import AnalysisFilter, AnalysisService, MatrixProjection
+from llama_profile_lab.analysis import (
+    DEFAULT_METRIC_REGISTRY,
+    AnalysisFilter,
+    AnalysisService,
+    CandidateComparison,
+    LatencyEstimate,
+    MatrixProjection,
+    ParetoResult,
+)
 from llama_profile_lab.api.dto import (
     BenchmarkSampleDTO,
     BinaryDTO,
     BinaryInspectRequest,
     BinaryListResponse,
     CandidateDTO,
+    CandidateEvaluationDTO,
     CandidateListResponse,
+    CandidateValidationHistoryDTO,
     ExecutionRequest,
     ExecutionSummaryDTO,
     ExperimentCreateRequest,
@@ -23,14 +33,22 @@ from llama_profile_lab.api.dto import (
     LauncherProfileDTO,
     ModelDTO,
     ModelFileDTO,
+    MetricDefinitionDTO,
+    MetricListResponse,
     ModelListResponse,
     OperationDTO,
+    ParameterDefinitionDTO,
+    ParameterListResponse,
+    ParetoRequestDTO,
+    PlacementDTO,
+    PlacementListResponse,
     PlanSummaryDTO,
     ProfileListResponse,
     ResultsResponse,
     RunDetailDTO,
     RunListResponse,
     RunSummaryDTO,
+    ServerBenchmarkDTO,
     ServerValidationRequest,
     ServerValidationResponse,
     TelemetryResponse,
@@ -56,7 +74,11 @@ from llama_profile_lab.db import (
     schema_version,
     transaction,
 )
-from llama_profile_lab.db.records import BinaryRecord, ExperimentRecord
+from llama_profile_lab.db.records import (
+    BinaryRecord,
+    ExperimentRecord,
+    ResolvedPlacementRecord,
+)
 from llama_profile_lab.domain import (
     CandidateBaseline,
     ExperimentDefinition,
@@ -65,7 +87,11 @@ from llama_profile_lab.domain import (
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import ServerValidationService
 from llama_profile_lab.llama import BinaryKind, probe_binary
-from llama_profile_lab.planning import PlanSummary, plan_experiment
+from llama_profile_lab.planning import (
+    DEFAULT_PARAMETER_REGISTRY,
+    PlanSummary,
+    plan_experiment,
+)
 
 
 class ApiNotFoundError(RuntimeError):
@@ -93,6 +119,44 @@ class ApiService:
     def health(self) -> int:
         with self.database.session() as connection:
             return schema_version(connection)
+
+    def list_parameters(self) -> ParameterListResponse:
+        return ParameterListResponse(
+            items=tuple(
+                ParameterDefinitionDTO(
+                    path=definition.path,
+                    label=definition.label,
+                    category=definition.category,
+                    value_types=tuple(
+                        "null" if item is type(None) else item.__name__
+                        for item in definition.python_types
+                    ),
+                    cli_argument=definition.cli_argument,
+                    affects_placement=definition.affects_placement,
+                    supported_by=tuple(sorted(definition.supported_by)),
+                    minimum=definition.minimum,
+                    maximum=definition.maximum,
+                    string_choices=(
+                        None
+                        if definition.string_choices is None
+                        else tuple(sorted(definition.string_choices))
+                    ),
+                )
+                for definition in DEFAULT_PARAMETER_REGISTRY.definitions()
+            )
+        )
+
+    def list_metrics(self) -> MetricListResponse:
+        return MetricListResponse(
+            items=tuple(
+                MetricDefinitionDTO(
+                    name=definition.name,
+                    label=definition.label,
+                    unit=definition.unit,
+                )
+                for definition in DEFAULT_METRIC_REGISTRY.definitions()
+            )
+        )
 
     def list_profiles(self) -> ProfileListResponse:
         items = tuple(_profile_dto(item) for item in self.profiles.list())
@@ -332,6 +396,36 @@ class ApiService:
                 str(item["status"]): int(item["count"])
                 for item in status_rows
             }
+            running = connection.execute(
+                """
+                SELECT candidate_id, workload_case_id
+                FROM benchmark_case
+                WHERE experiment_id = ? AND status = 'running'
+                ORDER BY ordinal
+                LIMIT 1
+                """,
+                (experiment_id,),
+            ).fetchone()
+            latest = connection.execute(
+                """
+                SELECT br.id
+                FROM benchmark_run AS br
+                JOIN benchmark_case AS bc ON bc.id = br.benchmark_case_id
+                WHERE bc.experiment_id = ?
+                  AND br.status = 'completed'
+                ORDER BY br.finished_at DESC, br.started_at DESC, br.id DESC
+                LIMIT 1
+                """,
+                (experiment_id,),
+            ).fetchone()
+            latest_run_id = None if latest is None else str(latest["id"])
+            latest_metrics: dict[str, int | float] = {}
+            latest_tokens_per_second: float | None = None
+            if latest_run_id is not None:
+                latest_metrics = BenchmarkRunRepository(connection).metrics(latest_run_id)
+                raw_ts = latest_metrics.get("avg_ts")
+                if raw_ts is not None:
+                    latest_tokens_per_second = float(raw_ts)
 
         return ExperimentProgressDTO(
             experiment_id=experiment_id,
@@ -341,6 +435,15 @@ class ApiService:
             incomplete_cases=incomplete,
             case_status_counts=counts,
             operation=_operation_dto(self.operations.snapshot(experiment_id)),
+            current_candidate_id=(
+                None if running is None else str(running["candidate_id"])
+            ),
+            current_workload_case_id=(
+                None if running is None else str(running["workload_case_id"])
+            ),
+            latest_run_id=latest_run_id,
+            latest_tokens_per_second=latest_tokens_per_second,
+            latest_metrics=latest_metrics,
         )
 
     def list_candidates(self, experiment_id: str) -> CandidateListResponse:
@@ -544,6 +647,133 @@ class ApiService:
             qualities=qualities,
         )
 
+    def list_placements(self) -> PlacementListResponse:
+        with self.database.session() as connection:
+            records = PlacementRepository(connection).list()
+        return PlacementListResponse(
+            items=tuple(_placement_dto(record) for record in records)
+        )
+
+    def get_placement(self, placement_id: str) -> PlacementDTO:
+        with self.database.session() as connection:
+            record = PlacementRepository(connection).get(placement_id)
+        if record is None:
+            raise ApiNotFoundError(f"placement not found: {placement_id}")
+        return _placement_dto(record)
+
+    def compare_candidate(
+        self,
+        experiment_id: str,
+        *,
+        candidate_id: str,
+        metric_names: tuple[str, ...],
+        baseline_candidate_id: str | None,
+        filters: tuple[AnalysisFilter, ...],
+        qualities: tuple[str, ...],
+    ) -> CandidateComparison:
+        self._require_experiment(experiment_id)
+        return AnalysisService(self.database).compare(
+            experiment_id,
+            candidate_id=candidate_id,
+            metric_names=metric_names,
+            filters=filters,
+            qualities=qualities,
+            baseline_candidate_id=baseline_candidate_id,
+        )
+
+    def pareto(
+        self,
+        experiment_id: str,
+        request: ParetoRequestDTO,
+    ) -> ParetoResult:
+        self._require_experiment(experiment_id)
+        return AnalysisService(self.database).pareto(
+            experiment_id,
+            objectives=request.objectives,
+            filters=parse_filters(request.filters),
+            qualities=request.qualities,
+        )
+
+    def latency(
+        self,
+        experiment_id: str,
+        *,
+        candidate_id: str,
+        prompt_tokens: int,
+        generate_tokens: int,
+        decode_start_depth_tokens: int | None,
+        filters: tuple[AnalysisFilter, ...],
+        qualities: tuple[str, ...],
+    ) -> LatencyEstimate:
+        self._require_experiment(experiment_id)
+        return AnalysisService(self.database).latency(
+            experiment_id,
+            candidate_id=candidate_id,
+            prompt_tokens=prompt_tokens,
+            generate_tokens=generate_tokens,
+            decode_start_depth_tokens=decode_start_depth_tokens,
+            filters=filters,
+            qualities=qualities,
+        )
+
+    def validation_history(
+        self,
+        experiment_id: str,
+        candidate_id: str,
+    ) -> CandidateValidationHistoryDTO:
+        from llama_profile_lab.db import ServerValidationRepository
+
+        with self.database.session() as connection:
+            self._require_experiment_connection(connection, experiment_id)
+            if CandidateRepository(connection).get(candidate_id) is None:
+                raise ApiNotFoundError(f"Candidate not found: {candidate_id}")
+            repository = ServerValidationRepository(connection)
+            evaluations = repository.evaluations(
+                experiment_id=experiment_id,
+                candidate_id=candidate_id,
+            )
+            benchmarks = repository.benchmarks_for_candidate(
+                experiment_id=experiment_id,
+                candidate_id=candidate_id,
+                completed_only=False,
+            )
+
+        return CandidateValidationHistoryDTO(
+            experiment_id=experiment_id,
+            candidate_id=candidate_id,
+            evaluations=tuple(
+                CandidateEvaluationDTO(
+                    id=item.id,
+                    stage=item.stage,
+                    decision=item.decision,
+                    reason=item.reason,
+                    metrics=dict(item.metrics),
+                    created_at=item.created_at,
+                )
+                for item in evaluations
+            ),
+            benchmarks=tuple(
+                ServerBenchmarkDTO(
+                    id=item.id,
+                    server_run_id=item.server_run_id,
+                    workload_case_id=item.workload_case_id,
+                    category=item.category,
+                    status=item.status,
+                    requests=item.requests,
+                    failed=item.failed,
+                    turns=item.turns,
+                    avg_prompt_ts=item.avg_prompt_ts,
+                    avg_pred_ts=item.avg_pred_ts,
+                    avg_latency_ms=item.avg_latency_ms,
+                    draft_n=item.draft_n,
+                    accepted_n=item.accepted_n,
+                    accept_rate=item.accept_rate,
+                    created_at=item.created_at,
+                )
+                for item in benchmarks
+            ),
+        )
+
     def validate_candidate(
         self,
         candidate_id: str,
@@ -601,6 +831,19 @@ class ApiService:
         if counts is None:
             raise RuntimeError("experiment count query returned no row")
         incomplete = BenchmarkCaseRepository(connection).count_incomplete(record.id)
+        base_candidate = CandidateRepository(connection).get(record.base_candidate_id)
+        search_space = SearchSpaceRepository(connection).get(record.search_space_id)
+        workload_suite = WorkloadSuiteRepository(connection).get(record.workload_suite_id)
+        measurement_policy = MeasurementPolicyRepository(connection).get(
+            record.measurement_policy_id
+        )
+        if (
+            base_candidate is None
+            or search_space is None
+            or workload_suite is None
+            or measurement_policy is None
+        ):
+            raise RuntimeError(f"experiment {record.id} references missing immutable data")
         return ExperimentDTO(
             id=record.id,
             status=record.status,
@@ -617,6 +860,10 @@ class ApiService:
             benchmark_case_count=int(counts["cases"]),
             incomplete_case_count=incomplete,
             definition=definition,
+            base_candidate=base_candidate,
+            search_space=search_space,
+            workload_suite=workload_suite,
+            measurement_policy=measurement_policy,
         )
 
     def _require_experiment(self, experiment_id: str) -> None:
@@ -680,6 +927,26 @@ def _binary_dto(record: BinaryRecord) -> BinaryDTO:
         build_number=record.build_number,
         build_info=dict(record.build_info),
         capabilities=dict(record.capabilities),
+        created_at=record.created_at,
+    )
+
+
+def _placement_dto(record: ResolvedPlacementRecord) -> PlacementDTO:
+    return PlacementDTO(
+        id=record.id,
+        candidate_id=record.candidate_id,
+        host_id=record.host_id,
+        binary_id=record.binary_id,
+        fit_attempt_id=record.fit_attempt_id,
+        production_context_size=record.production_context_size,
+        n_gpu_layers=record.n_gpu_layers,
+        n_cpu_moe=record.n_cpu_moe,
+        split_mode=record.split_mode,
+        main_gpu=record.main_gpu,
+        devices=record.devices,
+        tensor_split=record.tensor_split,
+        override_tensor=record.override_tensor,
+        request=dict(record.request),
         created_at=record.created_at,
     )
 
