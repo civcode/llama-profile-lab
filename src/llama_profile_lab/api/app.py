@@ -42,6 +42,8 @@ from llama_profile_lab.api.dto import (
     PlanPreviewDTO,
     PlanSummaryDTO,
     ProfileListResponse,
+    PromotionRequest,
+    PromotionResponse,
     ResultsResponse,
     RunDetailDTO,
     RunListResponse,
@@ -61,6 +63,7 @@ from llama_profile_lab.db import Database
 from llama_profile_lab.execution import HostLockError, ServerValidationError
 from llama_profile_lab.llama import BinaryDiscoveryError
 from llama_profile_lab.planning import PlanningError
+from llama_profile_lab.promotion import PromotionError
 
 
 def create_app(
@@ -144,6 +147,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
         PlanningError,
         HostLockError,
         ServerValidationError,
+        PromotionError,
     ):
         app.add_exception_handler(exception_type, _conflict_handler)
     app.add_exception_handler(AnalysisError, _bad_request_handler)
@@ -475,6 +479,17 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
         request: ServerValidationRequest,
     ) -> ServerValidationResponse:
         return service.validate_candidate(candidate_id, request)
+
+    @app.post(
+        "/api/candidates/{candidate_id}/promote",
+        response_model=PromotionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def promote_candidate(
+        candidate_id: str,
+        request: PromotionRequest,
+    ) -> PromotionResponse:
+        return service.promote_candidate(candidate_id, request)
 
 
 async def _progress_events(
