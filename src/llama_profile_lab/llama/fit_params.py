@@ -266,7 +266,7 @@ def _parse_fitted_tokens(tokens: tuple[str, ...]) -> _ParsedFitTokens:
     context_size: int | None = None
     n_gpu_layers: int | None = None
     tensor_split: tuple[float, ...] | None = None
-    override_tensor: tuple[str, ...] = ()
+    override_tensor_values: list[str] = []
 
     index = 0
     while index < len(tokens):
@@ -302,7 +302,7 @@ def _parse_fitted_tokens(tokens: tuple[str, ...]) -> _ParsedFitTokens:
         elif option in {"-ot", "--override-tensor"}:
             # Keep the complete comma-separated override expression intact.
             # Regex patterns may themselves contain punctuation.
-            override_tensor = (value,)
+            override_tensor_values.append(value)
 
     if context_size is None or n_gpu_layers is None:
         raise LlamaFitParamsParseError(
@@ -312,7 +312,7 @@ def _parse_fitted_tokens(tokens: tuple[str, ...]) -> _ParsedFitTokens:
         context_size=context_size,
         n_gpu_layers=n_gpu_layers,
         tensor_split=tensor_split,
-        override_tensor=override_tensor,
+        override_tensor=tuple(override_tensor_values),
     )
 
 
