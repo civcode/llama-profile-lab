@@ -1202,6 +1202,8 @@ Automated acceptance covers the reference 11-Candidate / 44-case plan through th
 
 ## 16. M12 — Launcher promotion, archive, and export
 
+**Status: Complete**
+
 ### Objective
 
 Complete the lifecycle from production profile to experiment to validated Candidate to proposed launcher update.
@@ -1252,16 +1254,16 @@ llprof archive should:
 
 ### Work items
 
-- [ ] launcher diff generator
-- [ ] promotion persistence
-- [ ] explicit apply workflow or patch output
-- [ ] archive snapshot
-- [ ] archive manifest
-- [ ] experiment export
+- [x] launcher diff generator
+- [x] promotion persistence
+- [x] explicit apply workflow or patch output
+- [x] archive snapshot
+- [x] archive manifest
+- [x] experiment export
 
 ### Acceptance gate
 
-A server-validated Candidate can generate a reproducible launcher-profile patch and the complete experiment database can be archived consistently.
+Complete. A server-validated Candidate can generate a reproducible launcher-profile patch without mutating the launcher configuration. The proposal records the exact source/proposed launcher snapshots plus supporting validation provenance as an append-only Candidate evaluation. `llprof archive` checkpoints WAL, uses SQLite's online backup API for a consistent snapshot, optionally bundles artifact files, and emits a SHA-256 manifest. `llprof experiment export` emits full experiment provenance including immutable definitions, plan rows, executions, telemetry, placement, validation, binaries, and hosts.
 
 ---
 
