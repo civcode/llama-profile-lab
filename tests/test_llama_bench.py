@@ -13,6 +13,7 @@ from llama_profile_lab.domain import (
     MeasurementPolicy,
     ModelSelection,
     PlacementConfig,
+    ResolvedPlacement,
 )
 from llama_profile_lab.llama import CapabilitySet
 from llama_profile_lab.llama.bench import (
@@ -62,6 +63,9 @@ def capabilities() -> CapabilitySet:
             "--flash-attn",
             "--load-mode",
             "--lazy-mode",
+            "--n-gpu-layers",
+            "--tensor-split",
+            "--override-tensor",
             "--no-kv-offload",
             "--no-op-offload",
             "--no-host",
@@ -117,3 +121,28 @@ def test_parser_rejects_unexpected_sample_count() -> None:
     text = (_FIXTURES / "llama-bench-result.json").read_text(encoding="utf-8")
     with pytest.raises(LlamaBenchParseError, match="sample count"):
         parse_llama_bench_json(text, expected_repetitions=5)
+
+
+
+def test_resolved_placement_is_authoritative_for_bench_argv() -> None:
+    placement = ResolvedPlacement(
+        production_context_size=131072,
+        n_gpu_layers=42,
+        tensor_split=(3.0, 1.0),
+        override_tensor=(r"blk\.12\.ffn_.*=CPU",),
+    )
+
+    argv = LlamaBenchAdapter().build_argv(
+        binary_path=Path("/bin/llama-bench"),
+        capabilities=capabilities(),
+        model_path=Path("/models/fake.gguf"),
+        candidate=candidate(),
+        workload=DecodeWorkloadCase(generate_tokens=256, depth_tokens=4096),
+        measurement_policy=MeasurementPolicy(repetitions=3),
+        placement=placement,
+    )
+
+    assert argv[argv.index("--n-gpu-layers") + 1] == "42"
+    assert argv[argv.index("--tensor-split") + 1] == "3.0,1.0"
+    assert argv[argv.index("--override-tensor") + 1] == r"blk\.12\.ffn_.*=CPU"
+    assert "--fit-target" not in argv
