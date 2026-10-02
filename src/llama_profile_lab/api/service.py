@@ -1,0 +1,772 @@
+"""Application-facing services backing the local HTTP API."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+from typing import cast
+
+from llama_profile_lab.analysis import AnalysisFilter, AnalysisService
+from llama_profile_lab.db import (
+    BenchmarkCaseRepository,
+    BenchmarkRunRepository,
+    CandidateRepository,
+    Database,
+    EnvironmentRepository,
+    ExperimentRepository,
+    MeasurementPolicyRepository,
+    PlacementRepository,
+    SearchSpaceRepository,
+    TelemetryRepository,
+    WorkloadCaseRepository,
+    WorkloadSuiteRepository,
+    schema_version,
+    transaction,
+)
+from llama_profile_lab.db.records import BinaryRecord, ExperimentRecord
+from llama_profile_lab.domain import (
+    CandidateBaseline,
+    ExperimentDefinition,
+    FixedPlacementPolicy,
+)
+from llama_profile_lab.domain.base import JsonScalar
+from llama_profile_lab.execution import ServerValidationService
+from llama_profile_lab.llama import BinaryKind, probe_binary
+from llama_profile_lab.planning import PlanSummary, plan_experiment
+
+from llama_profile_lab.api.dto import (
+    BenchmarkSampleDTO,
+    BinaryDTO,
+    BinaryInspectRequest,
+    BinaryListResponse,
+    CandidateDTO,
+    CandidateListResponse,
+    ExecutionRequest,
+    ExecutionSummaryDTO,
+    ExperimentCreateRequest,
+    ExperimentDTO,
+    ExperimentListResponse,
+    ExperimentProgressDTO,
+    LauncherProfileDTO,
+    ModelDTO,
+    ModelFileDTO,
+    ModelListResponse,
+    OperationDTO,
+    PlanSummaryDTO,
+    ProfileListResponse,
+    ResultsResponse,
+    RunDetailDTO,
+    RunListResponse,
+    RunSummaryDTO,
+    ServerValidationRequest,
+    ServerValidationResponse,
+    TelemetryResponse,
+)
+from llama_profile_lab.api.operations import (
+    ExecutionSpec,
+    OperationManager,
+    OperationSnapshot,
+)
+from llama_profile_lab.api.profiles import LauncherProfile, LauncherProfileProvider
+
+
+class ApiNotFoundError(RuntimeError):
+    """Raised when an API resource cannot be found."""
+
+
+class ApiConflictError(RuntimeError):
+    """Raised when a requested API state transition is not valid."""
+
+
+class ApiService:
+    """Stable DTO boundary over the existing planning/execution/analysis services."""
+
+    def __init__(
+        self,
+        database: Database,
+        *,
+        profiles: LauncherProfileProvider,
+        operations: OperationManager,
+    ) -> None:
+        self.database = database
+        self.profiles = profiles
+        self.operations = operations
+
+    def health(self) -> int:
+        with self.database.session() as connection:
+            return schema_version(connection)
+
+    def list_profiles(self) -> ProfileListResponse:
+        items = tuple(_profile_dto(item) for item in self.profiles.list())
+        return ProfileListResponse(
+            configured=self.profiles.configured,
+            source_path=(
+                None
+                if self.profiles.config_path is None
+                else str(self.profiles.config_path)
+            ),
+            items=items,
+        )
+
+    def get_profile(self, profile_id: str) -> LauncherProfileDTO:
+        profile = self.profiles.get(profile_id)
+        if profile is None:
+            if not self.profiles.configured:
+                raise ApiNotFoundError("launcher profile registry is not configured")
+            raise ApiNotFoundError(f"launcher profile not found: {profile_id}")
+        return _profile_dto(profile)
+
+    def list_binaries(self) -> BinaryListResponse:
+        with self.database.session() as connection:
+            records = EnvironmentRepository(connection).list_binaries()
+        return BinaryListResponse(items=tuple(_binary_dto(record) for record in records))
+
+    def inspect_binaries(self, request: BinaryInspectRequest) -> BinaryListResponse:
+        kind: BinaryKind | None = (
+            None if request.kind == "auto" else cast(BinaryKind, request.kind)
+        )
+        records: list[BinaryRecord] = []
+        with self.database.session() as connection:
+            repository = EnvironmentRepository(connection)
+            for raw_path in request.paths:
+                probe = probe_binary(Path(raw_path), kind=kind)
+                identifier = repository.put_binary(
+                    sha256=probe.sha256,
+                    kind=probe.kind,
+                    path=str(probe.path),
+                    size_bytes=probe.size_bytes,
+                    mtime_ns=probe.mtime_ns,
+                    git_commit=probe.git_commit,
+                    build_number=probe.build_number,
+                    build_info=probe.build_info_mapping(),
+                    capabilities=probe.capabilities.to_mapping(),
+                )
+                record = repository.get_binary(identifier)
+                if record is None:
+                    raise RuntimeError("binary registration did not produce a record")
+                records.append(record)
+        return BinaryListResponse(items=tuple(_binary_dto(record) for record in records))
+
+    def list_models(self) -> ModelListResponse:
+        with self.database.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, identity_hash, architecture, parameter_count,
+                       quantization, size_bytes, metadata_json, created_at
+                FROM model
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+            items: list[ModelDTO] = []
+            for row in rows:
+                files = connection.execute(
+                    """
+                    SELECT id, part_index, path, sha256, size_bytes
+                    FROM model_file
+                    WHERE model_id = ?
+                    ORDER BY part_index
+                    """,
+                    (row["id"],),
+                ).fetchall()
+                items.append(
+                    ModelDTO(
+                        id=str(row["id"]),
+                        identity_hash=str(row["identity_hash"]),
+                        architecture=row["architecture"],
+                        parameter_count=(
+                            None
+                            if row["parameter_count"] is None
+                            else int(row["parameter_count"])
+                        ),
+                        quantization=row["quantization"],
+                        size_bytes=int(row["size_bytes"]),
+                        metadata=_json_object(str(row["metadata_json"])),
+                        created_at=str(row["created_at"]),
+                        files=tuple(
+                            ModelFileDTO(
+                                id=str(item["id"]),
+                                part_index=int(item["part_index"]),
+                                path=str(item["path"]),
+                                sha256=str(item["sha256"]),
+                                size_bytes=int(item["size_bytes"]),
+                            )
+                            for item in files
+                        ),
+                    )
+                )
+        return ModelListResponse(items=tuple(items))
+
+    def create_experiment(self, request: ExperimentCreateRequest) -> ExperimentDTO:
+        with self.database.session() as connection:
+            with transaction(connection, immediate=True):
+                candidates = CandidateRepository(connection)
+                searches = SearchSpaceRepository(connection)
+                suites = WorkloadSuiteRepository(connection)
+                policies = MeasurementPolicyRepository(connection)
+                experiments = ExperimentRepository(connection)
+
+                base_candidate_id = candidates.put(request.base_candidate)
+                search_space_id = searches.put(request.search_space)
+                workload_suite_id = suites.put(request.workload_suite)
+                measurement_policy_id = policies.put(request.measurement_policy)
+
+                if isinstance(request.placement_policy, FixedPlacementPolicy):
+                    placement = PlacementRepository(connection).get(
+                        request.placement_policy.placement_id
+                    )
+                    if placement is None:
+                        raise ApiNotFoundError(
+                            "fixed placement not found: "
+                            f"{request.placement_policy.placement_id}"
+                        )
+                if isinstance(request.baseline, CandidateBaseline):
+                    baseline = candidates.get(request.baseline.candidate_id)
+                    if baseline is None:
+                        raise ApiNotFoundError(
+                            f"baseline Candidate not found: {request.baseline.candidate_id}"
+                        )
+
+                definition = ExperimentDefinition(
+                    name=request.name,
+                    base_candidate_id=base_candidate_id,
+                    search_space_id=search_space_id,
+                    workload_suite_id=workload_suite_id,
+                    measurement_policy_id=measurement_policy_id,
+                    placement_policy=request.placement_policy,
+                    baseline=request.baseline,
+                )
+                experiment_id = experiments.create(definition)
+        return self.get_experiment(experiment_id)
+
+    def list_experiments(self) -> ExperimentListResponse:
+        with self.database.session() as connection:
+            records = ExperimentRepository(connection).list()
+            items = tuple(
+                self._experiment_dto(connection, record)
+                for record in records
+            )
+        return ExperimentListResponse(items=items)
+
+    def get_experiment(self, experiment_id: str) -> ExperimentDTO:
+        with self.database.session() as connection:
+            record = ExperimentRepository(connection).get(experiment_id)
+            if record is None:
+                raise ApiNotFoundError(f"experiment not found: {experiment_id}")
+            return self._experiment_dto(connection, record)
+
+    def clone_experiment(
+        self,
+        experiment_id: str,
+        *,
+        name: str | None,
+    ) -> ExperimentDTO:
+        with self.database.session() as connection:
+            experiments = ExperimentRepository(connection)
+            definition = experiments.get_definition(experiment_id)
+            if definition is None:
+                raise ApiNotFoundError(f"experiment not found: {experiment_id}")
+            clone = definition.model_copy(
+                update={"name": name or f"{definition.name} (copy)"}
+            )
+            clone_id = experiments.create(clone)
+        return self.get_experiment(clone_id)
+
+    def plan(self, experiment_id: str) -> PlanSummaryDTO:
+        with self.database.session() as connection:
+            summary = plan_experiment(connection, experiment_id)
+        return _plan_dto(summary)
+
+    def start_execution(
+        self,
+        experiment_id: str,
+        request: ExecutionRequest,
+        *,
+        resume: bool,
+    ) -> ExperimentProgressDTO:
+        self._require_experiment(experiment_id)
+        spec = ExecutionSpec(
+            binary_id=request.binary_id,
+            model_path=Path(request.model_path),
+            fit_binary_id=request.fit_binary_id,
+            timeout_seconds=request.timeout_seconds,
+            fit_timeout_seconds=request.fit_timeout_seconds,
+            limit=request.limit,
+            telemetry_interval_seconds=request.telemetry_interval_ms / 1000.0,
+        )
+        self.operations.start(experiment_id, spec=spec, resume=resume)
+        return self.progress(experiment_id)
+
+    def pause(self, experiment_id: str) -> ExperimentProgressDTO:
+        self.operations.pause(experiment_id)
+        return self.progress(experiment_id)
+
+    def cancel(self, experiment_id: str) -> ExperimentProgressDTO:
+        self.operations.cancel(experiment_id)
+        return self.progress(experiment_id)
+
+    def progress(self, experiment_id: str) -> ExperimentProgressDTO:
+        with self.database.session() as connection:
+            experiments = ExperimentRepository(connection)
+            record = experiments.get(experiment_id)
+            if record is None:
+                raise ApiNotFoundError(f"experiment not found: {experiment_id}")
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM benchmark_case
+                WHERE experiment_id = ?
+                """,
+                (experiment_id,),
+            ).fetchone()
+            total = 0 if row is None else int(row["total"])
+            incomplete = BenchmarkCaseRepository(connection).count_incomplete(
+                experiment_id
+            )
+            status_rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM benchmark_case
+                WHERE experiment_id = ?
+                GROUP BY status
+                ORDER BY status
+                """,
+                (experiment_id,),
+            ).fetchall()
+            counts = {
+                str(item["status"]): int(item["count"])
+                for item in status_rows
+            }
+
+        return ExperimentProgressDTO(
+            experiment_id=experiment_id,
+            experiment_status=record.status,
+            total_cases=total,
+            completed_cases=max(0, total - incomplete),
+            incomplete_cases=incomplete,
+            case_status_counts=counts,
+            operation=_operation_dto(self.operations.snapshot(experiment_id)),
+        )
+
+    def list_candidates(self, experiment_id: str) -> CandidateListResponse:
+        with self.database.session() as connection:
+            self._require_experiment_connection(connection, experiment_id)
+            rows = connection.execute(
+                """
+                SELECT candidate_id, ordinal, generation_metadata_json
+                FROM experiment_candidate
+                WHERE experiment_id = ?
+                ORDER BY ordinal
+                """,
+                (experiment_id,),
+            ).fetchall()
+            candidates = CandidateRepository(connection)
+            items: list[CandidateDTO] = []
+            for row in rows:
+                candidate_id = str(row["candidate_id"])
+                candidate = candidates.get(candidate_id)
+                if candidate is None:
+                    raise RuntimeError(
+                        f"experiment references missing Candidate {candidate_id}"
+                    )
+                counts = connection.execute(
+                    """
+                    SELECT
+                        (
+                            SELECT COUNT(*)
+                            FROM experiment_workload
+                            WHERE experiment_id = ? AND candidate_id = ?
+                        ) AS workloads,
+                        (
+                            SELECT COUNT(*)
+                            FROM benchmark_case
+                            WHERE experiment_id = ? AND candidate_id = ?
+                        ) AS cases,
+                        (
+                            SELECT COUNT(*)
+                            FROM benchmark_case AS bc
+                            WHERE bc.experiment_id = ?
+                              AND bc.candidate_id = ?
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM benchmark_run AS br
+                                  WHERE br.benchmark_case_id = bc.id
+                                    AND br.status = 'completed'
+                              )
+                        ) AS completed,
+                        (
+                            SELECT COUNT(*)
+                            FROM server_run
+                            WHERE experiment_id = ? AND candidate_id = ?
+                              AND status = 'completed'
+                        ) AS validations
+                    """,
+                    (
+                        experiment_id,
+                        candidate_id,
+                        experiment_id,
+                        candidate_id,
+                        experiment_id,
+                        candidate_id,
+                        experiment_id,
+                        candidate_id,
+                    ),
+                ).fetchone()
+                if counts is None:
+                    raise RuntimeError("candidate count query returned no row")
+                items.append(
+                    CandidateDTO(
+                        id=candidate_id,
+                        ordinal=int(row["ordinal"]),
+                        generation_metadata=_json_object(
+                            str(row["generation_metadata_json"])
+                        ),
+                        candidate=candidate,
+                        workload_count=int(counts["workloads"]),
+                        benchmark_case_count=int(counts["cases"]),
+                        completed_case_count=int(counts["completed"]),
+                        server_validation_count=int(counts["validations"]),
+                    )
+                )
+        return CandidateListResponse(items=tuple(items))
+
+    def list_runs(self, experiment_id: str) -> RunListResponse:
+        with self.database.session() as connection:
+            self._require_experiment_connection(connection, experiment_id)
+            repository = BenchmarkRunRepository(connection)
+            rows = connection.execute(
+                """
+                SELECT br.id, bc.candidate_id, bc.workload_case_id,
+                       bc.placement_id, wc.kind
+                FROM benchmark_run AS br
+                JOIN benchmark_case AS bc ON bc.id = br.benchmark_case_id
+                JOIN workload_case AS wc ON wc.id = bc.workload_case_id
+                WHERE bc.experiment_id = ?
+                ORDER BY br.started_at, br.id
+                """,
+                (experiment_id,),
+            ).fetchall()
+            items: list[RunSummaryDTO] = []
+            for row in rows:
+                record = repository.get(str(row["id"]))
+                if record is None:
+                    raise RuntimeError("run disappeared while listing experiment")
+                items.append(
+                    _run_summary_dto(
+                        record=record,
+                        candidate_id=str(row["candidate_id"]),
+                        workload_case_id=str(row["workload_case_id"]),
+                        placement_id=row["placement_id"],
+                        workload_kind=str(row["kind"]),
+                    )
+                )
+        return RunListResponse(items=tuple(items))
+
+    def get_run(self, run_id: str) -> RunDetailDTO:
+        with self.database.session() as connection:
+            runs = BenchmarkRunRepository(connection)
+            record = runs.get(run_id)
+            if record is None:
+                raise ApiNotFoundError(f"run not found: {run_id}")
+            row = connection.execute(
+                """
+                SELECT bc.candidate_id, bc.workload_case_id,
+                       bc.placement_id, wc.kind
+                FROM benchmark_case AS bc
+                JOIN workload_case AS wc ON wc.id = bc.workload_case_id
+                WHERE bc.id = ?
+                """,
+                (record.benchmark_case_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("run references missing benchmark case")
+            summary = _run_summary_dto(
+                record=record,
+                candidate_id=str(row["candidate_id"]),
+                workload_case_id=str(row["workload_case_id"]),
+                placement_id=row["placement_id"],
+                workload_kind=str(row["kind"]),
+            )
+            stdout, stderr = runs.logs(run_id)
+            return RunDetailDTO(
+                **summary.model_dump(),
+                samples=tuple(
+                    BenchmarkSampleDTO(
+                        sample_index=index,
+                        elapsed_ns=elapsed_ns,
+                        tokens_per_second=tokens_per_second,
+                    )
+                    for index, elapsed_ns, tokens_per_second in runs.samples(run_id)
+                ),
+                metrics=runs.metrics(run_id),
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+    def telemetry(self, run_id: str) -> TelemetryResponse:
+        with self.database.session() as connection:
+            if BenchmarkRunRepository(connection).get(run_id) is None:
+                raise ApiNotFoundError(f"run not found: {run_id}")
+            samples = TelemetryRepository(connection).samples(run_id)
+        return TelemetryResponse(run_id=run_id, samples=samples)
+
+    def results(
+        self,
+        experiment_id: str,
+        *,
+        filters: tuple[AnalysisFilter, ...],
+        qualities: tuple[str, ...],
+        metrics: tuple[str, ...] | None,
+    ) -> ResultsResponse:
+        self._require_experiment(experiment_id)
+        rows = AnalysisService(self.database).export_rows(
+            experiment_id,
+            filters=filters,
+            qualities=qualities,
+            metric_names=metrics,
+        )
+        return ResultsResponse(experiment_id=experiment_id, rows=rows)
+
+    def matrix(
+        self,
+        experiment_id: str,
+        *,
+        x_path: str,
+        y_path: str,
+        metric: str,
+        facet_path: str | None,
+        filters: tuple[AnalysisFilter, ...],
+        qualities: tuple[str, ...],
+    ) -> object:
+        self._require_experiment(experiment_id)
+        return AnalysisService(self.database).matrix(
+            experiment_id,
+            x_path=x_path,
+            y_path=y_path,
+            metric=metric,
+            facet_path=facet_path,
+            filters=filters,
+            qualities=qualities,
+        )
+
+    def validate_candidate(
+        self,
+        candidate_id: str,
+        request: ServerValidationRequest,
+    ) -> ServerValidationResponse:
+        summary = ServerValidationService(self.database).validate(
+            request.experiment_id,
+            candidate_id=candidate_id,
+            server_binary_id=request.server_binary_id,
+            speed_bench_binary_id=request.speed_bench_binary_id,
+            model_path=Path(request.model_path),
+            placement_id=request.placement_id,
+            draft_model_path=(
+                None
+                if request.draft_model_path is None
+                else Path(request.draft_model_path)
+            ),
+            model_name=request.model_name,
+            host=request.host,
+            port=request.port,
+            readiness_timeout_seconds=request.readiness_timeout_seconds,
+            request_timeout_seconds=request.request_timeout_seconds,
+            benchmark_timeout_seconds=request.benchmark_timeout_seconds,
+            workload_case_id=request.workload_case_id,
+        )
+        return ServerValidationResponse(
+            experiment_id=summary.experiment_id,
+            candidate_id=summary.candidate_id,
+            server_run_id=summary.server_run_id,
+            benchmark_ids=summary.benchmark_ids,
+            completed=summary.completed,
+            speculative=summary.speculative,
+        )
+
+    def _experiment_dto(
+        self,
+        connection: sqlite3.Connection,
+        record: ExperimentRecord,
+    ) -> ExperimentDTO:
+        definition = ExperimentRepository(connection).get_definition(record.id)
+        if definition is None:
+            raise RuntimeError(f"experiment {record.id} has no definition")
+        counts = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM experiment_candidate
+                 WHERE experiment_id = ?) AS candidates,
+                (SELECT COUNT(*) FROM experiment_workload
+                 WHERE experiment_id = ?) AS workloads,
+                (SELECT COUNT(*) FROM benchmark_case
+                 WHERE experiment_id = ?) AS cases
+            """,
+            (record.id, record.id, record.id),
+        ).fetchone()
+        if counts is None:
+            raise RuntimeError("experiment count query returned no row")
+        incomplete = BenchmarkCaseRepository(connection).count_incomplete(record.id)
+        return ExperimentDTO(
+            id=record.id,
+            status=record.status,
+            name=record.name,
+            base_candidate_id=record.base_candidate_id,
+            search_space_id=record.search_space_id,
+            workload_suite_id=record.workload_suite_id,
+            measurement_policy_id=record.measurement_policy_id,
+            created_at=record.created_at,
+            frozen_at=record.frozen_at,
+            completed_at=record.completed_at,
+            candidate_count=int(counts["candidates"]),
+            workload_count=int(counts["workloads"]),
+            benchmark_case_count=int(counts["cases"]),
+            incomplete_case_count=incomplete,
+            definition=definition,
+        )
+
+    def _require_experiment(self, experiment_id: str) -> None:
+        with self.database.session() as connection:
+            self._require_experiment_connection(connection, experiment_id)
+
+    @staticmethod
+    def _require_experiment_connection(
+        connection: sqlite3.Connection,
+        experiment_id: str,
+    ) -> None:
+        if ExperimentRepository(connection).get(experiment_id) is None:
+            raise ApiNotFoundError(f"experiment not found: {experiment_id}")
+
+
+def parse_filters(values: tuple[str, ...]) -> tuple[AnalysisFilter, ...]:
+    return tuple(_parse_filter(value) for value in values)
+
+
+def _parse_filter(value: str) -> AnalysisFilter:
+    path, separator, raw_value = value.partition("=")
+    if not separator or not path:
+        raise ValueError(f"invalid filter {value!r}; expected PATH=VALUE")
+    return AnalysisFilter(path=path, value=_parse_scalar(raw_value))
+
+
+def _parse_scalar(value: str) -> JsonScalar:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    if parsed is None or isinstance(parsed, str | int | float | bool):
+        return parsed
+    raise ValueError("analysis filter values must be JSON scalars")
+
+
+def _profile_dto(profile: LauncherProfile) -> LauncherProfileDTO:
+    return LauncherProfileDTO(
+        id=profile.id,
+        binary_key=profile.binary_key,
+        binary_path=profile.binary_path,
+        profiles=profile.profiles,
+        model_path=profile.model_path,
+        draft_model_path=profile.draft_model_path,
+        server_alias=profile.server_alias,
+        args=profile.args,
+    )
+
+
+def _binary_dto(record: BinaryRecord) -> BinaryDTO:
+    return BinaryDTO(
+        id=record.id,
+        sha256=record.sha256,
+        kind=record.kind,
+        path=record.path,
+        size_bytes=record.size_bytes,
+        mtime_ns=record.mtime_ns,
+        git_commit=record.git_commit,
+        git_branch=record.git_branch,
+        git_dirty=record.git_dirty,
+        build_number=record.build_number,
+        build_info=dict(record.build_info),
+        capabilities=dict(record.capabilities),
+        created_at=record.created_at,
+    )
+
+
+def _plan_dto(summary: PlanSummary) -> PlanSummaryDTO:
+    return PlanSummaryDTO(
+        experiment_id=summary.experiment_id,
+        experiment_name=summary.experiment_name,
+        raw_combinations=summary.raw_combinations,
+        rejected_by_constraints=summary.rejected_by_constraints,
+        duplicate_candidates=summary.duplicate_candidates,
+        candidate_count=summary.candidate_count,
+        workloads_per_candidate=summary.workloads_per_candidate,
+        benchmark_case_count=summary.benchmark_case_count,
+        unique_workload_count=summary.unique_workload_count,
+    )
+
+
+def _operation_dto(snapshot: OperationSnapshot | None) -> OperationDTO | None:
+    if snapshot is None:
+        return None
+    summary = snapshot.summary
+    return OperationDTO(
+        id=snapshot.id,
+        experiment_id=snapshot.experiment_id,
+        status=snapshot.status,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        requested_action=snapshot.requested_action,
+        summary=(
+            None
+            if summary is None
+            else ExecutionSummaryDTO(
+                experiment_id=summary.experiment_id,
+                attempted=summary.attempted,
+                completed=summary.completed,
+                failed=summary.failed,
+                remaining=summary.remaining,
+                interrupted=summary.interrupted,
+                limited=summary.limited,
+            )
+        ),
+        error=snapshot.error,
+    )
+
+
+def _run_summary_dto(
+    *,
+    record: object,
+    candidate_id: str,
+    workload_case_id: str,
+    placement_id: str | None,
+    workload_kind: str,
+) -> RunSummaryDTO:
+    from llama_profile_lab.db.records import BenchmarkRunRecord
+
+    if not isinstance(record, BenchmarkRunRecord):
+        raise TypeError("expected BenchmarkRunRecord")
+    return RunSummaryDTO(
+        id=record.id,
+        benchmark_case_id=record.benchmark_case_id,
+        candidate_id=candidate_id,
+        workload_case_id=workload_case_id,
+        placement_id=placement_id,
+        workload_kind=workload_kind,
+        host_id=record.host_id,
+        binary_id=record.binary_id,
+        measurement_policy_id=record.measurement_policy_id,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        duration_ns=record.duration_ns,
+        status=record.status,
+        exit_code=record.exit_code,
+        quality=record.quality,
+        quality_details=(
+            None if record.quality_details is None else dict(record.quality_details)
+        ),
+    )
+
+
+def _json_object(value: str) -> dict[str, object]:
+    loaded = json.loads(value)
+    if not isinstance(loaded, dict):
+        raise ValueError("persisted JSON must be an object")
+    return {str(key): item for key, item in loaded.items()}
