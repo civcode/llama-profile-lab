@@ -300,7 +300,7 @@ export function ExperimentPage({ experimentId }: { experimentId: string }) {
               ? "—"
               : progress.latest_tokens_per_second.toFixed(1) + " t/s"
           }
-          note={progress.latest_run_id ?? "No completed run yet"}
+          note={progress.latest_run_id ? "Latest completed run" : "No completed run yet"}
         />
         <MetricCard
           label="Process CPU"

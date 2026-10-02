@@ -313,9 +313,10 @@ describe("ExperimentPage execution controls", () => {
     render(<ExperimentPage experimentId="exp-ui" />);
 
     expect(await screen.findByText("Candidate #1")).toBeInTheDocument();
-    expect(screen.getByText("TG256 @ 4K")).toBeInTheDocument();
+    expect(screen.getAllByText("TG256 @ 4K").length).toBeGreaterThan(0);
     expect(screen.queryByText("cand-hidden")).not.toBeInTheDocument();
     expect(screen.queryByText("work-hidden")).not.toBeInTheDocument();
+    expect(screen.queryByText("run-hidden")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(mocks.pause).toHaveBeenCalledWith("exp-ui"));
