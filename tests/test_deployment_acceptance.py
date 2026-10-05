@@ -122,21 +122,25 @@ def _complete_payload() -> dict[str, object]:
             "resolved_placements": [
                 {
                     "id": "baseline-qwen",
+                    "candidate_id": "candidate-qwen",
                     "devices_json": '["CUDA0"]',
                     "n_cpu_moe": 0,
                 },
                 {
                     "id": "baseline-flash",
+                    "candidate_id": "candidate-flash",
                     "devices_json": '["Vulkan0"]',
                     "n_cpu_moe": 0,
                 },
                 {
                     "id": "split-qwen",
+                    "candidate_id": "candidate-qwen",
                     "devices_json": '["CUDA0","Vulkan0"]',
                     "n_cpu_moe": 0,
                 },
                 {
                     "id": "split-flash",
+                    "candidate_id": "candidate-flash",
                     "devices_json": '["CUDA0","Vulkan0"]',
                     "n_cpu_moe": 0,
                 },
