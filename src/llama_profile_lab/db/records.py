@@ -582,6 +582,8 @@ class DeploymentWorkloadMemberRecord:
     standalone_tps: float | None
     retention: float | None
     throughput_loss_pct: float | None
+    baseline_latency_ms: float | None
+    latency_increase_pct: float | None
     correctness_valid: bool
     raw: Mapping[str, Any]
     failure_details: Mapping[str, Any] | None
