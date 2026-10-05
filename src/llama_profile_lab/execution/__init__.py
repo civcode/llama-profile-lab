@@ -1,12 +1,29 @@
 """Benchmark scheduling, process execution, locking, and host identity."""
 
+from llama_profile_lab.execution.concurrent_client import (
+    ConcurrentClient,
+    ConcurrentClientError,
+    LlamaCompletionConcurrentClient,
+    PreparedConcurrentClient,
+)
+from llama_profile_lab.execution.concurrent_workloads import (
+    ConcurrentDeploymentError,
+    ConcurrentDeploymentExecutor,
+    ConcurrentDeploymentSummary,
+    ConcurrentPhaseSummary,
+    StandaloneBaselineInput,
+)
 from llama_profile_lab.execution.deployment_executor import (
     DeploymentExecutionError,
+    DeploymentResidentActionError,
     DeploymentExecutionMember,
     DeploymentExecutionSummary,
     DeploymentExecutor,
     DeploymentProcessRegistry,
     DeploymentServerInput,
+    ResidentDeployment,
+    ResidentDeploymentAction,
+    ResidentDeploymentMember,
 )
 from llama_profile_lab.execution.engine import (
     ExecutionError,
@@ -58,12 +75,25 @@ __all__ = [
     "BasicHostInfo",
     "ExecutionError",
     "ExecutionSummary",
+    "ConcurrentClient",
+    "ConcurrentClientError",
+    "ConcurrentDeploymentError",
+    "ConcurrentDeploymentExecutor",
+    "ConcurrentDeploymentSummary",
+    "ConcurrentPhaseSummary",
     "DeploymentExecutionError",
     "DeploymentExecutionMember",
+    "DeploymentResidentActionError",
     "DeploymentExecutionSummary",
     "DeploymentExecutor",
     "DeploymentProcessRegistry",
     "DeploymentServerInput",
+    "LlamaCompletionConcurrentClient",
+    "PreparedConcurrentClient",
+    "ResidentDeployment",
+    "ResidentDeploymentAction",
+    "ResidentDeploymentMember",
+    "StandaloneBaselineInput",
     "DeviceInventoryError",
     "DeviceInventoryResult",
     "DeviceInventoryService",
