@@ -259,7 +259,11 @@ def _result(
         return ConcurrentMemberResult(
             instance_id=workload.instance_id,
             mode="prefill",
-            status="invalid" if not correctness else status,
+            status=(
+                "invalid"
+                if status == "completed" and not correctness
+                else status
+            ),
             client_ready_ns=min(start, release_ns),
             barrier_release_ns=release_ns,
             first_request_ns=start,
@@ -293,7 +297,11 @@ def _result(
     return ConcurrentMemberResult(
         instance_id=workload.instance_id,
         mode="decode",
-        status="invalid" if not correctness else status,
+        status=(
+            "invalid"
+            if status == "completed" and not correctness
+            else status
+        ),
         client_ready_ns=min(start, release_ns),
         barrier_release_ns=release_ns,
         first_request_ns=start,
