@@ -615,6 +615,13 @@ export interface DeploymentCandidateItem {
   definition: DeploymentDefinition;
   generation: Record<string, unknown>;
   rejection_count: number;
+  rejections: {
+    id: string;
+    stage: string;
+    reason: string;
+    details: Record<string, unknown>;
+    created_at: string;
+  }[];
   placement_ids: string[];
 }
 
