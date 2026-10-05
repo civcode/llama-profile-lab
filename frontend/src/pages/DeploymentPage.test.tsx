@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -282,6 +282,46 @@ describe("DeploymentPage", () => {
         constraints: ["deployment.min_retention:ge:0.75"]
       })
     );
+  });
+
+  it("renders all DD/PP/PD/DP result phases", async () => {
+    mocks.deploymentResults.mockResolvedValue(
+      ["dd", "pp", "pd", "dp"].map((phase, index) => ({
+        workload_run_id: "work-" + phase,
+        deployment_candidate_id: "deploy-candidate-ui",
+        deployment_placement_id: "place-ui",
+        workload_status: "completed",
+        correctness_valid: true,
+        phase,
+        combined_pp_tps: 100 + index,
+        combined_tg_tps: 50 + index,
+        min_retention: 0.8
+      }))
+    );
+
+    render(<DeploymentPage deploymentId="deploy-ui" />);
+
+    const heading = await screen.findByText("DD / PP / PD / DP observations");
+    const section = heading.closest("section");
+    expect(section).not.toBeNull();
+    const view = within(section as HTMLElement);
+    for (const phase of ["DD", "PP", "PD", "DP"]) {
+      expect(view.getByText(phase)).toBeInTheDocument();
+    }
+  });
+
+  it("surfaces terminal deployment failures", async () => {
+    mocks.deploymentProgress.mockResolvedValue({
+      ...progress,
+      deployment_status: "failed",
+      failure_kind: "server_oom",
+      failure_details: { instance_id: "qwen" }
+    });
+
+    render(<DeploymentPage deploymentId="deploy-ui" />);
+
+    expect(await screen.findByText("server_oom")).toBeInTheDocument();
+    expect(screen.getByText("Failure details")).toBeInTheDocument();
   });
 
   it("renders projected and runtime memory evidence distinctly", async () => {
