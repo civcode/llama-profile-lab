@@ -276,7 +276,7 @@ The repository-wide Ruff, mypy, and pytest gate remains pending because the avai
 
 ## 6. V2-M2 — Device inventory and per-device memory estimator
 
-**Status: Planned**
+**Status: Implemented — local M2 and V1/M1 regression tests passing; full repository lint/type/full-test gate pending**
 
 ### Objective
 
@@ -290,7 +290,7 @@ This is the key feasibility primitive for the optimizer.
 - llama.cpp device-list adapter;
 - registered memory-estimation helper;
 - structured per-device memory result;
-- persistence into placement_device_memory;
+- standalone estimate persistence in memory_estimate/memory_estimate_device, with V2-M4 materialization into placement_device_memory;
 - exact helper binary registration/capability detection;
 - estimator cache identity;
 - CLI/debug inspection path for estimator output.
@@ -375,22 +375,22 @@ The lab must register the helper executable independently because:
 
 ### Work items
 
-- [ ] Define accelerator/device domain type.
-- [ ] Extend host fingerprint with accelerator identities.
-- [ ] Add llama.cpp device-list parsing.
-- [ ] Add binary capability for structured memory estimation.
-- [ ] Implement helper executable contract.
-- [ ] Add helper JSON parser.
-- [ ] Add estimator adapter.
-- [ ] Capture model/context/compute bytes independently.
-- [ ] Persist device totals/free bytes at estimate time.
-- [ ] Persist exact selected-device ordering.
-- [ ] Persist raw helper output.
-- [ ] Add estimator cache key.
-- [ ] Detect helper hash drift before execution.
-- [ ] Add CLI inspection command for one Candidate/placement estimate.
-- [ ] Add fixtures covering one GPU, two homogeneous GPUs, and two heterogeneous logical devices.
-- [ ] Add malformed/partial JSON failure cases.
+- [x] Define accelerator/device domain type.
+- [x] Extend host fingerprint with accelerator identities.
+- [x] Add llama.cpp device-list parsing.
+- [x] Add binary capability for structured memory estimation.
+- [x] Implement helper executable contract.
+- [x] Add helper JSON parser.
+- [x] Add estimator adapter.
+- [x] Capture model/context/compute bytes independently.
+- [x] Persist device totals/free bytes at estimate time.
+- [x] Persist exact selected-device ordering.
+- [x] Persist raw helper output.
+- [x] Add estimator cache key.
+- [x] Detect helper hash drift before execution.
+- [x] Add CLI inspection command for one Candidate/placement estimate.
+- [x] Add fixtures covering one GPU, two homogeneous GPUs, and two heterogeneous logical devices.
+- [x] Add malformed/partial JSON failure cases.
 
 ### Tests
 
@@ -425,6 +425,18 @@ Given a synthetic two-device system, the service can estimate one Candidate and 
 - raw helper evidence.
 
 No throughput benchmark is required yet.
+
+Implementation validation completed locally without GitHub Actions:
+
+- V2-M2 domain, device-list, estimator adapter, persistence, execution, migration, and failure-path tests pass;
+- V1 domain and V2-M1 regression tests remain green;
+- 62 relevant pytest tests pass after the host-scoped cache and binary-drift hardening changes;
+- Python compile checks pass;
+- synthetic helper coverage includes one GPU, homogeneous two-GPU, and heterogeneous two-device inventories, successful estimates, cache reuse, malformed JSON, nonzero exit, timeout, cancellation, and helper SHA drift.
+
+The V2-M2 standalone estimate tables intentionally precede deployment placement. V2-M4 will copy selected estimate rows into placement_device_memory once a concrete joint DeploymentPlacement exists; M2 does not manufacture a deployment identity merely to store a single-Candidate estimate.
+
+The repository-wide Ruff, mypy, and complete pytest gate remains pending because Ruff/mypy are not installed or cached in the local execution environment and a complete checkout cannot be cloned through the container DNS. The manual GitHub Actions workflow has not been dispatched.
 
 ### Suggested checkpoint commits
 
