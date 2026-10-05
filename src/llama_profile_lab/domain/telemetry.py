@@ -20,11 +20,14 @@ TelemetryPhase = Literal["before", "during", "after"]
 
 
 class GpuTelemetrySample(FrozenModel):
-    """One GPU observation from the best available local provider."""
+    """One GPU observation with explicit physical identity and provider provenance."""
 
     device: str
     name: str | None = None
     uuid: str | None = None
+    pci_bus_id: str | None = None
+    stable_device_key: str | None = None
+    sources: tuple[str, ...] = ()
     utilization_pct: Annotated[float, Field(ge=0, le=100)] | None = None
     vram_used_bytes: NonNegativeInt | None = None
     vram_total_bytes: NonNegativeInt | None = None
@@ -65,6 +68,23 @@ class TelemetrySample(FrozenModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class GpuTelemetrySummary(FrozenModel):
+    """Normalized per-device GPU summary across one telemetry window."""
+
+    stable_device_key: str
+    metric_device_id: str
+    device: str
+    name: str | None = None
+    sources: tuple[str, ...] = ()
+    sample_count: NonNegativeInt
+    utilization_avg_pct: NonNegativeFloat | None = None
+    utilization_peak_pct: NonNegativeFloat | None = None
+    vram_used_peak_bytes: NonNegativeInt | None = None
+    temperature_peak_c: float | None = None
+    power_avg_w: NonNegativeFloat | None = None
+    power_peak_w: NonNegativeFloat | None = None
+
+
 class TelemetrySummary(FrozenModel):
     """Normalized scalar summary derived from raw telemetry samples."""
 
@@ -92,6 +112,7 @@ class TelemetrySummary(FrozenModel):
     gpu_vram_used_peak_bytes: NonNegativeInt | None = None
     gpu_power_avg_w: NonNegativeFloat | None = None
     gpu_power_peak_w: NonNegativeFloat | None = None
+    gpu_devices: tuple[GpuTelemetrySummary, ...] = ()
     external_cpu_peak_pct: NonNegativeFloat | None = None
     baseline_gpu_utilization_peak_pct: NonNegativeFloat | None = None
 
