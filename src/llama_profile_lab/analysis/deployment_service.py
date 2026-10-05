@@ -232,50 +232,76 @@ class DeploymentAnalysisService:
         deployment_run_id: str | None = None,
     ) -> DeploymentMemoryMatrix:
         """Return projected memory plus separately labeled runtime peak evidence."""
-        observations = [
-            item
-            for item in self._load()
-            if item.context.placement_id == deployment_placement_id
-        ]
-        if not observations:
-            raise DeploymentAnalysisError(
-                f"deployment placement has no analysis evidence: "
-                f"{deployment_placement_id}"
+        with self.database.session() as connection:
+            context = _load_placement_context(
+                connection,
+                deployment_placement_id,
             )
-        context = observations[0].context
-        run_id = deployment_run_id
-        if run_id is None:
-            candidates = sorted(
-                (
-                    item
-                    for item in observations
-                    if item.gpu_samples
-                ),
-                key=lambda item: (
-                    item.deployment_run_created_at,
-                    item.deployment_run_id,
-                ),
-                reverse=True,
-            )
-            run_id = (
-                candidates[0].deployment_run_id
-                if candidates
-                else None
-            )
-        run_observation = None
-        if run_id is not None:
-            run_observation = next(
-                (
-                    item
-                    for item in observations
-                    if item.deployment_run_id == run_id
-                ),
-                None,
-            )
-            if run_observation is None:
-                raise DeploymentAnalysisError(
-                    "deployment run does not belong to requested placement"
+            selected_run_id = deployment_run_id
+            if selected_run_id is None:
+                row = connection.execute(
+                    """
+                    SELECT id
+                    FROM deployment_run
+                    WHERE deployment_placement_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (deployment_placement_id,),
+                ).fetchone()
+                selected_run_id = None if row is None else str(row["id"])
+
+            runtime = _RuntimeSummary({}, {}, None, None, 0.0, 0)
+            if selected_run_id is not None:
+                row = connection.execute(
+                    """
+                    SELECT deployment_placement_id
+                    FROM deployment_run
+                    WHERE id = ?
+                    """,
+                    (selected_run_id,),
+                ).fetchone()
+                if row is None:
+                    raise DeploymentAnalysisError(
+                        f"deployment run not found: {selected_run_id}"
+                    )
+                if str(row["deployment_placement_id"]) != deployment_placement_id:
+                    raise DeploymentAnalysisError(
+                        "deployment run does not belong to requested placement"
+                    )
+                sample_records = DeploymentRunRepository(
+                    connection
+                ).gpu_samples(selected_run_id)
+                observation = _Observation(
+                    deployment_run_id=selected_run_id,
+                    deployment_run_created_at="",
+                    deployment_status="completed",
+                    deployment_quality=None,
+                    deployment_failure_kind=None,
+                    workload_run_id=None,
+                    workload_case_id=None,
+                    phase=None,
+                    workload_status=None,
+                    workload_quality=None,
+                    correctness_valid=None,
+                    combined_prompt_tps=None,
+                    combined_decode_tps=None,
+                    min_retention=None,
+                    context=context,
+                    workload=None,
+                    members=(),
+                    gpu_samples=tuple(
+                        (
+                            item.timestamp_ns,
+                            tuple(
+                                GpuTelemetrySample.model_validate(dict(gpu))
+                                for gpu in item.gpus
+                            ),
+                        )
+                        for item in sample_records
+                    ),
                 )
+                runtime = _runtime_summary(observation)
 
         devices = tuple(item.device_id for item in context.allocations)
         rows: list[DeploymentMemoryRow] = []
@@ -327,15 +353,6 @@ class DeploymentAnalysisService:
                         for device in devices
                     },
                 ),
-            )
-        )
-        runtime = (
-            _runtime_summary(run_observation)
-            if run_observation is not None
-            else _RuntimeSummary({}, {}, None, None, 0.0, 0)
-        )
-        rows.extend(
-            (
                 DeploymentMemoryRow(
                     key="runtime_peak",
                     source="runtime",
@@ -356,7 +373,7 @@ class DeploymentAnalysisService:
         )
         return DeploymentMemoryMatrix(
             deployment_placement_id=deployment_placement_id,
-            deployment_run_id=run_id,
+            deployment_run_id=selected_run_id,
             devices=devices,
             rows=tuple(rows),
         )
