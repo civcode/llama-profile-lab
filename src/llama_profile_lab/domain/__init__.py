@@ -64,6 +64,7 @@ from llama_profile_lab.domain.search_space import (
 )
 from llama_profile_lab.domain.telemetry import (
     GpuTelemetrySample,
+    GpuTelemetrySummary,
     RunQuality,
     RunQualityAssessment,
     TelemetrySample,
@@ -119,6 +120,7 @@ __all__ = [
     "FractionalDepth",
     "FrozenModel",
     "GpuTelemetrySample",
+    "GpuTelemetrySummary",
     "GridStrategy",
     "HostResourcePolicy",
     "MeasurementPolicy",
