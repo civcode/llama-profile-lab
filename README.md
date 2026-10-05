@@ -111,10 +111,40 @@ llprof placement list --database data/benchmarks.db
 llprof placement show PLACEMENT_ID --database data/benchmarks.db
 llprof run show RUN_ID --database data/benchmarks.db
 
+llprof deployment create deployment.json \
+  --database data/benchmarks.db
+
 llprof deployment preview deployment-plan.json \
   --database data/benchmarks.db
 
 llprof deployment plan deployment-plan.json \
+  --database data/benchmarks.db
+
+llprof deployment show DEPLOYMENT_ID \
+  --database data/benchmarks.db
+
+llprof deployment placement DEPLOYMENT_ID \
+  --database data/benchmarks.db
+
+llprof deployment run DEPLOYMENT_ID deployment-benchmark.json \
+  --database data/benchmarks.db
+
+llprof deployment pause DEPLOYMENT_ID \
+  --database data/benchmarks.db
+
+llprof deployment resume DEPLOYMENT_ID \
+  --database data/benchmarks.db
+
+llprof deployment cancel DEPLOYMENT_ID \
+  --database data/benchmarks.db
+
+llprof deployment results DEPLOYMENT_ID \
+  --format json \
+  --database data/benchmarks.db
+
+llprof deployment pareto DEPLOYMENT_ID \
+  --objective 'dd:max:deployment.combined_tg_tps@workload.phase=dd' \
+  --objective 'pp:max:deployment.combined_pp_tps@workload.phase=pp' \
   --database data/benchmarks.db
 
 llprof deployment execute deployment-execution.json \
@@ -217,6 +247,8 @@ V2-M5 executes one feasible deployment placement as a simultaneous residency lif
 V2-M6 runs synchronized DD/PP/PD/DP workloads while the M5 server set remains resident. Candidate-dependent workload suites generate equal-depth and asymmetric-context phase combinations; clients prewarm context before a monotonic start barrier and stream llama-server completion progress so aggregate PP/TG throughput is computed from tokens observed inside the shared overlap interval rather than by summing independent rates. Exact standalone baselines provide per-instance throughput retention/loss and optional latency deltas; missing or conflicting baselines are surfaced instead of guessed. Schemas 11 and 12 persist phase/member timing, raw token-event evidence, overlap metrics, correctness/failure state, baseline references, minimum retention, and latency deltas. `llprof deployment benchmark` executes the concurrent matrix from a persisted deployment placement.
 
 V2-M7 adds read-only deployment analysis and Pareto optimization. Deployment placements are analyzed as the optimization points while repeated runs remain evidence for those points. Exact filters/facets expose instance Candidate settings, resolved GPU-layer/split/tensor ratios, binary/backend identity, workload depth/phase, and device allocation coordinates without silently averaging hidden workload dimensions. Memory matrices distinguish projected model/context/compute/reserved/free values from runtime peak-used/minimum-free evidence. Interference views retain per-instance throughput, retention/loss, latency deltas, and correctness; constrained Pareto analysis can combine DD TG, PP throughput, minimum retention, validated context, runtime headroom, and total power. Schema 13 records timestamped deployment GPU samples during residency so runtime VRAM and sample-weighted power metrics are based on observed data. Failed and correctness-invalid rows stay available in raw CSV/JSON export but are excluded from valid frontier evidence.
+
+V2-M8 exposes the complete deployment workflow through CLI and HTTP/SSE without requiring callers to import internal Python modules. A base deployment definition has a stable ID while generated Candidate and placement IDs remain explicit. Typed API responses cover plan/pruning summaries, rejection details, projected/runtime memory matrices, run/member/phase state, current completed-phase throughput, raw M7 results, and deployment-scoped Pareto frontiers. Schema 14 adds durable deployment operation state: `deployment run` can be paused or cancelled from another CLI/API process through SQLite, and a paused operation can be resumed from its persisted placement/model/baseline request. SSE emits changed deployment progress snapshots and terminates at completed, paused, cancelled, or failed state. The existing lower-level `preview`, `plan`, `execute`, and `benchmark` commands and all V1 route namespaces remain separate and compatible.
 
 M8 adds a read-only analysis layer over SQLite. Individual repetitions drive mean/median/stddev/CV throughput statistics; resource metrics can be projected over arbitrary Candidate dimensions; higher dimensions use exact filters and facets; ambiguous hidden coordinates are rejected instead of silently averaged. Baseline comparisons report signed deltas, Pareto analysis returns the non-dominated set for caller-defined maximize/minimize objectives, and PP/TG curves can estimate compute-only request latency. CSV and JSON export use the same services as the CLI and future API/UI.
 
