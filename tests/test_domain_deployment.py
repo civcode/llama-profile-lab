@@ -12,6 +12,7 @@ from llama_profile_lab.domain import (
     DeploymentPlacementRequest,
     DeploymentWorkloadMix,
     HostResourcePolicy,
+    LogicalDeviceMapping,
     ModelInstanceCandidate,
     PlacementDeviceMemory,
 )
@@ -229,4 +230,13 @@ def test_placement_identity_ignores_memory_observations_and_provenance() -> None
         }
     )
     assert changed_placement.content_hash() != left.content_hash()
+
+def test_resource_policy_rejects_duplicate_logical_device_mappings() -> None:
+    mapping = LogicalDeviceMapping(
+        binary_id="bin_server",
+        logical_device_name="CUDA0",
+        device_id="pci:0000:01:00.0",
+    )
+    with pytest.raises(ValidationError, match="logical device mappings"):
+        HostResourcePolicy(logical_device_mappings=(mapping, mapping))
 
