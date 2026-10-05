@@ -1091,12 +1091,12 @@ def _evaluate_metric(
         values = list(runtime.min_free_by_device.values())
         return float(min(values)) if values else None
     if metric == "deployment.min_device_headroom_bytes":
-        values = (
-            list(runtime.min_free_by_device.values())
-            if runtime.min_free_by_device
-            else list(projected.values())
-        )
-        return float(min(values)) if values else None
+        if (
+            not projected
+            or set(runtime.min_free_by_device) != set(projected)
+        ):
+            return None
+        return float(min(runtime.min_free_by_device.values()))
     if metric == "deployment.total_power_avg_w":
         return runtime.total_power_avg_w
     if metric == "deployment.total_power_peak_w":
@@ -1117,10 +1117,7 @@ def _evaluate_metric(
             value = runtime.min_free_by_device.get(device_id)
             return None if value is None else float(value)
         if field == "headroom_bytes":
-            value = runtime.min_free_by_device.get(
-                device_id,
-                projected.get(device_id),
-            )
+            value = runtime.min_free_by_device.get(device_id)
             return None if value is None else float(value)
 
     instance_prefix = "deployment.instance."
