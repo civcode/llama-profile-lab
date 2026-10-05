@@ -341,7 +341,6 @@ def test_deployment_placement_memory_and_run_members_persist(
         assert len(deployment_placements.memory(placement_id)) == 4
         assert len(deployment_placements.allocations(placement_id)) == 2
 
-
         repeated = placement.model_copy(
             update={
                 "device_memory": tuple(
@@ -354,7 +353,6 @@ def test_deployment_placement_memory_and_run_members_persist(
             }
         )
         assert deployment_placements.put(repeated) == placement_id
-
 
         mismatched = placement.model_copy(
             update={
