@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -16,6 +17,7 @@ from typing import Protocol
 
 from llama_profile_lab.domain.telemetry import (
     GpuTelemetrySample,
+    GpuTelemetrySummary,
     RunQuality,
     RunQualityAssessment,
     TelemetryPhase,
@@ -369,24 +371,62 @@ class LinuxTelemetryProvider:
         return sum(watts) if watts else None
 
 
+class CompositeGpuTelemetryProvider:
+    """Sample multiple GPU providers and merge only strongly correlated devices."""
+
+    def __init__(
+        self,
+        providers: tuple[tuple[str, GpuTelemetryProvider], ...],
+    ) -> None:
+        self.providers = providers
+
+    def sample(self) -> tuple[GpuTelemetrySample, ...]:
+        merged: list[GpuTelemetrySample] = []
+        for source, provider in self.providers:
+            try:
+                samples = provider.sample()
+            except Exception:
+                continue
+            for sample in samples:
+                observed = _with_source(sample, source)
+                match_index = next(
+                    (
+                        index
+                        for index, existing in enumerate(merged)
+                        if _same_physical_gpu(existing, observed)
+                    ),
+                    None,
+                )
+                if match_index is None:
+                    merged.append(observed)
+                else:
+                    merged[match_index] = _merge_gpu_samples(
+                        merged[match_index],
+                        observed,
+                    )
+        return tuple(merged)
+
+
 class AutoGpuTelemetryProvider:
-    """Prefer NVIDIA's management interface, otherwise use generic DRM sysfs."""
+    """Compose NVIDIA management telemetry with generic DRM/sysfs telemetry."""
 
     def __init__(self, *, sys_root: Path = Path("/sys")) -> None:
         executable = shutil.which("nvidia-smi")
-        self.nvidia = (
-            NvidiaSmiGpuTelemetryProvider(Path(executable))
-            if executable is not None
-            else None
+        providers: list[tuple[str, GpuTelemetryProvider]] = []
+        if executable is not None:
+            providers.append(
+                (
+                    "nvidia-smi",
+                    NvidiaSmiGpuTelemetryProvider(Path(executable)),
+                )
+            )
+        providers.append(
+            ("sysfs", SysfsGpuTelemetryProvider(sys_root=sys_root))
         )
-        self.sysfs = SysfsGpuTelemetryProvider(sys_root=sys_root)
+        self.composite = CompositeGpuTelemetryProvider(tuple(providers))
 
     def sample(self) -> tuple[GpuTelemetrySample, ...]:
-        if self.nvidia is not None:
-            samples = self.nvidia.sample()
-            if samples:
-                return samples
-        return self.sysfs.sample()
+        return self.composite.sample()
 
 
 class NvidiaSmiGpuTelemetryProvider:
@@ -422,11 +462,20 @@ class NvidiaSmiGpuTelemetryProvider:
                 for child in container
                 if (child.text or "").strip().lower() == "active"
             )
+            raw_pci = _xml_text(gpu, "pci/pci_bus_id")
+            pci_bus_id = normalize_pci_bus_id(raw_pci)
+            uuid = _xml_text(gpu, "uuid")
             result.append(
                 GpuTelemetrySample(
-                    device=_xml_text(gpu, "pci/pci_bus_id") or f"gpu{index}",
+                    device=pci_bus_id or raw_pci or f"gpu{index}",
                     name=_xml_text(gpu, "product_name"),
-                    uuid=_xml_text(gpu, "uuid"),
+                    uuid=uuid,
+                    pci_bus_id=pci_bus_id,
+                    stable_device_key=_stable_gpu_key(
+                        pci_bus_id=pci_bus_id,
+                        uuid=uuid,
+                    ),
+                    sources=("nvidia-smi",),
                     utilization_pct=_parse_number(_xml_text(gpu, "utilization/gpu_util")),
                     vram_used_bytes=_parse_mib(_xml_text(gpu, "fb_memory_usage/used")),
                     vram_total_bytes=_parse_mib(_xml_text(gpu, "fb_memory_usage/total")),
@@ -467,9 +516,16 @@ class SysfsGpuTelemetryProvider:
             total = _read_int(device / "mem_info_vram_total")
             temp = _first_hwmon_temperature(device)
             power_w = _first_hwmon_power(device)
+            pci_bus_id = normalize_pci_bus_id(device.resolve().name)
             result.append(
                 GpuTelemetrySample(
-                    device=device.resolve().name,
+                    device=pci_bus_id or device.resolve().name,
+                    pci_bus_id=pci_bus_id,
+                    stable_device_key=_stable_gpu_key(
+                        pci_bus_id=pci_bus_id,
+                        uuid=None,
+                    ),
+                    sources=("sysfs",),
                     utilization_pct=busy,
                     vram_used_bytes=used,
                     vram_total_bytes=total,
@@ -485,6 +541,7 @@ def summarize_telemetry(samples: Iterable[TelemetrySample]) -> TelemetrySummary:
     all_samples = tuple(samples)
     during = tuple(sample for sample in all_samples if sample.phase == "during")
     gpu_samples = tuple(gpu for sample in all_samples for gpu in sample.gpus)
+    gpu_devices = _summarize_gpu_devices(gpu_samples)
 
     process_user = [s.process_user_time_ns for s in during if s.process_user_time_ns is not None]
     process_system = [
@@ -549,6 +606,7 @@ def summarize_telemetry(samples: Iterable[TelemetrySample]) -> TelemetrySummary:
         ),
         gpu_power_avg_w=_avg(gpu.power_w for gpu in gpu_samples),
         gpu_power_peak_w=_max(gpu.power_w for gpu in gpu_samples),
+        gpu_devices=gpu_devices,
         external_cpu_peak_pct=max(external_cpu) if external_cpu else None,
         baseline_gpu_utilization_peak_pct=(
             max(baseline_gpu) if baseline_gpu else None
@@ -656,15 +714,247 @@ def classify_run_quality(
 
 
 def summary_metrics(summary: TelemetrySummary) -> dict[str, int | float]:
-    """Render telemetry summary values into the generic metric table namespace."""
-    raw = summary.model_dump(mode="python")
+    """Render aggregate and per-device telemetry into generic metric keys."""
+    raw = summary.model_dump(mode="python", exclude={"gpu_devices"})
     metrics: dict[str, int | float] = {}
     for name, value in raw.items():
         if value is None or isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
             metrics[f"telemetry.{name}"] = value
+
+    for gpu in summary.gpu_devices:
+        prefix = f"telemetry.gpu.{gpu.metric_device_id}"
+        values = {
+            "utilization_avg_pct": gpu.utilization_avg_pct,
+            "utilization_peak_pct": gpu.utilization_peak_pct,
+            "vram_used_peak_bytes": gpu.vram_used_peak_bytes,
+            "temperature_peak_c": gpu.temperature_peak_c,
+            "power_avg_w": gpu.power_avg_w,
+            "power_peak_w": gpu.power_peak_w,
+        }
+        for name, value in values.items():
+            if value is not None:
+                metrics[f"{prefix}.{name}"] = value
     return metrics
+
+
+_PCI_BUS_RE = re.compile(
+    r"^(?P<domain>[0-9a-fA-F]{4,8}):"
+    r"(?P<bus>[0-9a-fA-F]{2}):"
+    r"(?P<device>[0-9a-fA-F]{2})\."
+    r"(?P<function>[0-7])$"
+)
+
+
+def normalize_pci_bus_id(value: str | None) -> str | None:
+    """Normalize Linux/NVIDIA PCI bus IDs to domain:bus:device.function."""
+    if value is None:
+        return None
+    raw = value.strip()
+    if raw.lower().startswith("pci:"):
+        raw = raw[4:]
+    match = _PCI_BUS_RE.fullmatch(raw)
+    if match is None:
+        return None
+    domain_value = int(match.group("domain"), 16)
+    domain = (
+        f"{domain_value:04x}"
+        if domain_value <= 0xFFFF
+        else f"{domain_value:08x}"
+    )
+    return (
+        f"{domain}:{match.group('bus').lower()}:"
+        f"{match.group('device').lower()}."
+        f"{match.group('function')}"
+    )
+
+
+def _stable_gpu_key(
+    *,
+    pci_bus_id: str | None,
+    uuid: str | None,
+) -> str | None:
+    if pci_bus_id is not None:
+        return f"pci:{pci_bus_id}"
+    if uuid:
+        return f"uuid:{uuid.strip().lower()}"
+    return None
+
+
+def _with_source(
+    sample: GpuTelemetrySample,
+    source: str,
+) -> GpuTelemetrySample:
+    sources = tuple(dict.fromkeys((*sample.sources, source)))
+    pci_bus_id = sample.pci_bus_id or normalize_pci_bus_id(sample.device)
+    stable_device_key = sample.stable_device_key or _stable_gpu_key(
+        pci_bus_id=pci_bus_id,
+        uuid=sample.uuid,
+    )
+    return sample.model_copy(
+        update={
+            "pci_bus_id": pci_bus_id,
+            "stable_device_key": stable_device_key,
+            "sources": sources,
+        }
+    )
+
+
+def _same_physical_gpu(
+    left: GpuTelemetrySample,
+    right: GpuTelemetrySample,
+) -> bool:
+    left_pci = left.pci_bus_id or normalize_pci_bus_id(left.device)
+    right_pci = right.pci_bus_id or normalize_pci_bus_id(right.device)
+    if left_pci is not None and right_pci is not None:
+        return left_pci == right_pci
+
+    if left.uuid and right.uuid:
+        return left.uuid.strip().lower() == right.uuid.strip().lower()
+
+    left_key = left.stable_device_key
+    right_key = right.stable_device_key
+    if left_key is not None and right_key is not None:
+        if left_key.startswith(("pci:", "uuid:")):
+            return left_key == right_key
+    return False
+
+
+def _merge_gpu_samples(
+    preferred: GpuTelemetrySample,
+    fallback: GpuTelemetrySample,
+) -> GpuTelemetrySample:
+    """Prefer the first provider and fill only missing values from later providers."""
+    sources = tuple(dict.fromkeys((*preferred.sources, *fallback.sources)))
+    pci_bus_id = preferred.pci_bus_id or fallback.pci_bus_id
+    uuid = preferred.uuid or fallback.uuid
+    stable_device_key = (
+        preferred.stable_device_key
+        or fallback.stable_device_key
+        or _stable_gpu_key(pci_bus_id=pci_bus_id, uuid=uuid)
+    )
+    extra = dict(fallback.extra)
+    extra.update(preferred.extra)
+    return preferred.model_copy(
+        update={
+            "name": preferred.name or fallback.name,
+            "uuid": uuid,
+            "pci_bus_id": pci_bus_id,
+            "stable_device_key": stable_device_key,
+            "sources": sources,
+            "utilization_pct": (
+                preferred.utilization_pct
+                if preferred.utilization_pct is not None
+                else fallback.utilization_pct
+            ),
+            "vram_used_bytes": (
+                preferred.vram_used_bytes
+                if preferred.vram_used_bytes is not None
+                else fallback.vram_used_bytes
+            ),
+            "vram_total_bytes": (
+                preferred.vram_total_bytes
+                if preferred.vram_total_bytes is not None
+                else fallback.vram_total_bytes
+            ),
+            "temperature_c": (
+                preferred.temperature_c
+                if preferred.temperature_c is not None
+                else fallback.temperature_c
+            ),
+            "power_w": (
+                preferred.power_w
+                if preferred.power_w is not None
+                else fallback.power_w
+            ),
+            "graphics_clock_hz": (
+                preferred.graphics_clock_hz
+                if preferred.graphics_clock_hz is not None
+                else fallback.graphics_clock_hz
+            ),
+            "memory_clock_hz": (
+                preferred.memory_clock_hz
+                if preferred.memory_clock_hz is not None
+                else fallback.memory_clock_hz
+            ),
+            "thermal_throttled": (
+                preferred.thermal_throttled
+                if preferred.thermal_throttled is not None
+                else fallback.thermal_throttled
+            ),
+            "extra": extra,
+        }
+    )
+
+
+def _summary_gpu_key(sample: GpuTelemetrySample) -> str:
+    stable = sample.stable_device_key or _stable_gpu_key(
+        pci_bus_id=sample.pci_bus_id or normalize_pci_bus_id(sample.device),
+        uuid=sample.uuid,
+    )
+    if stable is not None:
+        return stable
+    source = sample.sources[0] if sample.sources else "unknown"
+    return f"source:{source}:{sample.device}"
+
+
+def _metric_device_id(stable_device_key: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", stable_device_key)
+    return normalized.strip("_").lower() or "gpu"
+
+
+def _summarize_gpu_devices(
+    samples: Iterable[GpuTelemetrySample],
+) -> tuple[GpuTelemetrySummary, ...]:
+    grouped: dict[str, list[GpuTelemetrySample]] = {}
+    for sample in samples:
+        grouped.setdefault(_summary_gpu_key(sample), []).append(sample)
+
+    summaries: list[GpuTelemetrySummary] = []
+    for key in sorted(grouped):
+        device_samples = grouped[key]
+        first = device_samples[0]
+        sources = tuple(
+            dict.fromkeys(
+                source
+                for sample in device_samples
+                for source in sample.sources
+            )
+        )
+        name = next(
+            (sample.name for sample in device_samples if sample.name),
+            None,
+        )
+        summaries.append(
+            GpuTelemetrySummary(
+                stable_device_key=key,
+                metric_device_id=_metric_device_id(key),
+                device=first.device,
+                name=name,
+                sources=sources,
+                sample_count=len(device_samples),
+                utilization_avg_pct=_avg(
+                    sample.utilization_pct for sample in device_samples
+                ),
+                utilization_peak_pct=_max(
+                    sample.utilization_pct for sample in device_samples
+                ),
+                vram_used_peak_bytes=_max_int(
+                    sample.vram_used_bytes for sample in device_samples
+                ),
+                temperature_peak_c=_max(
+                    sample.temperature_c for sample in device_samples
+                ),
+                power_avg_w=_avg(
+                    sample.power_w for sample in device_samples
+                ),
+                power_peak_w=_max(
+                    sample.power_w for sample in device_samples
+                ),
+            )
+        )
+    return tuple(summaries)
 
 
 def _cpu_percentages(
