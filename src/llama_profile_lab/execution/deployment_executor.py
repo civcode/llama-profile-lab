@@ -649,17 +649,22 @@ class DeploymentExecutor:
                 )
                 port = reservations.port(plan.instance_id)
                 endpoint = f"http://{_health_host(host)}:{port}"
+                capabilities = _capabilities(binary)
                 try:
                     argv = self.server_adapter.build_argv(
                         binary_path=Path(binary.path),
-                        capabilities=_capabilities(binary),
+                        capabilities=capabilities,
                         model_path=plan.model_path,
                         candidate=candidate,
                         placement=resolved_placement,
                         host=host,
                         port=port,
                         draft_model_path=plan.draft_model_path,
-                        model_alias=instance.server_identity,
+                        model_alias=(
+                            instance.server_identity
+                            if capabilities.supports("--alias")
+                            else None
+                        ),
                     )
                 except LlamaServerConfigurationError as exc:
                     raise DeploymentExecutionError(str(exc)) from exc
