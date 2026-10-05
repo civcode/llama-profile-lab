@@ -1,6 +1,6 @@
 """Stable host-identity compatibility tests."""
 
-from llama_profile_lab.execution import host as host_module
+import llama_profile_lab.execution.host as host_module
 
 
 def test_enriched_gpu_metadata_does_not_change_legacy_host_fingerprint(
