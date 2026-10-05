@@ -21,6 +21,7 @@ from llama_profile_lab.db.records import (
     ConcurrentWorkloadCaseRecord,
     DeploymentCandidateRecord,
     DeploymentDeviceAllocationRecord,
+    DeploymentGpuSampleRecord,
     DeploymentInstanceRecord,
     DeploymentMemberStatus,
     DeploymentPlacementRecord,
@@ -2824,6 +2825,70 @@ class DeploymentRunRepository:
                     forced_kill=bool(row["forced_kill"]),
                     cleanup_error=row["cleanup_error"],
                     result=_loads_object(str(row["result_json"])),
+                )
+            )
+        return tuple(records)
+
+    def add_gpu_sample(
+        self,
+        deployment_run_id: str,
+        *,
+        timestamp_ns: int,
+        gpus: tuple[GpuTelemetrySample, ...],
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO deployment_gpu_sample(
+                deployment_run_id, timestamp_ns, gpu_json
+            )
+            VALUES (?, ?, ?)
+            ON CONFLICT(deployment_run_id, timestamp_ns) DO UPDATE
+            SET gpu_json = excluded.gpu_json
+            """,
+            (
+                deployment_run_id,
+                timestamp_ns,
+                canonical_json(
+                    [
+                        item.model_dump(mode="json")
+                        for item in gpus
+                    ]
+                ),
+            ),
+        )
+
+    def gpu_samples(
+        self,
+        deployment_run_id: str,
+    ) -> tuple[DeploymentGpuSampleRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT deployment_run_id, timestamp_ns, gpu_json
+            FROM deployment_gpu_sample
+            WHERE deployment_run_id = ?
+            ORDER BY timestamp_ns
+            """,
+            (deployment_run_id,),
+        ).fetchall()
+        records: list[DeploymentGpuSampleRecord] = []
+        for row in rows:
+            raw = json.loads(str(row["gpu_json"]))
+            if not isinstance(raw, list):
+                raise ValueError(
+                    "persisted deployment GPU sample must be a list"
+                )
+            gpus: list[Mapping[str, Any]] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        "persisted deployment GPU entry must be an object"
+                    )
+                gpus.append(item)
+            records.append(
+                DeploymentGpuSampleRecord(
+                    deployment_run_id=str(row["deployment_run_id"]),
+                    timestamp_ns=int(row["timestamp_ns"]),
+                    gpus=tuple(gpus),
                 )
             )
         return tuple(records)
