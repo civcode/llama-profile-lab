@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import sys
 from collections.abc import Sequence
@@ -15,8 +17,25 @@ from llama_profile_lab.analysis import (
     AnalysisError,
     AnalysisFilter,
     AnalysisService,
+    DeploymentAnalysisError,
+    DeploymentAnalysisService,
     ParetoObjective,
     serialize_export,
+)
+from llama_profile_lab.api.deployment_operations import (
+    DeploymentOperationError,
+    DeploymentOperationManager,
+    DeploymentOperationSpec,
+)
+from llama_profile_lab.api.dto import DeploymentCreateRequest
+from llama_profile_lab.api.operations import OperationManager
+from llama_profile_lab.api.service import (
+    ApiConflictError,
+    ApiNotFoundError,
+    ApiService,
+    parse_deployment_constraints,
+    parse_deployment_filters,
+    parse_deployment_objectives,
 )
 from llama_profile_lab.api.profiles import LauncherProfileError, LauncherProfileProvider
 from llama_profile_lab.archive import (
@@ -33,7 +52,10 @@ from llama_profile_lab.db import (
 )
 from llama_profile_lab.db.records import BinaryRecord
 from llama_profile_lab.diagnostics import inspect_database
-from llama_profile_lab.domain import DeploymentSearchSpace
+from llama_profile_lab.domain import (
+    DeploymentCandidate,
+    DeploymentSearchSpace,
+)
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     ConcurrentDeploymentError,
