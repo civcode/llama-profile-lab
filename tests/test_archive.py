@@ -38,7 +38,7 @@ def test_archive_contains_consistent_database_snapshot_and_hashed_manifest(
     manifest = ArchiveService(database).create(output, artifacts=(artifact,))
 
     assert manifest.format == "llprof-archive-v1"
-    assert manifest.schema_version == 5
+    assert manifest.schema_version == 6
     assert output.is_file()
 
     extraction = tmp_path / "archive"
@@ -63,7 +63,7 @@ def test_archive_contains_consistent_database_snapshot_and_hashed_manifest(
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert (
             connection.execute("SELECT MAX(version) FROM schema_migration").fetchone()[0]
-            == 5
+            == 6
         )
         assert connection.execute("SELECT COUNT(*) FROM benchmark_run").fetchone()[0] > 0
     finally:
