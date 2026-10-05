@@ -705,6 +705,37 @@ def test_host_lock_excludes_deployment_execution(tmp_path: Path) -> None:
             _executor(database).execute(placement_id, inputs)
 
 
+def test_missing_runtime_gpu_telemetry_fails_closed(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs, _, _ = _seed(tmp_path)
+    provider = StaticGpuProvider(
+        GpuTelemetrySample(
+            device="0000:01:00.0",
+            stable_device_key="pci:0000:01:00.0",
+            vram_total_bytes=1000,
+            vram_used_bytes=800,
+        )
+    )
+
+    with pytest.raises(DeploymentExecutionError) as captured:
+        _executor(database, provider=provider).execute(
+            placement_id,
+            inputs,
+        )
+
+    assert captured.value.failure_kind == "telemetry_incomplete"
+    with database.session() as connection:
+        run = DeploymentRunRepository(connection).get(
+            captured.value.run_id or ""
+        )
+    assert run is not None
+    assert run.failure_kind == "telemetry_incomplete"
+    assert run.failure_details is not None
+    runtime = run.failure_details["runtime_memory"]
+    assert runtime["missing_devices"] == ["pci:0000:02:00.0"]
+
+
 def test_runtime_margin_violation_is_persisted(tmp_path: Path) -> None:
     database, placement_id, inputs, _, _ = _seed(
         tmp_path,
