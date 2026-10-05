@@ -10,6 +10,7 @@ from llama_profile_lab.db.migrations import (
     schema_version,
 )
 from llama_profile_lab.db.repositories import (
+    AcceleratorDeviceRepository,
     BenchmarkCaseRepository,
     BenchmarkRunRepository,
     CandidateRepository,
@@ -19,6 +20,7 @@ from llama_profile_lab.db.repositories import (
     EnvironmentRepository,
     ExperimentRepository,
     MeasurementPolicyRepository,
+    MemoryEstimateRepository,
     PlacementRepository,
     SearchSpaceRepository,
     ServerValidationRepository,
@@ -28,6 +30,7 @@ from llama_profile_lab.db.repositories import (
 )
 
 __all__ = [
+    "AcceleratorDeviceRepository",
     "BenchmarkCaseRepository",
     "BenchmarkRunRepository",
     "CandidateRepository",
@@ -38,6 +41,7 @@ __all__ = [
     "EnvironmentRepository",
     "ExperimentRepository",
     "MeasurementPolicyRepository",
+    "MemoryEstimateRepository",
     "PlacementRepository",
     "Migration",
     "MigrationError",
