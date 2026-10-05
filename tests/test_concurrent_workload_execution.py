@@ -564,6 +564,7 @@ def test_executes_all_four_phases_with_retention_and_timing(
                 item.raw["fixture"] in {"prefill", "decode"}
                 for item in members
             )
+            assert all("token_events_json" in item.raw for item in members)
 
 
 def test_missing_and_ambiguous_baselines_are_not_guessed(tmp_path: Path) -> None:
