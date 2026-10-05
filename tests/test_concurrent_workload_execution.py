@@ -317,7 +317,7 @@ def _result(
 def _candidate(model_id: str) -> Candidate:
     return Candidate(
         model=ModelSelection(target_model_id=model_id),
-        context=ContextConfig(size=4096),
+        context=ContextConfig(size=4096, cache_type_k="f16", cache_type_v="f16"),
         compute=ComputeConfig(batch_size=512, ubatch_size=128),
         placement=PlacementConfig(
             mode="fit",
