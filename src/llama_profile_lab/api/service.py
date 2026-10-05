@@ -6,6 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 from statistics import fmean
+from typing import Literal, cast
 
 from llama_profile_lab.analysis import (
     DEFAULT_METRIC_REGISTRY,
@@ -1459,6 +1460,9 @@ class ApiService:
         phase: DeploymentWorkloadRunRecord | None = None
         current_candidate_id: str | None = None
         current_placement_id: str | None = None
+        current_prompt_tps: float | None = None
+        current_decode_tps: float | None = None
+        current_min_retention: float | None = None
 
         with self.database.session() as connection:
             latest_plan = connection.execute(
@@ -1491,7 +1495,14 @@ class ApiService:
                             THEN pc.deployment_candidate_id
                         END) AS completed,
                         COUNT(DISTINCT CASE
-                            WHEN EXISTS (
+                            WHEN NOT EXISTS (
+                                SELECT 1
+                                FROM deployment_run AS dr
+                                WHERE dr.deployment_placement_id =
+                                      pc.deployment_placement_id
+                                  AND dr.status = 'completed'
+                            )
+                             AND EXISTS (
                                 SELECT 1
                                 FROM deployment_run AS dr
                                 WHERE dr.deployment_placement_id =
@@ -1615,6 +1626,34 @@ class ApiService:
                         phase = ConcurrentWorkloadRepository(
                             connection
                         ).get_run(str(phase_row["id"]))
+                    metric_row = connection.execute(
+                        """
+                        SELECT combined_prompt_tps, combined_decode_tps,
+                               min_retention
+                        FROM deployment_workload_run
+                        WHERE deployment_run_id = ?
+                          AND status = 'completed'
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (evidence_run_id,),
+                    ).fetchone()
+                    if metric_row is not None:
+                        current_prompt_tps = (
+                            None
+                            if metric_row["combined_prompt_tps"] is None
+                            else float(metric_row["combined_prompt_tps"])
+                        )
+                        current_decode_tps = (
+                            None
+                            if metric_row["combined_decode_tps"] is None
+                            else float(metric_row["combined_decode_tps"])
+                        )
+                        current_min_retention = (
+                            None
+                            if metric_row["min_retention"] is None
+                            else float(metric_row["min_retention"])
+                        )
 
             if (
                 current_placement_id is None
@@ -1691,6 +1730,9 @@ class ApiService:
             combined_decode_tps=(
                 None if phase is None else phase.combined_decode_tps
             ),
+            current_combined_prompt_tps=current_prompt_tps,
+            current_combined_decode_tps=current_decode_tps,
+            current_min_retention=current_min_retention,
             memory=memory,
             failure_kind=failure_kind,
             failure_details=failure_details,
@@ -1836,7 +1878,10 @@ def parse_deployment_objectives(
                 "KEY:DIRECTION:METRIC[@PATH=VALUE;...]"
             )
         key, raw_direction, metric = parts
-        direction_map = {
+        direction_map: dict[
+            str,
+            Literal["maximize", "minimize"],
+        ] = {
             "max": "maximize",
             "maximize": "maximize",
             "min": "minimize",
@@ -1889,6 +1934,10 @@ def parse_deployment_constraints(
             raise ValueError(
                 "deployment constraint operator must be ge/gt/le/lt/eq"
             )
+        typed_operator = cast(
+            Literal["ge", "gt", "le", "lt", "eq"],
+            operator,
+        )
         try:
             threshold = float(raw_value)
         except ValueError as exc:
@@ -1909,7 +1958,7 @@ def parse_deployment_constraints(
         constraints.append(
             DeploymentMetricConstraint(
                 metric=metric,
-                operator=operator,
+                operator=typed_operator,
                 value=threshold,
                 filters=filters,
             )
