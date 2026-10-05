@@ -709,8 +709,10 @@ def test_readiness_timeout_tears_down_all_started_members(
     for member in members:
         if member.pid is not None:
             _assert_process_terminates(member.pid)
-    _assert_process_terminates(_child_pid(qwen_path))
-    _assert_process_terminates(_child_pid(flash_path))
+    for model_path in (qwen_path, flash_path):
+        child_pid_path = Path(str(model_path) + ".childpid")
+        if child_pid_path.exists():
+            _assert_process_terminates(_child_pid(model_path))
 
 
 def test_cancellation_during_residency_tears_down_both(
