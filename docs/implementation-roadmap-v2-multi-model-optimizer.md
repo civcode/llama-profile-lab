@@ -569,7 +569,7 @@ The repository-wide Ruff, mypy, and complete pytest gate remains pending because
 
 ## 8. V2-M4 — Joint deployment planner and memory feasibility pruning
 
-**Status: Planned**
+**Status: Implemented — local M4 core and V1/M1/M2/M3 regression tests passing; full repository lint/type/full-test gate pending**
 
 ### Objective
 
@@ -689,20 +689,20 @@ Include structured details, especially required versus available bytes.
 
 ### Work items
 
-- [ ] Add deployment search-space models.
-- [ ] Add instance-addressable parameter registry.
-- [ ] Add planner expansion.
-- [ ] Add capability pruning.
-- [ ] Add memory estimate lookup/execution.
-- [ ] Add per-device aggregation.
-- [ ] Add margin checks.
-- [ ] Add pruning persistence.
-- [ ] Add planner preview service.
-- [ ] Add deterministic case hashing.
-- [ ] Add symmetry-reduction hooks.
-- [ ] Avoid symmetry reduction for heterogeneous devices by default.
-- [ ] Add planner CLI preview.
-- [ ] Add tests for raw/valid/rejected counts.
+- [x] Add deployment search-space models.
+- [x] Add instance-addressable parameter registry.
+- [x] Add planner expansion.
+- [x] Add capability pruning.
+- [x] Add memory estimate lookup/execution.
+- [x] Add per-device aggregation.
+- [x] Add margin checks.
+- [x] Add pruning persistence.
+- [x] Add planner preview service.
+- [x] Add deterministic case hashing.
+- [x] Add symmetry-reduction hooks.
+- [x] Avoid symmetry reduction for heterogeneous devices by default.
+- [x] Add planner CLI preview.
+- [x] Add tests for raw/valid/rejected counts.
 
 ### Tests
 
@@ -729,6 +729,23 @@ A synthetic two-model/two-GPU deployment can be planned and produces:
 - stable valid count;
 - persisted rejection details;
 - no throughput process launches.
+
+Implementation validation completed locally without GitHub Actions:
+
+- deployment dimensions address instance Candidate fields, requested placement fields, device subsets, tensor splits, KV types, contexts, batch/ubatch, and per-device margins;
+- explicit logical-to-physical mappings are available when strong hardware identity cannot be discovered, and unresolved mappings fail closed rather than guessing;
+- explicit deployment placement constraints are passed into the M2 estimator without mutating the V1 Candidate;
+- capability pruning rejects unsupported devices, backend pairs, split modes, tensor/KV combinations, and missing exact-binary options before throughput work;
+- memory feasibility aggregates model/context/compute bytes across every instance on each physical device and applies per-device margins against usable memory;
+- feasible cases materialize estimator evidence into DeploymentPlacement/placement_device_memory while rejected cases persist normalized reasons and required-versus-available byte details;
+- one-model-per-GPU, both-models-split-both-GPUs, exact-fit, GPU0 overflow, GPU1 overflow, backend-pair rejection, invalid split, lower-precision-KV rescue, all-placement high-context rejection, duplicate elimination, and estimator failure fixtures are covered;
+- 99 locally executable pytest tests pass across the reconstructed V1/V2-M1/M2/M3/M4 core workspace;
+- Python compile checks pass;
+- the branch also contains CLI preview/plan parser and dispatch tests; they are not included in the 99-test local count because the reconstructed workspace does not contain the full V1 CLI/API/analysis module tree.
+
+The planner never launches llama-bench, SPEED-Bench, or llama-server throughput workloads. It only uses exact registered inventories/capabilities plus the M2 memory-estimator path. Preview does not persist deployment plan cases or rejection history; plan persists deterministic feasible cases and explainable rejection history. Symmetry reduction is opt-in, so heterogeneous devices are never assumed interchangeable by default.
+
+The repository-wide Ruff, mypy, and complete pytest gate remains pending because Ruff/mypy are not installed or cached in the local execution environment and the full repository cannot be cloned through the container DNS. The manual GitHub Actions workflow has not been dispatched.
 
 ### Suggested checkpoint commits
 
