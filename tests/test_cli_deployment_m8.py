@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from pathlib import Path
 
@@ -348,3 +350,21 @@ def test_deployment_cli_missing_resource_exits_nonzero(
         ]
     ) == 2
     assert "deployment not found" in capsys.readouterr().err
+
+
+def test_deployment_csv_serializes_nested_values_as_json() -> None:
+    rendered = cli_module._deployment_rows_csv(
+        [
+            {
+                "deployment_id": "deployment-test",
+                "nested": {"b": 2, "a": 1},
+                "items": [2, 1],
+            }
+        ]
+    )
+
+    row = next(csv.DictReader(io.StringIO(rendered)))
+    assert row["deployment_id"] == "deployment-test"
+    assert row["nested"] == '{"a":1,"b":2}'
+    assert row["items"] == "[2,1]"
+
