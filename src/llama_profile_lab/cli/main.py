@@ -1794,7 +1794,7 @@ def _deployment_results_command(
             ),
             deployment_candidate_ids=scope,
         )
-    except DeploymentAnalysisError as exc:
+    except (AnalysisError, DeploymentAnalysisError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
@@ -1834,7 +1834,7 @@ def _deployment_pareto_command(
             ),
             deployment_candidate_ids=scope,
         )
-    except DeploymentAnalysisError as exc:
+    except (AnalysisError, DeploymentAnalysisError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
