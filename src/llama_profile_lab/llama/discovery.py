@@ -19,6 +19,7 @@ from llama_profile_lab.llama.capabilities import (
 _BINARY_NAME_TO_KIND: dict[str, BinaryKind] = {
     "llama-bench": "llama-bench",
     "llama-fit-params": "llama-fit-params",
+    "llama-memory-estimator": "llama-memory-estimator",
     "llama-server": "llama-server",
     "speed-bench": "speed-bench",
     "speed_bench.py": "speed-bench",
