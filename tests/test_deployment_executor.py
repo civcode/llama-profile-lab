@@ -429,9 +429,13 @@ def test_two_servers_reach_ready_and_shutdown_cleanly(tmp_path: Path) -> None:
     assert all(item.exit_code == 0 for item in summary.members)
 
     with database.session() as connection:
-        run = DeploymentRunRepository(connection).get(summary.run_id)
-        members = DeploymentRunRepository(connection).members(summary.run_id)
+        repository = DeploymentRunRepository(connection)
+        run = repository.get(summary.run_id)
+        members = repository.members(summary.run_id)
+        gpu_samples = repository.gpu_samples(summary.run_id)
     assert run is not None and run.status == "completed"
+    assert len(gpu_samples) >= 2
+    assert all(len(item.gpus) == 2 for item in gpu_samples)
     assert [item.member_status for item in members] == ["stopped", "stopped"]
     assert all(item.endpoint for item in members)
     assert all("ready:" in item.stdout for item in members)
