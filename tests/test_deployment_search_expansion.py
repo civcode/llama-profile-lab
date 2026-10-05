@@ -156,6 +156,38 @@ def test_constraints_duplicate_elimination_and_symmetry_are_deterministic() -> N
     assert len(symmetric.points) == 1
 
 
+def test_model_artifact_identity_can_differ_from_candidate_model_id() -> None:
+    deployment, candidates = base()
+    deployment = deployment.model_copy(
+        update={
+            "instances": tuple(
+                item.model_copy(
+                    update={
+                        "model_artifact_id": f"artifact:{item.instance_id}"
+                    }
+                )
+                for item in deployment.instances
+            )
+        }
+    )
+    search = DeploymentSearchSpace(
+        dimensions=(
+            DeploymentSearchDimension(
+                path="instances.qwen.context.size",
+                values=(8192,),
+            ),
+        )
+    )
+
+    expansion = expand_deployment_search(deployment, candidates, search)
+
+    assert len(expansion.points) == 1
+    assert (
+        expansion.points[0].deployment.instances[1].model_artifact_id
+        == "artifact:qwen"
+    )
+
+
 def test_invalid_instance_path_fails_closed() -> None:
     deployment, candidates = base()
     search = DeploymentSearchSpace(
