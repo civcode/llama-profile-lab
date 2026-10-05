@@ -271,6 +271,10 @@ describe("DeploymentPage", () => {
       screen.getByLabelText("Minimum retention constraint · optional"),
       { target: { value: "0.75" } }
     );
+    fireEvent.change(
+      screen.getByLabelText("Exact filters · one PATH=VALUE per line"),
+      { target: { value: "workload.correctness_valid=true" } }
+    );
     fireEvent.click(screen.getByRole("button", { name: "Calculate frontier" }));
 
     await waitFor(() =>
@@ -279,7 +283,8 @@ describe("DeploymentPage", () => {
           "x:max:deployment.combined_tg_tps@workload.phase=dd",
           "y:max:deployment.combined_pp_tps@workload.phase=pp"
         ],
-        constraints: ["deployment.min_retention:ge:0.75"]
+        constraints: ["deployment.min_retention:ge:0.75"],
+        filters: ["workload.correctness_valid=true"]
       })
     );
   });
