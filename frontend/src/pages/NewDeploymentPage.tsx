@@ -163,6 +163,33 @@ export function NewDeploymentPage() {
   const workloadExperiment = experiments.find(
     (item) => item.id === workloadExperimentId
   );
+  const candidateById = useMemo(
+    () =>
+      new Map(
+        candidateOptions.map((item) => [item.candidate.id, item.candidate])
+      ),
+    [candidateOptions]
+  );
+
+  function logicalDevicesForInstance(instance: InstanceDraft): string[] | null {
+    const discovered = discoveredDevices
+      .filter((device) => selectedDevices.includes(device.id))
+      .flatMap((device) =>
+        device.mappings
+          .filter((mapping) => mapping.binary_id === instance.binaryId)
+          .map((mapping) => mapping.logical_device_name)
+      );
+    const unique = [...new Set(discovered)];
+    if (unique.length > 0) return unique;
+
+    const base = candidateById.get(instance.candidateId)?.candidate.placement
+      .constraints.devices;
+    return Array.isArray(base) && base.length > 0 ? base : null;
+  }
+
+  const unresolvedAutoDevices = instances.some(
+    (instance) => logicalDevicesForInstance(instance) === null
+  );
   const duplicateInstanceId =
     new Set(instances.map((item) => item.instanceId.trim())).size !== instances.length;
   const incompleteInstance = instances.some(
@@ -181,6 +208,7 @@ export function NewDeploymentPage() {
     instances.length >= 2 &&
     !duplicateInstanceId &&
     !incompleteInstance &&
+    !unresolvedAutoDevices &&
     Boolean(workloadExperiment) &&
     phases.length > 0 &&
     validMaximumPower &&
@@ -270,7 +298,7 @@ export function NewDeploymentPage() {
             model_artifact_id: item.modelId,
             binary_id: item.binaryId,
             requested_placement: {
-              devices: null,
+              devices: logicalDevicesForInstance(item),
               n_gpu_layers: null,
               split_mode: null,
               main_gpu: null,
@@ -552,6 +580,14 @@ export function NewDeploymentPage() {
                   </label>
                 </div>
               </div>
+              {unresolvedAutoDevices ? (
+                <div className="banner banner-error">
+                  At least one selected base Candidate uses automatic device
+                  placement. Discover devices and keep at least one compatible
+                  physical GPU selected so joint planning receives explicit logical
+                  device names.
+                </div>
+              ) : null}
               {discoveredDevices.length > 0 ? (
                 <div className="device-policy-grid">
                   {discoveredDevices.map((device) => {
