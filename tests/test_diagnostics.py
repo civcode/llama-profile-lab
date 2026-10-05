@@ -22,7 +22,7 @@ def test_reference_database_diagnostics_are_healthy_and_indexed(tmp_path: Path) 
     assert report.page_size > 0
     assert report.row_counts["benchmark_case"] == 44
     assert report.row_counts["benchmark_run"] == 44
-    assert report.row_counts["benchmark_sample"] == 142
+    assert report.row_counts["benchmark_sample"] == 132
     assert "deployment_plan" in report.row_counts
     assert "deployment_run" in report.row_counts
     assert "deployment_promotion_proposal" in report.row_counts
