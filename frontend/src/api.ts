@@ -3,6 +3,15 @@ import type {
   CandidateComparison,
   CandidateSummary,
   CandidateValidationHistory,
+  Deployment,
+  DeploymentCandidateItem,
+  DeploymentParetoResult,
+  DeploymentPlacement as DeploymentPlacementRecord,
+  DeploymentPlanRequest,
+  DeploymentPlanResponse,
+  DeploymentProgress,
+  DeploymentRun,
+  DeploymentRunRequest,
   ExecutionRequest,
   Experiment,
   ExperimentProgress,
@@ -10,6 +19,7 @@ import type {
   LauncherProfile,
   MatrixProjection,
   MetricDefinition,
+  ModelRecord,
   ParameterDefinition,
   ParetoObjective,
   ParetoResult,
@@ -76,6 +86,90 @@ export const api = {
     (await request<{ items: Placement[] }>("/api/placements")).items,
   placement: (id: string) =>
     request<Placement>("/api/placements/" + encodeURIComponent(id)),
+  models: async () =>
+    (await request<{ items: ModelRecord[] }>("/api/models")).items,
+  deployments: async () =>
+    (await request<{ items: Deployment[] }>("/api/deployments")).items,
+  deployment: (id: string) =>
+    request<Deployment>("/api/deployments/" + encodeURIComponent(id)),
+  createDeployment: (body: { deployment: unknown }) =>
+    request<Deployment>("/api/deployments", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
+  planDeployment: (id: string, body: DeploymentPlanRequest) =>
+    request<DeploymentPlanResponse>(
+      "/api/deployments/" + encodeURIComponent(id) + "/plan",
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  deploymentProgress: (id: string) =>
+    request<DeploymentProgress>(
+      "/api/deployments/" + encodeURIComponent(id) + "/progress"
+    ),
+  deploymentCandidates: async (id: string) =>
+    (
+      await request<{ items: DeploymentCandidateItem[] }>(
+        "/api/deployments/" + encodeURIComponent(id) + "/candidates"
+      )
+    ).items,
+  deploymentPlacements: async (id: string) =>
+    (
+      await request<{ items: DeploymentPlacementRecord[] }>(
+        "/api/deployments/" + encodeURIComponent(id) + "/placements"
+      )
+    ).items,
+  deploymentRuns: async (id: string) =>
+    (
+      await request<{ items: DeploymentRun[] }>(
+        "/api/deployments/" + encodeURIComponent(id) + "/runs"
+      )
+    ).items,
+  deploymentResults: async (id: string, filters: string[] = []) => {
+    const params: Array<[string, string]> = [];
+    filters.forEach((value) => params.push(["filter", value]));
+    return (
+      await request<{ deployment_id: string; rows: Record<string, unknown>[] }>(
+        "/api/deployments/" + encodeURIComponent(id) + "/results" + query(params)
+      )
+    ).rows;
+  },
+  deploymentPareto: (
+    id: string,
+    options: {
+      objectives: string[];
+      constraints?: string[];
+      filters?: string[];
+    }
+  ) => {
+    const params: Array<[string, string]> = [];
+    options.objectives.forEach((value) => params.push(["objective", value]));
+    options.constraints?.forEach((value) => params.push(["constraint", value]));
+    options.filters?.forEach((value) => params.push(["filter", value]));
+    return request<DeploymentParetoResult>(
+      "/api/deployments/" + encodeURIComponent(id) + "/pareto" + query(params)
+    );
+  },
+  runDeployment: (
+    id: string,
+    body: DeploymentRunRequest,
+    resume = false
+  ) =>
+    request<DeploymentProgress>(
+      "/api/deployments/" +
+        encodeURIComponent(id) +
+        (resume ? "/resume" : "/run"),
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  pauseDeployment: (id: string) =>
+    request<DeploymentProgress>(
+      "/api/deployments/" + encodeURIComponent(id) + "/pause",
+      { method: "POST" }
+    ),
+  cancelDeployment: (id: string) =>
+    request<DeploymentProgress>(
+      "/api/deployments/" + encodeURIComponent(id) + "/cancel",
+      { method: "POST" }
+    ),
   experiments: async () =>
     (await request<{ items: Experiment[] }>("/api/experiments")).items,
   experiment: (id: string) =>
@@ -244,6 +338,24 @@ export const api = {
       }
     )
 };
+
+export function deploymentProgressEvents(
+  deploymentId: string,
+  onProgress: (progress: DeploymentProgress) => void,
+  onError?: () => void
+): () => void {
+  const source = new EventSource(
+    "/api/deployments/" + encodeURIComponent(deploymentId) + "/events"
+  );
+  source.addEventListener("progress", (event) => {
+    onProgress(JSON.parse((event as MessageEvent<string>).data) as DeploymentProgress);
+  });
+  source.onerror = () => {
+    source.close();
+    onError?.();
+  };
+  return () => source.close();
+}
 
 export function progressEvents(
   experimentId: string,
