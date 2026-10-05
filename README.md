@@ -117,6 +117,9 @@ llprof deployment preview deployment-plan.json \
 llprof deployment plan deployment-plan.json \
   --database data/benchmarks.db
 
+llprof deployment execute deployment-execution.json \
+  --database data/benchmarks.db
+
 llprof results matrix EXPERIMENT_ID \
   --x compute.batch_size \
   --y compute.ubatch_size \
@@ -205,6 +208,8 @@ M6 adds production-context placement resolution. Under the default per-candidate
 M7 samples telemetry before, during, and after each benchmark. Linux CPU/process/RAM metrics come from `/proc` and `/sys`. V2-M3 composes NVIDIA `nvidia-smi` telemetry with generic DRM/sysfs observations so mixed-vendor GPUs remain visible simultaneously, de-duplicates strongly correlated physical devices, and emits both aggregate and per-device `telemetry.*` metrics. Raw samples are retained, and runs receive a quality label such as `clean`, `external_cpu_load`, or `telemetry_incomplete` without changing benchmark success status.
 
 V2-M4 adds deterministic joint deployment planning before concurrent execution. Instance-addressable search dimensions can vary contexts, KV types, device subsets, split parameters, and memory margins. The planner capability-checks exact registered server binaries and device inventories, requests explicit per-instance M2 memory estimates, aggregates model/context/compute bytes by physical device, rejects overcommit with normalized reasons, and persists only feasible deployment placements/cases. `llprof deployment preview` reports pruning counts without creating plan cases; `llprof deployment plan` persists feasible cases and rejection history. Neither command launches throughput workloads.
+
+V2-M5 executes one feasible deployment placement as a simultaneous residency lifecycle. One managed `llama-server` is launched per instance under the existing host lock, ports are collision-safe and persisted with each member endpoint, all instances must pass a shared readiness barrier, and any startup/readiness/cancellation failure tears down the complete process group set. Runtime GPU headroom is checked against M4 margins after readiness; hard violations fail as `runtime_memory_margin_violated`, while missing planned-device telemetry fails closed as `telemetry_incomplete`. Schema 10 persists per-member PID/argv/model paths/readiness/exit/log/cleanup evidence, and `llprof deployment execute` performs this residency proof without starting M6 concurrent benchmark clients.
 
 M8 adds a read-only analysis layer over SQLite. Individual repetitions drive mean/median/stddev/CV throughput statistics; resource metrics can be projected over arbitrary Candidate dimensions; higher dimensions use exact filters and facets; ambiguous hidden coordinates are rejected instead of silently averaged. Baseline comparisons report signed deltas, Pareto analysis returns the non-dominated set for caller-defined maximize/minimize objectives, and PP/TG curves can estimate compute-only request latency. CSV and JSON export use the same services as the CLI and future API/UI.
 
