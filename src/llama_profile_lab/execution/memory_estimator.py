@@ -302,14 +302,11 @@ class MemoryEstimatorService:
 
         try:
             output = self.adapter.parse_output(process.stdout)
-            if (
-                invocation.identity.selected_devices
-                and output.resolved.devices
-                != invocation.identity.selected_devices
-            ):
-                raise MemoryEstimatorParseError(
-                    "resolved device order does not match the requested device order"
-                )
+            _validate_resolved_request(
+                output,
+                selected_devices=invocation.identity.selected_devices,
+                placement_constraints=placement_constraints,
+            )
         except MemoryEstimatorParseError as exc:
             self._finish_failure(
                 attempt_id,
@@ -429,6 +426,46 @@ def _binary_kind(value: str) -> BinaryKind:
     if value not in allowed:
         raise DeviceInventoryError(f"unknown persisted binary kind: {value}")
     return cast(BinaryKind, value)
+
+
+def _validate_resolved_request(
+    output: MemoryEstimateOutput,
+    *,
+    selected_devices: tuple[str, ...],
+    placement_constraints: PlacementConstraints | None,
+) -> None:
+    if selected_devices and output.resolved.devices != selected_devices:
+        raise MemoryEstimatorParseError(
+            "resolved device order does not match the requested device order"
+        )
+    if placement_constraints is None:
+        return
+
+    resolved = output.resolved
+    if resolved.split_mode != placement_constraints.split_mode:
+        raise MemoryEstimatorParseError(
+            "resolved split mode does not match the requested split mode"
+        )
+    if resolved.main_gpu != placement_constraints.main_gpu:
+        raise MemoryEstimatorParseError(
+            "resolved main GPU does not match the requested main GPU"
+        )
+    if (
+        placement_constraints.tensor_split is not None
+        and resolved.tensor_split != placement_constraints.tensor_split
+    ):
+        raise MemoryEstimatorParseError(
+            "resolved tensor split does not match the requested tensor split"
+        )
+    if resolved.override_tensor != placement_constraints.override_tensor:
+        raise MemoryEstimatorParseError(
+            "resolved tensor overrides do not match the requested overrides"
+        )
+    if isinstance(placement_constraints.n_gpu_layers, int):
+        if resolved.n_gpu_layers != placement_constraints.n_gpu_layers:
+            raise MemoryEstimatorParseError(
+                "resolved GPU layer count does not match the requested count"
+            )
 
 
 def _process_failure_status(
