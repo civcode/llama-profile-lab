@@ -308,7 +308,6 @@ def test_binary_device_inventory_route(
 
 
 def test_deployment_list_returns_persisted_definitions(tmp_path: Path) -> None:
-def test_deployment_list_returns_persisted_definitions(tmp_path: Path) -> None:
     database, subjects = _seed(tmp_path)
     app = create_app(
         database.path,
