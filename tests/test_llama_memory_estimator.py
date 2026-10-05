@@ -78,6 +78,7 @@ def test_build_invocation_preserves_selected_device_order(tmp_path: Path) -> Non
         binary_path=tmp_path / "llama-memory-estimator",
         capabilities=capabilities(),
         helper_sha256="a" * 64,
+        host_id="host_test",
         model_path=tmp_path / "model.gguf",
         candidate=candidate(),
         selected_devices=("CUDA0", "Vulkan0"),
@@ -97,6 +98,7 @@ def test_cache_identity_changes_with_memory_relevant_candidate_fields(
         "binary_path": tmp_path / "llama-memory-estimator",
         "capabilities": capabilities(),
         "helper_sha256": "a" * 64,
+        "host_id": "host_test",
         "model_path": tmp_path / "model.gguf",
         "selected_devices": ("CUDA0", "Vulkan0"),
     }
