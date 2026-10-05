@@ -75,6 +75,36 @@ _REPRESENTATIVE_QUERIES = (
         """,
         ("srv-diagnostic",),
     ),
+    (
+        "deployment plan history",
+        """
+        SELECT id
+        FROM deployment_plan
+        WHERE base_deployment_candidate_id = ?
+        ORDER BY created_at DESC
+        """,
+        ("deploy-diagnostic",),
+    ),
+    (
+        "deployment run placement history",
+        """
+        SELECT id
+        FROM deployment_run
+        WHERE deployment_placement_id = ?
+        ORDER BY created_at DESC
+        """,
+        ("deployplace-diagnostic",),
+    ),
+    (
+        "deployment promotion history",
+        """
+        SELECT id
+        FROM deployment_promotion_proposal
+        WHERE base_deployment_candidate_id = ?
+        ORDER BY created_at DESC
+        """,
+        ("deploy-diagnostic",),
+    ),
 )
 
 
