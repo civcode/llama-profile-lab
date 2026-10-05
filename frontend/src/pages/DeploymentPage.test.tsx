@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   deploymentCandidates: vi.fn(),
   deploymentPlacements: vi.fn(),
   deploymentRuns: vi.fn(),
+  deploymentResults: vi.fn(),
+  deploymentPareto: vi.fn(),
   models: vi.fn(),
   binaries: vi.fn(),
   previewDeployment: vi.fn(),
@@ -24,6 +26,8 @@ vi.mock("../api", () => ({
     deploymentCandidates: mocks.deploymentCandidates,
     deploymentPlacements: mocks.deploymentPlacements,
     deploymentRuns: mocks.deploymentRuns,
+    deploymentResults: mocks.deploymentResults,
+    deploymentPareto: mocks.deploymentPareto,
     models: mocks.models,
     binaries: mocks.binaries,
     previewDeployment: mocks.previewDeployment,
@@ -185,6 +189,23 @@ describe("DeploymentPage", () => {
     mocks.deploymentCandidates.mockResolvedValue([]);
     mocks.deploymentPlacements.mockResolvedValue([]);
     mocks.deploymentRuns.mockResolvedValue([]);
+    mocks.deploymentResults.mockResolvedValue([]);
+    mocks.deploymentPareto.mockResolvedValue({
+      deployment_id: "deploy-ui",
+      result: {
+        objectives: [],
+        constraints: [],
+        evaluated_count: 1,
+        frontier: [
+          {
+            deployment_candidate_id: "deploy-candidate-ui",
+            deployment_placement_id: "place-ui",
+            values: { x: 80, y: 120 }
+          }
+        ],
+        excluded: {}
+      }
+    });
     mocks.models.mockResolvedValue(models);
     mocks.binaries.mockResolvedValue(binaries);
     mocks.deploymentProgressEvents.mockReturnValue(() => undefined);
@@ -240,6 +261,27 @@ describe("DeploymentPage", () => {
     );
     expect(await screen.findByText("1 feasible placements")).toBeInTheDocument();
     expect(screen.getByText("memory rejected")).toBeInTheDocument();
+  });
+
+  it("builds a constrained deployment Pareto request", async () => {
+    render(<DeploymentPage deploymentId="deploy-ui" />);
+
+    expect(await screen.findByText("Deployment Pareto frontier")).toBeInTheDocument();
+    fireEvent.change(
+      screen.getByLabelText("Minimum retention constraint · optional"),
+      { target: { value: "0.75" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Calculate frontier" }));
+
+    await waitFor(() =>
+      expect(mocks.deploymentPareto).toHaveBeenCalledWith("deploy-ui", {
+        objectives: [
+          "x:max:deployment.combined_tg_tps@workload.phase=dd",
+          "y:max:deployment.combined_pp_tps@workload.phase=pp"
+        ],
+        constraints: ["deployment.min_retention:ge:0.75"]
+      })
+    );
   });
 
   it("renders projected and runtime memory evidence distinctly", async () => {
