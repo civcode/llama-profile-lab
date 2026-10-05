@@ -6,11 +6,18 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 
-from llama_profile_lab.analysis import ParetoObjective
+from llama_profile_lab.analysis import (
+    DeploymentMemoryMatrix,
+    DeploymentParetoResult,
+    ParetoObjective,
+)
 from llama_profile_lab.domain import (
     BaseCandidateBaseline,
     Candidate,
     CandidateBaseline,
+    DeploymentCandidate,
+    DeploymentPlacement,
+    DeploymentSearchSpace,
     ExperimentDefinition,
     FixedPlacementPolicy,
     MeasurementPolicy,
@@ -443,3 +450,206 @@ class CandidateValidationHistoryDTO(ApiModel):
     candidate_id: str
     evaluations: tuple[CandidateEvaluationDTO, ...]
     benchmarks: tuple[ServerBenchmarkDTO, ...]
+
+class DeploymentCreateRequest(ApiModel):
+    """Create one immutable base deployment definition."""
+
+    deployment: DeploymentCandidate
+
+
+class DeploymentDTO(ApiModel):
+    """Deployment definition plus computed persisted state counts."""
+
+    id: str
+    status: str
+    created_at: str
+    definition: DeploymentCandidate
+    plan_count: NonNegativeInt
+    placement_count: NonNegativeInt
+    run_count: NonNegativeInt
+    latest_plan_id: str | None = None
+
+
+class DeploymentEstimatorInputDTO(ApiModel):
+    instance_id: Annotated[str, Field(min_length=1)]
+    helper_binary_id: Annotated[str, Field(min_length=1)]
+    model_path: Annotated[str, Field(min_length=1)]
+
+
+class DeploymentPlanRequest(ApiModel):
+    search_space: DeploymentSearchSpace
+    instances: Annotated[
+        tuple[DeploymentEstimatorInputDTO, ...],
+        Field(min_length=1),
+    ]
+    timeout_seconds: Annotated[float, Field(gt=0)] | None = 300.0
+
+
+class DeploymentPlanCaseDTO(ApiModel):
+    deployment_candidate_id: str
+    deployment_placement_id: str
+    generation: dict[str, Any]
+
+
+class DeploymentPlanResponse(ApiModel):
+    base_deployment_candidate_id: str
+    host_id: str
+    raw_combinations: NonNegativeInt
+    rejected_by_constraints: NonNegativeInt
+    duplicate_candidates: NonNegativeInt
+    symmetry_reduced: NonNegativeInt
+    capability_rejected: NonNegativeInt
+    estimate_failed: NonNegativeInt
+    memory_rejected: NonNegativeInt
+    valid_count: NonNegativeInt
+    plan_id: str | None
+    cases: tuple[DeploymentPlanCaseDTO, ...]
+
+
+class DeploymentCandidateItemDTO(ApiModel):
+    id: str
+    definition: DeploymentCandidate
+    generation: dict[str, Any]
+    rejection_count: NonNegativeInt
+    placement_ids: tuple[str, ...]
+
+
+class DeploymentCandidateListResponse(ApiModel):
+    items: tuple[DeploymentCandidateItemDTO, ...]
+
+
+class DeploymentPlacementDTO(ApiModel):
+    id: str
+    deployment_candidate_id: str
+    host_id: str
+    feasibility: str
+    placement: DeploymentPlacement
+    memory: DeploymentMemoryMatrix
+
+
+class DeploymentPlacementListResponse(ApiModel):
+    items: tuple[DeploymentPlacementDTO, ...]
+
+
+class DeploymentServerInputDTO(ApiModel):
+    instance_id: Annotated[str, Field(min_length=1)]
+    model_path: Annotated[str, Field(min_length=1)]
+    draft_model_path: Annotated[str, Field(min_length=1)] | None = None
+
+
+class DeploymentStandaloneBaselineDTO(ApiModel):
+    instance_id: Annotated[str, Field(min_length=1)]
+    mode: Literal["prefill", "decode"]
+    prompt_tokens: NonNegativeInt
+    generate_tokens: NonNegativeInt
+    depth_tokens: NonNegativeInt
+    throughput_tps: Annotated[float, Field(gt=0)]
+    latency_ms: Annotated[float, Field(ge=0)] | None = None
+
+
+class DeploymentRunRequest(ApiModel):
+    deployment_placement_id: Annotated[str, Field(min_length=1)]
+    instances: Annotated[
+        tuple[DeploymentServerInputDTO, ...],
+        Field(min_length=1),
+    ]
+    standalone_baselines: tuple[DeploymentStandaloneBaselineDTO, ...] = ()
+    host: Annotated[str, Field(min_length=1)] = "127.0.0.1"
+    readiness_timeout_seconds: Annotated[float, Field(gt=0)] = 300.0
+
+
+DeploymentOperationStatus = Literal[
+    "running",
+    "pausing",
+    "cancelling",
+    "completed",
+    "paused",
+    "cancelled",
+    "failed",
+]
+
+
+class DeploymentOperationDTO(ApiModel):
+    id: str
+    deployment_candidate_id: str
+    deployment_placement_id: str
+    deployment_run_id: str | None
+    status: DeploymentOperationStatus
+    requested_action: Literal["pause", "cancel"] | None
+    started_at: str
+    finished_at: str | None
+    error: str | None
+
+
+class DeploymentMemberStateDTO(ApiModel):
+    instance_id: str
+    status: str
+    endpoint: str | None
+    pid: int | None
+    ready_at: str | None
+    exit_code: int | None
+
+
+class DeploymentProgressDTO(ApiModel):
+    deployment_id: str
+    deployment_status: str
+    planned_candidates: NonNegativeInt
+    completed_candidates: NonNegativeInt
+    failed_candidates: NonNegativeInt
+    active_deployment_run: str | None
+    member_states: tuple[DeploymentMemberStateDTO, ...]
+    current_workload_phase: str | None
+    operation: DeploymentOperationDTO | None
+
+
+class DeploymentWorkloadPhaseDTO(ApiModel):
+    id: str
+    phase: str
+    status: str
+    quality: str | None
+    correctness_valid: bool
+    combined_prompt_tps: float | None
+    combined_decode_tps: float | None
+    min_retention: float | None
+    failure_kind: str | None
+
+
+class DeploymentRunMemberDTO(ApiModel):
+    instance_id: str
+    status: str
+    endpoint: str | None
+    pid: int | None
+    ready_at: str | None
+    finished_at: str | None
+    exit_code: int | None
+    forced_kill: bool
+    cleanup_error: str | None
+
+
+class DeploymentRunDTO(ApiModel):
+    id: str
+    deployment_candidate_id: str
+    deployment_placement_id: str | None
+    status: str
+    quality: str | None
+    failure_kind: str | None
+    started_at: str | None
+    finished_at: str | None
+    duration_ns: NonNegativeInt | None
+    members: tuple[DeploymentRunMemberDTO, ...]
+    phases: tuple[DeploymentWorkloadPhaseDTO, ...]
+
+
+class DeploymentRunListResponse(ApiModel):
+    items: tuple[DeploymentRunDTO, ...]
+
+
+class DeploymentResultsResponse(ApiModel):
+    deployment_id: str
+    rows: tuple[dict[str, Any], ...]
+
+
+class DeploymentParetoResponse(ApiModel):
+    deployment_id: str
+    result: DeploymentParetoResult
+
