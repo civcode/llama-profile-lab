@@ -6,7 +6,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-BinaryKind = Literal["llama-bench", "llama-fit-params", "llama-server", "speed-bench"]
+BinaryKind = Literal[
+    "llama-bench",
+    "llama-fit-params",
+    "llama-memory-estimator",
+    "llama-server",
+    "speed-bench",
+]
 
 _OPTION_RE = re.compile(r"^(?:--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z0-9][A-Za-z0-9_-]*)$")
 
@@ -67,7 +73,13 @@ class CapabilitySet:
         """Rehydrate capabilities from SQLite JSON."""
         raw_kind = mapping.get("kind", fallback_kind)
         kind: BinaryKind
-        if raw_kind in {"llama-bench", "llama-fit-params", "llama-server", "speed-bench"}:
+        if raw_kind in {
+            "llama-bench",
+            "llama-fit-params",
+            "llama-memory-estimator",
+            "llama-server",
+            "speed-bench",
+        }:
             kind = raw_kind
         else:
             kind = fallback_kind
