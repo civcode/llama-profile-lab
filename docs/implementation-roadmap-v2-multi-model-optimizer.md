@@ -913,7 +913,7 @@ The repository-wide Ruff, mypy, complete pytest suite, and frontend gates remain
 
 ## 10. V2-M6 — Concurrent DD / PP / PD / DP workloads
 
-**Status: Planned**
+**Status: Implemented — deterministic concurrent-workload and production-client validation passing locally; full repository lint/type/full-test gate pending**
 
 ### Objective
 
@@ -1026,20 +1026,20 @@ A successful HTTP response with high TPS is not sufficient when output validatio
 
 ### Work items
 
-- [ ] Add concurrent workload models.
-- [ ] Add DD/PP/PD/DP planner generation.
-- [ ] Add synchronized client barrier.
-- [ ] Add shared timing record.
-- [ ] Add overlap interval calculation.
-- [ ] Add aggregate token accounting.
-- [ ] Persist per-member raw results.
-- [ ] Persist per-member normalized metrics.
-- [ ] Add standalone-baseline lookup.
-- [ ] Add retention metrics.
-- [ ] Add deployment-aware quality classification.
-- [ ] Add correctness validation hooks.
-- [ ] Add asymmetric-context cases.
-- [ ] Add timeout and member-failure behavior.
+- [x] Add concurrent workload models.
+- [x] Add DD/PP/PD/DP planner generation.
+- [x] Add synchronized client barrier.
+- [x] Add shared timing record.
+- [x] Add overlap interval calculation.
+- [x] Add aggregate token accounting.
+- [x] Persist per-member raw results.
+- [x] Persist per-member normalized metrics.
+- [x] Add standalone-baseline lookup.
+- [x] Add retention metrics.
+- [x] Add deployment-aware quality classification.
+- [x] Add correctness validation hooks.
+- [x] Add asymmetric-context cases.
+- [x] Add timeout and member-failure behavior.
 
 ### Tests
 
@@ -1069,6 +1069,27 @@ A deterministic two-instance synthetic run executes DD, PP, PD, and DP and persi
 - timing evidence;
 - quality;
 - failure/correctness status.
+
+Implementation notes and validation:
+
+- the existing Candidate-dependent workload-suite expander supplies concrete prefill/decode depth cases, so equal shallow/deep and asymmetric-context combinations are generated without a second context model;
+- `DeploymentExecutor` exposes a typed resident-action seam, allowing all M6 phases to run under the same M5 host lock while the same server processes remain resident;
+- clients are prepared before a shared `threading.Barrier`; `client_ready_ns`, `barrier_release_ns`, request/token/finish timestamps, and cumulative token events use the monotonic clock;
+- the production client prewarms `depth_tokens`, then streams llama-server `/completion` with prompt-progress and predicted-token counters;
+- aggregate PP/TG rates are computed from cumulative tokens completed inside the common overlap interval, never by summing independent member rates;
+- raw member persistence includes normalized token-event evidence for every client implementation, not only the production HTTP client;
+- standalone baselines match Candidate, resolved placement, host, binary, workload mode, prompt/generate counts, and depth exactly; identical imports are idempotent while conflicting exact matches are surfaced as `baseline_ambiguous`;
+- per-member throughput retention, throughput loss, baseline latency, concurrent latency, latency increase, and deployment minimum retention are persisted when an unambiguous baseline exists;
+- missing baselines remain `baseline_missing` rather than being guessed;
+- member failure, timeout, cancellation, no-overlap, and output-validation failure retain phase/member evidence and fail the deployment run with normalized failure semantics;
+- schema migrations 011 and 012 add concurrent workload/result persistence and latency-retention fields; the current schema version is 12;
+- `llprof deployment benchmark SPEC` launches the M5 residency lifecycle and executes the generated concurrent phase matrix, with optional exact standalone baselines supplied in the benchmark spec;
+- deterministic tests cover exact synchronized start, partial/staggered overlap, no overlap, aggregate arithmetic, missing/ambiguous baselines, latency deltas, member failure, member timeout, correctness failure, cancellation, asymmetric depths, and all DD/PP/PD/DP phases;
+- production-client protocol tests cover context-depth prewarm, prompt-progress token accounting, raw event evidence, and decode token-count mismatch rejection;
+- a local reconstructed pure-M6 validation pass completed with all focused planner/overlap/HTTP-client tests green;
+- changed M6 Python/test files pass the branch-side line-length/trailing-whitespace/blank-run hygiene scan.
+
+The full repository Ruff, mypy, complete pytest suite, frontend gates, and real llama.cpp two-model workstation acceptance remain pending because the execution environment cannot clone GitHub over DNS. The manual GitHub Actions workflow has not been dispatched.
 
 ### Suggested checkpoint commits
 
