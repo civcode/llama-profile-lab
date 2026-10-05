@@ -154,7 +154,7 @@ def test_resource_policy_rejects_duplicate_devices() -> None:
     with pytest.raises(ValidationError, match="allowed_devices"):
         HostResourcePolicy(allowed_devices=("CUDA0", "CUDA0"))
 
-def test_placement_identity_ignores_measurement_time_and_provenance() -> None:
+def test_placement_identity_ignores_memory_observations_and_provenance() -> None:
     base_memory = PlacementDeviceMemory(
         instance_id="qwen",
         device_id="CUDA0",
@@ -193,13 +193,38 @@ def test_placement_identity_ignores_measurement_time_and_provenance() -> None:
         update={
             "device_memory": (
                 base_memory.model_copy(
-                    update={"measured_at": "2026-10-05T12:01:00Z"}
+                    update={
+                        "device_free_bytes": 40,
+                        "measured_at": "2026-10-05T12:01:00Z",
+                    }
                 ),
             ),
+            "device_allocations": (
+                DeploymentDeviceAllocation(
+                    device_id="CUDA0",
+                    projected_bytes=10,
+                    reserved_margin_bytes=10,
+                    device_total_bytes=100,
+                    projected_free_bytes=80,
+                ),
+            ),
+            "feasibility": "pending",
             "provenance": {"estimator": "second"},
         }
     )
 
     assert left != right
     assert left.content_hash() == right.content_hash()
+
+    changed_placement = left.model_copy(
+        update={
+            "instance_placements": (
+                DeploymentInstancePlacement(
+                    instance_id="qwen",
+                    resolved_placement_id="place_2",
+                ),
+            )
+        }
+    )
+    assert changed_placement.content_hash() != left.content_hash()
 
