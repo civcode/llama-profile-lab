@@ -18,7 +18,11 @@ from llama_profile_lab.db.connection import transaction
 from llama_profile_lab.db.records import BinaryRecord, MemoryEstimateAttemptStatus
 from llama_profile_lab.domain import AcceleratorDevice, MemoryEstimateOutput
 from llama_profile_lab.execution.host import BasicHostInfo, detect_basic_host
-from llama_profile_lab.execution.process import ProcessRunner, ProcessRunnerError
+from llama_profile_lab.execution.process import (
+    ProcessResult,
+    ProcessRunner,
+    ProcessRunnerError,
+)
 from llama_profile_lab.llama import (
     BinaryKind,
     CapabilitySet,
@@ -390,11 +394,9 @@ def _binary_kind(value: str) -> BinaryKind:
     return cast(BinaryKind, value)
 
 
-def _process_failure_status(process: object) -> MemoryEstimateAttemptStatus | None:
-    from llama_profile_lab.execution.process import ProcessResult
-
-    if not isinstance(process, ProcessResult):
-        raise TypeError("expected ProcessResult")
+def _process_failure_status(
+    process: ProcessResult,
+) -> MemoryEstimateAttemptStatus | None:
     if process.interrupted:
         return "interrupted"
     if process.cancelled:
