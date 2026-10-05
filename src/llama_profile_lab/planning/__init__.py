@@ -5,6 +5,21 @@ from llama_profile_lab.planning.constraints import (
     evaluate_constraint,
     validate_constraint,
 )
+from llama_profile_lab.planning.deployment_planner import (
+    DeploymentEstimatorInput,
+    DeploymentPlanCase,
+    DeploymentPlannerService,
+    DeploymentPlanSummary,
+    effective_placement_constraints,
+)
+from llama_profile_lab.planning.deployment_search import (
+    DEFAULT_DEPLOYMENT_PARAMETER_REGISTRY,
+    DeploymentParameterRegistry,
+    DeploymentPlanningError,
+    DeploymentPoint,
+    DeploymentSearchExpansion,
+    expand_deployment_search,
+)
 from llama_profile_lab.planning.expand import (
     CandidatePoint,
     PlanningError,
@@ -32,6 +47,17 @@ from llama_profile_lab.planning.workloads import (
 
 __all__ = [
     "CandidatePoint",
+    "expand_deployment_search",
+    "effective_placement_constraints",
+    "DeploymentSearchExpansion",
+    "DeploymentPoint",
+    "DeploymentPlanSummary",
+    "DeploymentPlanningError",
+    "DeploymentPlannerService",
+    "DeploymentPlanCase",
+    "DeploymentParameterRegistry",
+    "DeploymentEstimatorInput",
+    "DEFAULT_DEPLOYMENT_PARAMETER_REGISTRY",
     "ConstraintError",
     "DEFAULT_PARAMETER_REGISTRY",
     "ExpandedWorkload",
