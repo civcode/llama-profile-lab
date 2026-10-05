@@ -6,6 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from llama_profile_lab.domain.deployment import (
+    DeploymentFailureKind,
+    DeploymentFeasibility,
+    DeploymentRunStatus,
+)
 from llama_profile_lab.domain.telemetry import RunQuality
 
 ExperimentStatus = Literal[
@@ -233,3 +238,104 @@ class CandidateEvaluationRecord:
     reason: str | None
     metrics: Mapping[str, Any]
     created_at: str
+
+@dataclass(frozen=True, slots=True)
+class DeploymentCandidateRecord:
+    """Persisted metadata for one immutable deployment Candidate."""
+
+    id: str
+    deployment_hash: str
+    workload_suite_id: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentInstanceRecord:
+    """One model/server instance belonging to a deployment Candidate."""
+
+    deployment_candidate_id: str
+    instance_id: str
+    candidate_id: str
+    role: str
+    model_artifact_id: str
+    binary_id: str
+    requested_placement: Mapping[str, Any]
+    server_identity: str
+    ordinal: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentPlacementRecord:
+    """Persisted metadata for one immutable joint deployment placement."""
+
+    id: str
+    placement_hash: str
+    deployment_candidate_id: str
+    host_id: str
+    feasibility: DeploymentFeasibility
+    request: Mapping[str, Any]
+    provenance: Mapping[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementDeviceMemoryRecord:
+    """Normalized per-instance memory estimate on one device."""
+
+    id: str
+    deployment_placement_id: str
+    deployment_candidate_id: str
+    instance_id: str
+    device_id: str
+    model_bytes: int
+    context_bytes: int
+    compute_bytes: int
+    total_bytes: int
+    device_total_bytes: int
+    device_free_bytes: int
+    source: str
+    measured_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentDeviceAllocationRecord:
+    """Projected aggregate memory allocation on one physical device."""
+
+    deployment_placement_id: str
+    device_id: str
+    projected_bytes: int
+    reserved_margin_bytes: int
+    device_total_bytes: int
+    projected_free_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentRunRecord:
+    """One append-only deployment execution attempt."""
+
+    id: str
+    deployment_candidate_id: str
+    deployment_placement_id: str | None
+    workload_case_id: str | None
+    status: DeploymentRunStatus
+    quality: RunQuality | None
+    quality_details: Mapping[str, Any] | None
+    failure_kind: DeploymentFailureKind | None
+    failure_details: Mapping[str, Any] | None
+    started_at: str | None
+    finished_at: str | None
+    duration_ns: int | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentRunMemberRecord:
+    """One model-instance member of a deployment run."""
+
+    deployment_run_id: str
+    deployment_candidate_id: str
+    instance_id: str
+    server_run_id: str | None
+    client_run_id: str | None
+    result: Mapping[str, Any]
+
