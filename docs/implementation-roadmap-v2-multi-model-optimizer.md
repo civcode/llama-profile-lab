@@ -552,7 +552,7 @@ Implementation validation completed locally without GitHub Actions:
 - provider provenance is retained on raw samples and per-device summaries;
 - aggregate V1 telemetry metrics remain present while per-device generic metrics are emitted under stable encoded IDs;
 - intentional during-run GPU utilization does not become external-GPU contamination when before/after baselines are quiet;
-- 80 relevant pytest tests pass across V1 domain, V2-M1, V2-M2, and V2-M3 coverage;
+- 81 relevant pytest tests pass across V1 domain, V2-M1, V2-M2, and V2-M3 coverage;
 - Python compile checks pass.
 
 No schema migration is required because raw GPU observations are already persisted as JSON and generic metric rows already support the new per-device metric names. The API telemetry DTO reuses the domain TelemetrySample type, so the new fields are additive. The current frontend has no dedicated telemetry sample type requiring a synchronized TypeScript change.
