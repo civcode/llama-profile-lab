@@ -467,10 +467,18 @@ def _seed(
 
 def _baselines() -> tuple[StandaloneBaselineInput, ...]:
     return (
-        StandaloneBaselineInput("a", "prefill", 100, 0, 128, 100.0),
-        StandaloneBaselineInput("b", "prefill", 100, 0, 128, 100.0),
-        StandaloneBaselineInput("a", "decode", 0, 20, 128, 20.0),
-        StandaloneBaselineInput("b", "decode", 0, 20, 128, 20.0),
+        StandaloneBaselineInput(
+            "a", "prefill", 100, 0, 128, 100.0, 1000.0
+        ),
+        StandaloneBaselineInput(
+            "b", "prefill", 100, 0, 128, 100.0, 1000.0
+        ),
+        StandaloneBaselineInput(
+            "a", "decode", 0, 20, 128, 20.0, 1000.0
+        ),
+        StandaloneBaselineInput(
+            "b", "decode", 0, 20, 128, 20.0, 1000.0
+        ),
     )
 
 
@@ -544,7 +552,18 @@ def test_executes_all_four_phases_with_retention_and_timing(
                 for item in members
             )
             assert all(item.retention == pytest.approx(0.5) for item in members)
-            assert all(item.raw["fixture"] in {"prefill", "decode"} for item in members)
+            assert all(
+                item.baseline_latency_ms == pytest.approx(1000.0)
+                for item in members
+            )
+            assert all(
+                item.latency_increase_pct == pytest.approx(100.0)
+                for item in members
+            )
+            assert all(
+                item.raw["fixture"] in {"prefill", "decode"}
+                for item in members
+            )
 
 
 def test_missing_and_ambiguous_baselines_are_not_guessed(tmp_path: Path) -> None:
@@ -646,6 +665,32 @@ def test_cancellation_during_concurrent_phase(tmp_path: Path) -> None:
     assert len(errors) == 1
     assert isinstance(errors[0], DeploymentResidentActionError)
     assert errors[0].cancelled is True
+
+
+def test_fake_clients_with_no_overlap_are_rejected(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs = _seed(tmp_path)
+    client = DeterministicClient(
+        duration_by_instance={"a": SECOND, "b": SECOND},
+        start_offset_by_instance={"b": 2 * SECOND},
+    )
+
+    with pytest.raises(DeploymentResidentActionError):
+        _service(database, client).execute(placement_id, inputs)
+
+    with database.session() as connection:
+        row = connection.execute(
+            """
+            SELECT quality, status
+            FROM deployment_workload_run
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert row is not None
+    assert row["quality"] == "no_overlap"
+    assert row["status"] == "invalid"
 
 
 def test_staggered_completion_uses_shared_overlap_only(tmp_path: Path) -> None:
