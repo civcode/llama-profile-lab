@@ -69,6 +69,17 @@ RunStatus = Literal[
     "cancelled",
 ]
 
+MemoryEstimateAttemptStatus = Literal[
+    "running",
+    "completed",
+    "failed",
+    "parser_failed",
+    "timeout",
+    "interrupted",
+    "cancelled",
+    "binary_changed",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class ExperimentRecord:
@@ -351,4 +362,79 @@ class DeploymentRunMemberRecord:
     server_run_id: str | None
     client_run_id: str | None
     result: Mapping[str, Any]
+
+@dataclass(frozen=True, slots=True)
+class AcceleratorDeviceRecord:
+    """Persisted logical-device inventory for one host/binary pair."""
+
+    id: str
+    host_id: str
+    binary_id: str
+    logical_device_name: str
+    backend: str
+    mapping_status: str
+    physical_device_key: str | None
+    pci_bus_id: str | None
+    uuid: str | None
+    vendor: str | None
+    product_name: str | None
+    total_memory_bytes: int | None
+    free_memory_bytes: int | None
+    driver: str | None
+    runtime_metadata: Mapping[str, Any]
+    raw_output: str
+    observed_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryEstimateAttemptRecord:
+    """One append-only invocation of the structured memory helper."""
+
+    id: str
+    cache_hash: str
+    candidate_id: str
+    host_id: str
+    helper_binary_id: str
+    model_artifact_id: str
+    request: Mapping[str, Any]
+    argv: tuple[str, ...]
+    status: MemoryEstimateAttemptStatus
+    started_at: str
+    finished_at: str | None
+    duration_ns: int | None
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    failure_details: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryEstimateRecord:
+    """One immutable successful memory estimate reused by cache identity."""
+
+    id: str
+    cache_hash: str
+    attempt_id: str
+    candidate_id: str
+    host_id: str
+    helper_binary_id: str
+    model_artifact_id: str
+    identity: Mapping[str, Any]
+    result: Mapping[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryEstimateDeviceRecord:
+    """One normalized per-device row from a successful memory estimate."""
+
+    memory_estimate_id: str
+    ordinal: int
+    logical_device_name: str
+    model_bytes: int
+    context_bytes: int
+    compute_bytes: int
+    total_bytes: int
+    device_total_bytes: int
+    device_free_bytes: int
 
