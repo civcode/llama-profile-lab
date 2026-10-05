@@ -37,11 +37,19 @@ def detect_basic_host() -> BasicHostInfo:
         "version": platform.version(),
     }
     gpus = _linux_gpu_inventory()
+    legacy_gpu_identity_keys = (
+        "pci_address",
+        "vendor",
+        "device",
+        "subsystem_vendor",
+        "subsystem_device",
+        "driver",
+    )
     gpu_identity = [
         {
-            key: value
-            for key, value in gpu.items()
-            if key != "drm_card"
+            key: gpu[key]
+            for key in legacy_gpu_identity_keys
+            if key in gpu
         }
         for gpu in sorted(
             gpus,
