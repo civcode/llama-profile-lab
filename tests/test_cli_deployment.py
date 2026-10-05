@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from llama_profile_lab.cli import main as cli_module
+import llama_profile_lab.cli.main as cli_module
 from llama_profile_lab.cli.main import main
 from llama_profile_lab.planning import DeploymentPlanSummary
 
