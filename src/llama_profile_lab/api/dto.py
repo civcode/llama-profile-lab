@@ -597,8 +597,15 @@ class DeploymentProgressDTO(ApiModel):
     completed_candidates: NonNegativeInt
     failed_candidates: NonNegativeInt
     active_deployment_run: str | None
+    current_deployment_candidate_id: str | None = None
+    current_placement_id: str | None = None
     member_states: tuple[DeploymentMemberStateDTO, ...]
     current_workload_phase: str | None
+    combined_prompt_tps: float | None = None
+    combined_decode_tps: float | None = None
+    memory: DeploymentMemoryMatrix | None = None
+    failure_kind: str | None = None
+    failure_details: dict[str, Any] | None = None
     operation: DeploymentOperationDTO | None
 
 
