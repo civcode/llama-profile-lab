@@ -383,6 +383,12 @@ def test_deployment_inspection_results_and_pareto(tmp_path: Path) -> None:
     base_id = subjects["a"][0]
     _link_plan(database, base_id, subjects)
     with database.session() as connection:
+        DeploymentCandidateRepository(connection).add_rejection(
+            subjects["b"][0],
+            stage="memory",
+            reason="device_memory_exceeded",
+            details={"device_id": "GPU0", "projected_bytes": 123},
+        )
         failed_runs = DeploymentRunRepository(connection)
         failed_runs.add_member(
             subjects["d"][2],
@@ -409,7 +415,15 @@ def test_deployment_inspection_results_and_pareto(tmp_path: Path) -> None:
         f"/api/deployments/{base_id}/candidates",
     )
     assert candidates.status_code == 200
-    assert len(candidates.json()["items"]) == len(subjects)
+    candidate_items = candidates.json()["items"]
+    assert len(candidate_items) == len(subjects)
+    rejected_candidate = next(
+        item for item in candidate_items
+        if item["id"] == subjects["b"][0]
+    )
+    assert rejected_candidate["rejection_count"] == 1
+    assert rejected_candidate["rejections"][0]["reason"] == "device_memory_exceeded"
+    assert rejected_candidate["rejections"][0]["details"]["device_id"] == "GPU0"
 
     placements = api_request(
         app,
