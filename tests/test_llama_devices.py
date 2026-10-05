@@ -38,7 +38,6 @@ Available devices:
     assert all(item.mapping_status == "unresolved" for item in devices)
 
 
-
 @pytest.mark.parametrize(
     ("text", "names", "backends"),
     (
@@ -70,6 +69,7 @@ def test_parse_device_list_handles_single_and_homogeneous_devices(
 
     assert [item.logical_device_name for item in devices] == names
     assert [item.backend for item in devices] == backends
+
 
 def test_device_list_adapter_requires_advertised_option(tmp_path) -> None:
     adapter = LlamaDeviceListAdapter()
