@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -474,8 +475,21 @@ def test_deployment_run_control_routes_and_sse(tmp_path: Path) -> None:
     assert events.status_code == 200
     assert events.headers["content-type"].startswith("text/event-stream")
     assert events.text.count("event: progress") == 2
-    assert '"deployment_status":"running"' in events.text
-    assert '"deployment_status":"completed"' in events.text
+    payloads = [
+        json.loads(line.removeprefix("data: "))
+        for line in events.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert [item["deployment_status"] for item in payloads] == [
+        "running",
+        "completed",
+    ]
+    assert payloads[0]["memory"] is None
+    assert payloads[-1]["current_placement_id"] == subjects["a"][1]
+    assert payloads[-1]["current_deployment_candidate_id"] == subjects["a"][0]
+    assert payloads[-1]["memory"]["deployment_placement_id"] == subjects["a"][1]
+    assert "combined_prompt_tps" in payloads[-1]
+    assert "combined_decode_tps" in payloads[-1]
 
     operations = SequencedDeploymentOperations()
     app = create_app(
