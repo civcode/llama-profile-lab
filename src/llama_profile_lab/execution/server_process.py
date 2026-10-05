@@ -138,13 +138,16 @@ class ManagedServerProcess:
 
     def stop(self) -> ServerProcessOutcome:
         process = self._process
-        if process is not None and process.poll() is None:
+        if process is not None:
             _signal_process_group(process, signal.SIGTERM)
-            try:
-                process.wait(timeout=self.terminate_grace_seconds)
-            except subprocess.TimeoutExpired:
-                self._forced_kill = True
-                _signal_process_group(process, signal.SIGKILL)
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=self.terminate_grace_seconds)
+                except subprocess.TimeoutExpired:
+                    self._forced_kill = True
+                    _signal_process_group(process, signal.SIGKILL)
+                    process.wait()
+            else:
                 process.wait()
 
         finished_ns = time.monotonic_ns()
@@ -202,9 +205,10 @@ def _health_ready(url: str) -> bool:
         connection.close()
 
 
-def _signal_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
-    if process.poll() is not None:
-        return
+def _signal_process_group(
+    process: subprocess.Popen[str],
+    sig: signal.Signals,
+) -> None:
     try:
         os.killpg(process.pid, sig)
     except ProcessLookupError:
