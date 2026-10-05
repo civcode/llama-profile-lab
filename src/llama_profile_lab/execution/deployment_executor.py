@@ -399,14 +399,21 @@ class DeploymentExecutor:
                         "ready",
                     )
 
-                runtime_check = self._runtime_memory_check(
-                    deployment_placement_id
-                )
-                if runtime_check.violations:
-                    failure_kind = "runtime_memory_margin_violated"
-                    failure_message = (
-                        "runtime GPU memory headroom violated planned margin"
+                try:
+                    runtime_check = self._runtime_memory_check(
+                        deployment_placement_id
                     )
+                except Exception as exc:
+                    failure_kind = "telemetry_incomplete"
+                    failure_message = (
+                        f"runtime memory telemetry failed: {exc}"
+                    )
+                else:
+                    if runtime_check.violations:
+                        failure_kind = "runtime_memory_margin_violated"
+                        failure_message = (
+                            "runtime GPU memory headroom violated planned margin"
+                        )
 
             if failure_message is None:
                 probe_error = self._residency_probe(
