@@ -136,6 +136,7 @@ from llama_profile_lab.planning import (
     DEFAULT_PARAMETER_REGISTRY,
     DeploymentEstimatorInput,
     DeploymentPlannerService,
+    DeploymentPlanSummary,
     PlanSummary,
     build_plan,
     plan_experiment,
@@ -1576,6 +1577,306 @@ class ApiService:
     ) -> None:
         if ExperimentRepository(connection).get(experiment_id) is None:
             raise ApiNotFoundError(f"experiment not found: {experiment_id}")
+
+
+def parse_deployment_filters(
+    values: tuple[str, ...],
+) -> tuple[DeploymentAnalysisFilter, ...]:
+    return tuple(
+        DeploymentAnalysisFilter(
+            path=parsed.path,
+            value=parsed.value,
+        )
+        for parsed in (_parse_filter(value) for value in values)
+    )
+
+
+def parse_deployment_objectives(
+    values: tuple[str, ...],
+) -> tuple[DeploymentParetoObjective, ...]:
+    objectives: list[DeploymentParetoObjective] = []
+    for value in values:
+        main, separator, raw_filters = value.partition("@")
+        parts = main.split(":", 2)
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                "invalid deployment objective; expected "
+                "KEY:DIRECTION:METRIC[@PATH=VALUE;...]"
+            )
+        key, raw_direction, metric = parts
+        direction_map = {
+            "max": "maximize",
+            "maximize": "maximize",
+            "min": "minimize",
+            "minimize": "minimize",
+        }
+        direction = direction_map.get(raw_direction)
+        if direction is None:
+            raise ValueError(
+                "deployment objective direction must be max/min or "
+                "maximize/minimize"
+            )
+        filters = (
+            ()
+            if not separator or not raw_filters
+            else parse_deployment_filters(
+                tuple(
+                    item
+                    for item in raw_filters.split(";")
+                    if item
+                )
+            )
+        )
+        objectives.append(
+            DeploymentParetoObjective(
+                key=key,
+                direction=direction,
+                metric=metric,
+                filters=filters,
+            )
+        )
+    if not objectives:
+        raise ValueError("at least one deployment objective is required")
+    return tuple(objectives)
+
+
+def parse_deployment_constraints(
+    values: tuple[str, ...],
+) -> tuple[DeploymentMetricConstraint, ...]:
+    constraints: list[DeploymentMetricConstraint] = []
+    for value in values:
+        main, separator, raw_filters = value.partition("@")
+        parts = main.split(":", 2)
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                "invalid deployment constraint; expected "
+                "METRIC:OP:VALUE[@PATH=VALUE;...]"
+            )
+        metric, operator, raw_value = parts
+        if operator not in {"ge", "gt", "le", "lt", "eq"}:
+            raise ValueError(
+                "deployment constraint operator must be ge/gt/le/lt/eq"
+            )
+        try:
+            threshold = float(raw_value)
+        except ValueError as exc:
+            raise ValueError(
+                "deployment constraint value must be numeric"
+            ) from exc
+        filters = (
+            ()
+            if not separator or not raw_filters
+            else parse_deployment_filters(
+                tuple(
+                    item
+                    for item in raw_filters.split(";")
+                    if item
+                )
+            )
+        )
+        constraints.append(
+            DeploymentMetricConstraint(
+                metric=metric,
+                operator=operator,
+                value=threshold,
+                filters=filters,
+            )
+        )
+    return tuple(constraints)
+
+
+def _deployment_plan_response(
+    summary: DeploymentPlanSummary,
+) -> DeploymentPlanResponse:
+    return DeploymentPlanResponse(
+        base_deployment_candidate_id=summary.base_deployment_candidate_id,
+        host_id=summary.host_id,
+        raw_combinations=summary.raw_combinations,
+        rejected_by_constraints=summary.rejected_by_constraints,
+        duplicate_candidates=summary.duplicate_candidates,
+        symmetry_reduced=summary.symmetry_reduced,
+        capability_rejected=summary.capability_rejected,
+        estimate_failed=summary.estimate_failed,
+        memory_rejected=summary.memory_rejected,
+        valid_count=summary.valid_count,
+        plan_id=summary.plan_id,
+        cases=tuple(
+            DeploymentPlanCaseDTO(
+                deployment_candidate_id=item.deployment_candidate_id,
+                deployment_placement_id=item.deployment_placement_id,
+                generation={
+                    str(key): value
+                    for key, value in item.generation.items()
+                },
+            )
+            for item in summary.cases
+        ),
+    )
+
+
+def _deployment_operation_spec(
+    request: DeploymentRunRequest,
+) -> DeploymentOperationSpec:
+    instance_ids = [item.instance_id for item in request.instances]
+    if len(instance_ids) != len(set(instance_ids)):
+        raise ApiConflictError(
+            "deployment run instance IDs must be unique"
+        )
+    return DeploymentOperationSpec(
+        deployment_placement_id=request.deployment_placement_id,
+        inputs=tuple(
+            DeploymentServerInput(
+                instance_id=item.instance_id,
+                model_path=Path(item.model_path),
+                draft_model_path=(
+                    None
+                    if item.draft_model_path is None
+                    else Path(item.draft_model_path)
+                ),
+            )
+            for item in request.instances
+        ),
+        standalone_baselines=tuple(
+            StandaloneBaselineInput(
+                instance_id=item.instance_id,
+                mode=item.mode,
+                prompt_tokens=item.prompt_tokens,
+                generate_tokens=item.generate_tokens,
+                depth_tokens=item.depth_tokens,
+                throughput_tps=item.throughput_tps,
+                latency_ms=item.latency_ms,
+            )
+            for item in request.standalone_baselines
+        ),
+        host=request.host,
+        readiness_timeout_seconds=request.readiness_timeout_seconds,
+    )
+
+
+def _deployment_operation_dto(
+    snapshot: DeploymentOperationSnapshot | None,
+) -> DeploymentOperationDTO | None:
+    if snapshot is None:
+        return None
+    return DeploymentOperationDTO(
+        id=snapshot.id,
+        deployment_candidate_id=snapshot.deployment_candidate_id,
+        deployment_placement_id=snapshot.deployment_placement_id,
+        deployment_run_id=snapshot.deployment_run_id,
+        status=snapshot.status,
+        requested_action=snapshot.requested_action,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        error=snapshot.error,
+    )
+
+
+def _deployment_status(
+    operation: DeploymentOperationSnapshot | None,
+    latest_run_status: str | None,
+    plan_count: int,
+) -> str:
+    if operation is not None:
+        if operation.status in {"running", "pausing", "cancelling"}:
+            return operation.status
+        if operation.status in {
+            "completed",
+            "paused",
+            "cancelled",
+            "failed",
+        }:
+            return operation.status
+    if latest_run_status in {"starting", "ready", "running"}:
+        return "running"
+    if latest_run_status in {"completed", "cancelled", "failed"}:
+        return latest_run_status
+    return "planned" if plan_count > 0 else "draft"
+
+
+def _deployment_placement_ids(
+    connection: sqlite3.Connection,
+    deployment_id: str,
+) -> tuple[str, ...]:
+    rows = connection.execute(
+        """
+        SELECT DISTINCT dp.id
+        FROM deployment_placement AS dp
+        WHERE dp.deployment_candidate_id = ?
+           OR EXISTS (
+                SELECT 1
+                FROM deployment_plan AS plan
+                JOIN deployment_plan_case AS pc
+                  ON pc.deployment_plan_id = plan.id
+                WHERE plan.base_deployment_candidate_id = ?
+                  AND pc.deployment_placement_id = dp.id
+           )
+        ORDER BY dp.created_at, dp.id
+        """,
+        (deployment_id, deployment_id),
+    ).fetchall()
+    return tuple(str(row["id"]) for row in rows)
+
+
+def _deployment_run_dto(
+    connection: sqlite3.Connection,
+    record: object,
+) -> DeploymentRunDTO:
+    run_id = str(record.id)
+    members = DeploymentRunRepository(connection).members(run_id)
+    phase_rows = connection.execute(
+        """
+        SELECT id
+        FROM deployment_workload_run
+        WHERE deployment_run_id = ?
+        ORDER BY created_at, id
+        """,
+        (run_id,),
+    ).fetchall()
+    workloads = ConcurrentWorkloadRepository(connection)
+    phases: list[DeploymentWorkloadPhaseDTO] = []
+    for row in phase_rows:
+        phase = workloads.get_run(str(row["id"]))
+        if phase is None:
+            raise RuntimeError("deployment workload run disappeared")
+        phases.append(
+            DeploymentWorkloadPhaseDTO(
+                id=phase.id,
+                phase=phase.phase,
+                status=phase.status,
+                quality=phase.quality,
+                correctness_valid=phase.correctness_valid,
+                combined_prompt_tps=phase.combined_prompt_tps,
+                combined_decode_tps=phase.combined_decode_tps,
+                min_retention=phase.min_retention,
+                failure_kind=phase.failure_kind,
+            )
+        )
+    return DeploymentRunDTO(
+        id=run_id,
+        deployment_candidate_id=str(record.deployment_candidate_id),
+        deployment_placement_id=record.deployment_placement_id,
+        status=str(record.status),
+        quality=record.quality,
+        failure_kind=record.failure_kind,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        duration_ns=record.duration_ns,
+        members=tuple(
+            DeploymentRunMemberDTO(
+                instance_id=item.instance_id,
+                status=item.member_status,
+                endpoint=item.endpoint,
+                pid=item.pid,
+                ready_at=item.ready_at,
+                finished_at=item.finished_at,
+                exit_code=item.exit_code,
+                forced_kill=item.forced_kill,
+                cleanup_error=item.cleanup_error,
+            )
+            for item in members
+        ),
+        phases=tuple(phases),
+    )
 
 
 def parse_filters(values: tuple[str, ...]) -> tuple[AnalysisFilter, ...]:
