@@ -34,6 +34,7 @@ from llama_profile_lab.api.dto import (
     DeploymentCandidateListResponse,
     DeploymentCreateRequest,
     DeploymentDTO,
+    DeploymentListResponse,
     DeploymentMemberStateDTO,
     DeploymentOperationDTO,
     DeploymentParetoResponse,
@@ -997,6 +998,22 @@ class ApiService:
             search_space=search_space,
             workload_suite=workload_suite,
             measurement_policy=measurement_policy,
+        )
+
+    def list_deployments(self) -> DeploymentListResponse:
+        with self.database.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT id
+                FROM deployment_candidate
+                ORDER BY created_at DESC, id DESC
+                """
+            ).fetchall()
+        return DeploymentListResponse(
+            items=tuple(
+                self.get_deployment(str(row["id"]))
+                for row in rows
+            )
         )
 
     def create_deployment(
