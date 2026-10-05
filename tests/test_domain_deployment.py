@@ -124,6 +124,7 @@ def test_homogeneous_backend_pair_is_valid() -> None:
         BackendPair(left="CUDA", right="CUDA"),
     )
 
+
 def test_performance_relevant_change_changes_deployment_hash() -> None:
     original = candidate((instance("qwen"), instance("flash")))
     changed_instance = instance("qwen").model_copy(
@@ -153,6 +154,7 @@ def test_deployment_round_trips_through_canonical_json() -> None:
 def test_resource_policy_rejects_duplicate_devices() -> None:
     with pytest.raises(ValidationError, match="allowed_devices"):
         HostResourcePolicy(allowed_devices=("CUDA0", "CUDA0"))
+
 
 def test_placement_identity_ignores_memory_observations_and_provenance() -> None:
     base_memory = PlacementDeviceMemory(
