@@ -394,7 +394,7 @@ class DeploymentPromotionRequest(ApiModel):
     deployment_placement_id: Annotated[str, Field(min_length=1)]
     sources: Annotated[
         tuple[DeploymentPromotionSourceDTO, ...],
-        Field(min_length=2),
+        Field(min_length=1),
     ]
 
 
