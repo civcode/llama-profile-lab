@@ -244,9 +244,23 @@ class _PreparedLlamaCompletionClient:
             0.0,
             (finished_ns - first_request_ns) / 1_000_000.0,
         )
+        all_events = tuple((*prompt_events, *decode_events))
         raw_summary = {
+            "final_response_json": json.dumps(
+                final_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             "timings_json": json.dumps(
                 timing_map,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "token_events_json": json.dumps(
+                [
+                    event.model_dump(mode="json")
+                    for event in all_events
+                ],
                 sort_keys=True,
                 separators=(",", ":"),
             ),
@@ -267,7 +281,7 @@ class _PreparedLlamaCompletionClient:
             native_prompt_tps=prompt_tps,
             native_decode_tps=decode_tps,
             latency_ms=latency_ms,
-            token_events=tuple((*prompt_events, *decode_events)),
+            token_events=all_events,
             correctness_valid=correctness_valid,
             failure=failure,
             raw=raw_summary,
