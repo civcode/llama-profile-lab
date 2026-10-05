@@ -1,5 +1,13 @@
 """Metrics, projections, Pareto analysis, and latency estimation."""
 
+from llama_profile_lab.analysis.concurrent import (
+    ConcurrentMetricError,
+    MemberOverlap,
+    compute_overlap,
+    native_throughput,
+    retention_for,
+    tokens_completed_between,
+)
 from llama_profile_lab.analysis.metrics import (
     DEFAULT_METRIC_REGISTRY,
     MetricDefinition,
@@ -25,6 +33,12 @@ from llama_profile_lab.analysis.service import (
 )
 
 __all__ = [
+    "ConcurrentMetricError",
+    "MemberOverlap",
+    "compute_overlap",
+    "native_throughput",
+    "retention_for",
+    "tokens_completed_between",
     "AnalysisError",
     "AnalysisFilter",
     "AnalysisService",
