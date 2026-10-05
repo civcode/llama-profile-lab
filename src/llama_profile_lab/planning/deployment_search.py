@@ -325,11 +325,6 @@ def _build_point(
             candidate = Candidate.model_validate(raw)
             request = DeploymentPlacementRequest.model_validate(request_raw)
             base_instance = base_instances[instance_id]
-            if candidate.model.target_model_id != base_instance.model_artifact_id:
-                raise DeploymentPlanningError(
-                    f"instance {instance_id} Candidate target model does not "
-                    "match model_artifact_id"
-                )
             candidate_pairs.append((instance_id, candidate))
             instances.append(
                 base_instance.model_copy(
@@ -362,6 +357,7 @@ def _build_point(
         assignments=tuple(state.assignments),
         skipped_dimensions=tuple(state.skipped_dimensions),
     )
+
 
 def _point_semantic_hash(point: DeploymentPoint) -> str:
     """Deduplicate effective behavior, including redundant placement overrides."""
