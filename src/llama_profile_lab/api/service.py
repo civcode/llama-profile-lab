@@ -22,6 +22,7 @@ from llama_profile_lab.analysis import (
     ParetoResult,
 )
 from llama_profile_lab.api.dto import (
+    AcceleratorDeviceDTO,
     BenchmarkSampleDTO,
     BinaryDTO,
     BinaryInspectRequest,
@@ -51,6 +52,7 @@ from llama_profile_lab.api.dto import (
     DeploymentRunMemberDTO,
     DeploymentRunRequest,
     DeploymentWorkloadPhaseDTO,
+    DeviceInventoryResponse,
     ExecutionRequest,
     ExecutionSummaryDTO,
     ExperimentCreateRequest,
@@ -131,6 +133,8 @@ from llama_profile_lab.domain import (
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     DeploymentServerInput,
+    DeviceInventoryError,
+    DeviceInventoryService,
     ServerValidationService,
     StandaloneBaselineInput,
 )
@@ -264,6 +268,41 @@ class ApiService:
                     raise RuntimeError("binary registration did not produce a record")
                 records.append(record)
         return BinaryListResponse(items=tuple(_binary_dto(record) for record in records))
+
+    def inspect_binary_devices(
+        self,
+        binary_id: str,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> DeviceInventoryResponse:
+        try:
+            inventory = DeviceInventoryService(self.database).inspect(
+                binary_id,
+                timeout_seconds=timeout_seconds,
+            )
+        except DeviceInventoryError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return DeviceInventoryResponse(
+            host_id=inventory.host_id,
+            binary_id=inventory.binary_id,
+            items=tuple(
+                AcceleratorDeviceDTO(
+                    logical_device_name=item.logical_device_name,
+                    backend=item.backend,
+                    mapping_status=item.mapping_status,
+                    physical_device_key=item.physical_device_key,
+                    pci_bus_id=item.pci_bus_id,
+                    uuid=item.uuid,
+                    vendor=item.vendor,
+                    product_name=item.product_name,
+                    total_memory_bytes=item.total_memory_bytes,
+                    free_memory_bytes=item.free_memory_bytes,
+                    driver=item.driver,
+                    runtime_metadata=dict(item.runtime_metadata),
+                )
+                for item in inventory.devices
+            ),
+        )
 
     def list_models(self) -> ModelListResponse:
         with self.database.session() as connection:
