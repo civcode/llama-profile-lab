@@ -16,6 +16,7 @@ from llama_profile_lab.db import (
     DeploymentCandidateRepository,
     DeploymentPlanRepository,
     DeploymentPlacementRepository,
+    DeploymentRunRepository,
 )
 from llama_profile_lab.domain import (
     DeploymentSearchDimension,
@@ -303,6 +304,22 @@ def test_deployment_inspection_results_and_pareto(tmp_path: Path) -> None:
     database, subjects = _seed(tmp_path)
     base_id = subjects["a"][0]
     _link_plan(database, base_id, subjects)
+    with database.session() as connection:
+        failed_runs = DeploymentRunRepository(connection)
+        failed_runs.add_member(
+            subjects["d"][2],
+            instance_id="qwen",
+            member_status="starting",
+            endpoint="http://127.0.0.1:49999",
+        )
+        failed_runs.finish_member(
+            subjects["d"][2],
+            "qwen",
+            status="failed",
+            exit_code=7,
+            stderr="synthetic member failure",
+            result={"failure": "synthetic member failure"},
+        )
     app = create_app(
         database.path,
         deployment_operation_manager=SequencedDeploymentOperations(),
@@ -337,7 +354,16 @@ def test_deployment_inspection_results_and_pareto(tmp_path: Path) -> None:
         f"/api/deployments/{base_id}/runs",
     )
     assert runs.status_code == 200
-    assert any(item["status"] == "failed" for item in runs.json()["items"])
+    failed_items = [
+        item for item in runs.json()["items"]
+        if item["status"] == "failed"
+    ]
+    assert failed_items
+    assert any(
+        member["status"] == "failed"
+        for item in failed_items
+        for member in item["members"]
+    )
 
     results = api_request(
         app,
