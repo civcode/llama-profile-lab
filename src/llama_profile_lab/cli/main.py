@@ -1856,7 +1856,21 @@ def _deployment_rows_csv(
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
-    writer.writerows(rows)
+    for row in rows:
+        writer.writerow(
+            {
+                key: (
+                    json.dumps(
+                        value,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    if isinstance(value, (dict, list, tuple))
+                    else value
+                )
+                for key, value in row.items()
+            }
+        )
     return output.getvalue()
 
 
