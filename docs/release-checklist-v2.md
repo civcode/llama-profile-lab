@@ -59,6 +59,25 @@ npm run build
 - [ ] Restored archive passes SQLite integrity and foreign-key checks.
 - [ ] Acceptance export and archive hashes are recorded.
 
+## Acceptance report
+
+Generate the persisted-evidence report after the workstation campaign:
+
+```bash
+llprof deployment acceptance-report DEPLOYMENT_ID \
+  --minimum-devices 2 \
+  --minimum-phase-repetitions 3 \
+  --format json \
+  --output workstation-acceptance.json \
+  --database data/benchmarks.db
+```
+
+- [ ] Machine-checkable evidence reports `machine_checks_passed: true`.
+- [ ] Any `fail` item is resolved or explicitly blocks release.
+- [ ] `pareto_finalist_selection` is completed in the acceptance notes.
+- [ ] `target_hardware_model_identity` is confirmed against the intended workstation/artifacts.
+- [ ] `automated_clean_checkout_gates` is completed separately; the report does not infer CI/test status from SQLite.
+
 ## Target workstation
 
 Record exact hardware/build identities before benchmarking.
