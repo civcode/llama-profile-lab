@@ -39,11 +39,6 @@ def generate_concurrent_workloads(
             "canonical DD/PP/PD/DP generation currently requires exactly two "
             "deployment instances"
         )
-    if suite.id != deployment.workload_mix.workload_suite_id:
-        raise ConcurrentWorkloadPlanningError(
-            "workload suite does not match deployment workload mix"
-        )
-
     expanded: dict[str, tuple[ExpandedWorkload, ...]] = {}
     for instance in deployment.instances:
         candidate = candidates.get(instance.candidate_id)
