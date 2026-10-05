@@ -57,7 +57,7 @@ const candidate = {
         n_cpu_moe: 0,
         split_mode: "layer",
         main_gpu: 0,
-        devices: "auto",
+        devices: ["CUDA0"],
         tensor_split: null,
         override_tensor: []
       }
@@ -245,7 +245,27 @@ describe("NewDeploymentPage", () => {
   });
 
   it("discovers physical devices and persists explicit resource policy mappings", async () => {
+    mocks.candidates.mockResolvedValue([
+      {
+        ...candidate,
+        candidate: {
+          ...candidate.candidate,
+          placement: {
+            ...candidate.candidate.placement,
+            constraints: {
+              ...candidate.candidate.placement.constraints,
+              devices: "auto"
+            }
+          }
+        }
+      }
+    ]);
     render(<NewDeploymentPage />);
+
+    expect(
+      await screen.findByText(/uses automatic device placement/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create deployment" })).toBeDisabled();
 
     const discover = await screen.findByRole("button", { name: "Discover devices" });
     fireEvent.click(discover);
@@ -271,6 +291,22 @@ describe("NewDeploymentPage", () => {
         device_id: "uuid:gpu-0"
       }
     ]);
+    expect(
+      mocks.createDeployment.mock.calls[0][0].deployment.instances.map(
+        (item: { requested_placement: { devices: string[] } }) =>
+          item.requested_placement.devices
+      )
+    ).toEqual([["CUDA0"], ["CUDA0"]]);
+  });
+
+  it("rejects duplicate instance IDs", async () => {
+    render(<NewDeploymentPage />);
+
+    const names = await screen.findAllByLabelText("Instance name");
+    fireEvent.change(names[1], { target: { value: "model_a" } });
+
+    expect(screen.getByText("Instance names must be unique.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create deployment" })).toBeDisabled();
   });
 
   it("rejects a non-positive total power limit before submission", async () => {
