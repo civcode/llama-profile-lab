@@ -846,7 +846,13 @@ class DeploymentExecutor:
     ) -> None:
         with self.database.session() as connection:
             runs = DeploymentRunRepository(connection)
+            persisted = {
+                item.instance_id
+                for item in runs.members(run_id)
+            }
             for plan in plans:
+                if plan.instance_id not in persisted:
+                    continue
                 outcome, cleanup_error = cleanup.get(
                     plan.instance_id,
                     (None, None),
