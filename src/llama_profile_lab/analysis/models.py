@@ -121,3 +121,142 @@ class LatencyEstimate(FrozenModel):
     total_seconds: Annotated[float, Field(ge=0)]
     prefill_curve: tuple[CurvePoint, ...]
     decode_curve: tuple[CurvePoint, ...]
+
+class DeploymentAnalysisFilter(FrozenModel):
+    """One exact deployment-analysis coordinate filter."""
+
+    path: NonEmptyString
+    value: JsonScalar
+
+
+class DeploymentMatrixCell(FrozenModel):
+    """One unambiguous deployment projection cell."""
+
+    x: JsonScalar
+    y: JsonScalar
+    value: float
+    deployment_candidate_id: NonEmptyString
+    deployment_placement_id: NonEmptyString
+    workload_case_id: NonEmptyString | None = None
+    observation_count: PositiveInt
+
+
+class DeploymentMatrixFacet(FrozenModel):
+    """One optional deployment-analysis facet slice."""
+
+    value: JsonScalar = None
+    cells: tuple[DeploymentMatrixCell, ...]
+
+
+class DeploymentMatrixProjection(FrozenModel):
+    """Sparse deployment projection with exact hidden-coordinate semantics."""
+
+    x_path: NonEmptyString
+    y_path: NonEmptyString
+    metric: NonEmptyString
+    facet_path: NonEmptyString | None = None
+    x_values: tuple[JsonScalar, ...]
+    y_values: tuple[JsonScalar, ...]
+    facets: tuple[DeploymentMatrixFacet, ...]
+
+
+class DeploymentMemoryRow(FrozenModel):
+    """One projected or runtime row in the device memory matrix."""
+
+    key: NonEmptyString
+    source: Literal["projected", "runtime"]
+    values: dict[str, NonNegativeInt | None]
+
+
+class DeploymentMemoryMatrix(FrozenModel):
+    """Device-by-instance memory projection with runtime evidence separated."""
+
+    deployment_placement_id: NonEmptyString
+    deployment_run_id: NonEmptyString | None = None
+    devices: tuple[NonEmptyString, ...]
+    rows: tuple[DeploymentMemoryRow, ...]
+
+
+class DeploymentInterferenceMember(FrozenModel):
+    """Per-instance standalone/concurrent interference evidence."""
+
+    instance_id: NonEmptyString
+    mode: Literal["prefill", "decode"]
+    native_tps: Annotated[float, Field(ge=0)] | None = None
+    overlap_tps: Annotated[float, Field(ge=0)] | None = None
+    standalone_tps: Annotated[float, Field(gt=0)] | None = None
+    retention: Annotated[float, Field(ge=0)] | None = None
+    throughput_loss_pct: float | None = None
+    latency_ms: Annotated[float, Field(ge=0)] | None = None
+    baseline_latency_ms: Annotated[float, Field(ge=0)] | None = None
+    latency_increase_pct: float | None = None
+    correctness_valid: bool
+
+
+class DeploymentInterferenceView(FrozenModel):
+    """One DD/PP/PD/DP phase with aggregate and per-instance interference."""
+
+    deployment_run_id: NonEmptyString
+    workload_run_id: NonEmptyString
+    deployment_placement_id: NonEmptyString
+    phase: Literal["dd", "pp", "pd", "dp"]
+    quality: NonEmptyString | None = None
+    combined_prompt_tps: Annotated[float, Field(ge=0)] | None = None
+    combined_decode_tps: Annotated[float, Field(ge=0)] | None = None
+    min_retention: Annotated[float, Field(ge=0)] | None = None
+    members: tuple[DeploymentInterferenceMember, ...]
+
+
+class DeploymentMetricDelta(FrozenModel):
+    """Signed placement-versus-baseline scalar metric delta."""
+
+    metric: NonEmptyString
+    baseline_value: float | None
+    candidate_value: float | None
+    delta: float | None
+    percent_delta: float | None
+
+
+class DeploymentComparison(FrozenModel):
+    """Placement comparison preserving explicit baseline direction."""
+
+    deployment_placement_id: NonEmptyString
+    baseline_placement_id: NonEmptyString
+    deltas: tuple[DeploymentMetricDelta, ...]
+
+
+class DeploymentParetoObjective(FrozenModel):
+    """One explicit deployment objective and exact workload filters."""
+
+    key: NonEmptyString
+    direction: ObjectiveDirection
+    metric: NonEmptyString
+    filters: tuple[DeploymentAnalysisFilter, ...] = ()
+
+
+class DeploymentMetricConstraint(FrozenModel):
+    """One metric threshold applied before deployment Pareto dominance."""
+
+    metric: NonEmptyString
+    operator: Literal["ge", "gt", "le", "lt", "eq"]
+    value: float
+    filters: tuple[DeploymentAnalysisFilter, ...] = ()
+
+
+class DeploymentParetoPoint(FrozenModel):
+    """One complete deployment-placement objective vector."""
+
+    deployment_candidate_id: NonEmptyString
+    deployment_placement_id: NonEmptyString
+    values: dict[str, float]
+
+
+class DeploymentParetoResult(FrozenModel):
+    """Non-dominated deployment placements and explicit exclusion reasons."""
+
+    objectives: tuple[DeploymentParetoObjective, ...]
+    constraints: tuple[DeploymentMetricConstraint, ...] = ()
+    evaluated_count: NonNegativeInt
+    frontier: tuple[DeploymentParetoPoint, ...]
+    excluded: dict[str, str]
+
