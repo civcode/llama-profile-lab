@@ -13,6 +13,7 @@ Project documents:
 - [Getting started](docs/getting-started.md)
 - [V1 technical specification](docs/technical-spec-v1.md)
 - [V2 multi-model / multi-GPU optimization specification](docs/technical-spec-v2-multi-model-optimizer.md)
+- [V2 multi-model / multi-GPU implementation roadmap](docs/implementation-roadmap-v2-multi-model-optimizer.md)
 - [V1 implementation roadmap](docs/implementation-roadmap-v1.md)
 - [V1 architecture](docs/architecture-v1.md)
 - [V1 benchmark workflow](docs/benchmark-workflow-v1.md)
