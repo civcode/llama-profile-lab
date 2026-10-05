@@ -77,6 +77,7 @@ class BinaryInspectRequest(ApiModel):
         "auto",
         "llama-bench",
         "llama-fit-params",
+        "llama-memory-estimator",
         "llama-server",
         "speed-bench",
     ] = "auto"
