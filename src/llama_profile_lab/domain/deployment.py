@@ -54,16 +54,10 @@ class DeviceMemoryMargin(FrozenModel):
 
 
 class BackendPair(FrozenModel):
-    """One explicitly permitted pair of accelerator backends."""
+    """One explicitly permitted unordered pair of accelerator backends."""
 
     left: NonEmptyString
     right: NonEmptyString
-
-    @model_validator(mode="after")
-    def validate_pair(self) -> BackendPair:
-        if self.left == self.right:
-            raise ValueError("backend pair must contain two distinct backends")
-        return self
 
 
 class HostResourcePolicy(FrozenModel):
