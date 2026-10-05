@@ -25,6 +25,7 @@ from llama_profile_lab.api.dto import (
     BinaryListResponse,
     CandidateListResponse,
     CandidateValidationHistoryDTO,
+    DeviceInventoryResponse,
     DeploymentCandidateListResponse,
     DeploymentCreateRequest,
     DeploymentDTO,
