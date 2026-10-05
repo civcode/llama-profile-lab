@@ -608,6 +608,9 @@ class DeploymentProgressDTO(ApiModel):
     active_deployment_run: str | None
     member_states: tuple[DeploymentMemberStateDTO, ...]
     current_workload_phase: str | None
+    current_combined_prompt_tps: float | None = None
+    current_combined_decode_tps: float | None = None
+    current_min_retention: float | None = None
     operation: DeploymentOperationDTO | None
 
 
