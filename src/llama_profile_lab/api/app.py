@@ -234,6 +234,19 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
     def inspect_binaries(request: BinaryInspectRequest) -> BinaryListResponse:
         return service.inspect_binaries(request)
 
+    @app.post(
+        "/api/binaries/{binary_id}/devices",
+        response_model=DeviceInventoryResponse,
+    )
+    def inspect_binary_devices(
+        binary_id: str,
+        timeout_seconds: Annotated[float, Query(gt=0)] = 30.0,
+    ) -> DeviceInventoryResponse:
+        return service.inspect_binary_devices(
+            binary_id,
+            timeout_seconds=timeout_seconds,
+        )
+
     @app.get("/api/models", response_model=ModelListResponse)
     def models() -> ModelListResponse:
         return service.list_models()
