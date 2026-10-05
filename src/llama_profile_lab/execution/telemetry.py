@@ -787,10 +787,10 @@ def _with_source(
 ) -> GpuTelemetrySample:
     sources = tuple(dict.fromkeys((*sample.sources, source)))
     pci_bus_id = sample.pci_bus_id or normalize_pci_bus_id(sample.device)
-    stable_device_key = sample.stable_device_key or _stable_gpu_key(
+    stable_device_key = _stable_gpu_key(
         pci_bus_id=pci_bus_id,
         uuid=sample.uuid,
-    )
+    ) or sample.stable_device_key
     return sample.model_copy(
         update={
             "pci_bus_id": pci_bus_id,
@@ -828,9 +828,9 @@ def _merge_gpu_samples(
     pci_bus_id = preferred.pci_bus_id or fallback.pci_bus_id
     uuid = preferred.uuid or fallback.uuid
     stable_device_key = (
-        preferred.stable_device_key
+        _stable_gpu_key(pci_bus_id=pci_bus_id, uuid=uuid)
+        or preferred.stable_device_key
         or fallback.stable_device_key
-        or _stable_gpu_key(pci_bus_id=pci_bus_id, uuid=uuid)
     )
     extra = dict(fallback.extra)
     extra.update(preferred.extra)
