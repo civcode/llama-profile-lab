@@ -145,16 +145,41 @@ def test_deployment_candidate_round_trips_across_reopen(tmp_path: Path) -> None:
         assert [item.instance_id for item in instances] == ["flash", "qwen"]
         assert [item.ordinal for item in instances] == [0, 1]
 
+        rejection_id = repository.add_rejection(
+            deployment_id,
+            stage="memory",
+            reason="device_memory_exceeded",
+            details={"device_id": "CUDA0", "required_bytes": 123},
+        )
+        rejections = repository.rejections(deployment_id)
+        assert len(rejections) == 1
+        assert rejections[0].id == rejection_id
+        assert rejections[0].reason == "device_memory_exceeded"
+        assert rejections[0].details == {
+            "device_id": "CUDA0",
+            "required_bytes": 123,
+        }
 
-def test_deployment_insert_rolls_back_on_invalid_binary_reference(
+
+
+@pytest.mark.parametrize(
+    ("field", "missing_value"),
+    (
+        ("binary_id", "bin_missing"),
+        ("candidate_id", "cand_missing"),
+    ),
+)
+def test_deployment_insert_rolls_back_on_invalid_references(
     tmp_path: Path,
+    field: str,
+    missing_value: str,
 ) -> None:
-    database = Database(tmp_path / "deployment-invalid.db")
+    database = Database(tmp_path / f"deployment-invalid-{field}.db")
     deployment_id, deployment, _, _, _ = seed_deployment(database)
     bad = deployment.model_copy(
         update={
             "instances": tuple(
-                instance.model_copy(update={"binary_id": "bin_missing"})
+                instance.model_copy(update={field: missing_value})
                 for instance in deployment.instances
             )
         }
