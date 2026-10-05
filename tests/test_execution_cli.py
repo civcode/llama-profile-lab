@@ -4,10 +4,13 @@ from pathlib import Path
 
 import pytest
 
+import llama_profile_lab.cli.main as cli_module
 from llama_profile_lab.cli.main import main
 from llama_profile_lab.db import Database
+from llama_profile_lab.execution import ExperimentExecutor
 from llama_profile_lab.planning import plan_experiment
 from tests.test_execution_engine import (
+    LoadedTelemetryProvider,
     register_fake_binary,
     write_fake_fit_params,
     write_fake_llama_bench,
@@ -15,10 +18,19 @@ from tests.test_execution_engine import (
 from tests.test_planning_persistence import seed_reference_experiment
 
 
+def _fast_executor(database: Database) -> ExperimentExecutor:
+    return ExperimentExecutor(
+        database,
+        telemetry_provider_factory=LoadedTelemetryProvider,
+    )
+
+
 def test_run_limit_resume_and_show_commands(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli_module, "ExperimentExecutor", _fast_executor)
     database_path = tmp_path / "benchmarks.db"
     database = Database(database_path)
     experiment_id = seed_reference_experiment(database)
@@ -97,7 +109,9 @@ def test_run_limit_resume_and_show_commands(
 def test_placement_list_and_show_commands(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli_module, "ExperimentExecutor", _fast_executor)
     database_path = tmp_path / "placements.db"
     database = Database(database_path)
     experiment_id = seed_reference_experiment(database)
