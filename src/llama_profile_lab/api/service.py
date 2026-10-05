@@ -13,7 +13,6 @@ from llama_profile_lab.analysis import (
     DeploymentAnalysisService,
     DeploymentMetricConstraint,
     DeploymentParetoObjective,
-    DeploymentParetoResult,
     AnalysisFilter,
     AnalysisService,
     CandidateComparison,
@@ -100,7 +99,6 @@ from llama_profile_lab.db import (
     BenchmarkRunRepository,
     ConcurrentWorkloadRepository,
     DeploymentCandidateRepository,
-    DeploymentPlanRepository,
     DeploymentPlacementRepository,
     DeploymentRunRepository,
     CandidateRepository,
@@ -117,6 +115,7 @@ from llama_profile_lab.db import (
 )
 from llama_profile_lab.db.records import (
     BinaryRecord,
+    DeploymentRunRecord,
     ExperimentRecord,
     ResolvedPlacementRecord,
 )
@@ -1819,7 +1818,7 @@ def _deployment_placement_ids(
 
 def _deployment_run_dto(
     connection: sqlite3.Connection,
-    record: object,
+    record: DeploymentRunRecord,
 ) -> DeploymentRunDTO:
     run_id = str(record.id)
     members = DeploymentRunRepository(connection).members(run_id)
