@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock, Thread
-from typing import Any
+from typing import Any, Literal, cast
 
 from llama_profile_lab.db import (
     Database,
@@ -21,6 +21,18 @@ from llama_profile_lab.execution import (
     DeploymentServerInput,
     StandaloneBaselineInput,
 )
+
+
+DeploymentOperationStatus = Literal[
+    "running",
+    "pausing",
+    "cancelling",
+    "completed",
+    "paused",
+    "cancelled",
+    "failed",
+]
+DeploymentRequestedAction = Literal["pause", "cancel"]
 
 
 class DeploymentOperationError(RuntimeError):
@@ -181,8 +193,8 @@ class DeploymentOperationSnapshot:
     deployment_candidate_id: str
     deployment_placement_id: str
     deployment_run_id: str | None
-    status: str
-    requested_action: str | None
+    status: DeploymentOperationStatus
+    requested_action: DeploymentRequestedAction | None
     started_at: str
     finished_at: str | None
     error: str | None
@@ -397,8 +409,11 @@ def _snapshot(
         deployment_candidate_id=record.base_deployment_candidate_id,
         deployment_placement_id=record.deployment_placement_id,
         deployment_run_id=record.deployment_run_id,
-        status=record.status,
-        requested_action=record.requested_action,
+        status=cast(DeploymentOperationStatus, record.status),
+        requested_action=cast(
+            DeploymentRequestedAction | None,
+            record.requested_action,
+        ),
         started_at=record.started_at,
         finished_at=record.finished_at,
         error=record.error,
