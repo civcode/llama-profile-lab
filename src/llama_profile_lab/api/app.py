@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from llama_profile_lab.analysis import (
     AnalysisError,
+    DeploymentAnalysisError,
     CandidateComparison,
     LatencyEstimate,
     MatrixProjection,
@@ -24,6 +25,17 @@ from llama_profile_lab.api.dto import (
     BinaryListResponse,
     CandidateListResponse,
     CandidateValidationHistoryDTO,
+    DeploymentCandidateListResponse,
+    DeploymentCreateRequest,
+    DeploymentDTO,
+    DeploymentParetoResponse,
+    DeploymentPlacementListResponse,
+    DeploymentPlanRequest,
+    DeploymentPlanResponse,
+    DeploymentProgressDTO,
+    DeploymentResultsResponse,
+    DeploymentRunListResponse,
+    DeploymentRunRequest,
     ExecutionRequest,
     ExperimentCloneRequest,
     ExperimentCreateRequest,
@@ -51,12 +63,18 @@ from llama_profile_lab.api.dto import (
     ServerValidationResponse,
     TelemetryResponse,
 )
+from llama_profile_lab.api.deployment_operations import (
+    DeploymentOperationManager,
+)
 from llama_profile_lab.api.operations import OperationError, OperationManager
 from llama_profile_lab.api.profiles import LauncherProfileError, LauncherProfileProvider
 from llama_profile_lab.api.service import (
     ApiConflictError,
     ApiNotFoundError,
     ApiService,
+    parse_deployment_constraints,
+    parse_deployment_filters,
+    parse_deployment_objectives,
     parse_filters,
 )
 from llama_profile_lab.db import Database
@@ -71,6 +89,7 @@ def create_app(
     *,
     launcher_config_path: str | Path | None = None,
     operation_manager: OperationManager | None = None,
+    deployment_operation_manager: DeploymentOperationManager | None = None,
     frontend_dist_path: str | Path | None = None,
 ) -> FastAPI:
     """Build a local API instance with explicit filesystem dependencies."""
@@ -83,7 +102,16 @@ def create_app(
     )
     profiles = LauncherProfileProvider(configured_launcher)
     operations = operation_manager or OperationManager(database)
-    service = ApiService(database, profiles=profiles, operations=operations)
+    deployment_operations = (
+        deployment_operation_manager
+        or DeploymentOperationManager(database)
+    )
+    service = ApiService(
+        database,
+        profiles=profiles,
+        operations=operations,
+        deployment_operations=deployment_operations,
+    )
 
     app = FastAPI(
         title="llama-profile-lab API",
@@ -95,6 +123,7 @@ def create_app(
     app.state.database = database
     app.state.api_service = service
     app.state.operation_manager = operations
+    app.state.deployment_operation_manager = deployment_operations
 
     _register_exception_handlers(app)
     _register_routes(app, service)
@@ -151,6 +180,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     ):
         app.add_exception_handler(exception_type, _conflict_handler)
     app.add_exception_handler(AnalysisError, _bad_request_handler)
+    app.add_exception_handler(DeploymentAnalysisError, _bad_request_handler)
     app.add_exception_handler(BinaryDiscoveryError, _bad_request_handler)
     app.add_exception_handler(LauncherProfileError, _unavailable_handler)
 
@@ -444,6 +474,196 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
             qualities=tuple(qualities or ()),
         )
 
+    @app.post(
+        "/api/deployments",
+        response_model=DeploymentDTO,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_deployment(
+        request: DeploymentCreateRequest,
+    ) -> DeploymentDTO:
+        return service.create_deployment(request)
+
+    @app.get(
+        "/api/deployments/{deployment_id}",
+        response_model=DeploymentDTO,
+    )
+    def deployment(deployment_id: str) -> DeploymentDTO:
+        return service.get_deployment(deployment_id)
+
+    @app.post(
+        "/api/deployments/{deployment_id}/plan",
+        response_model=DeploymentPlanResponse,
+    )
+    def plan_deployment(
+        deployment_id: str,
+        request: DeploymentPlanRequest,
+    ) -> DeploymentPlanResponse:
+        return service.plan_deployment(deployment_id, request)
+
+    @app.post(
+        "/api/deployments/{deployment_id}/run",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def run_deployment(
+        deployment_id: str,
+        request: DeploymentRunRequest,
+    ) -> DeploymentProgressDTO:
+        return service.start_deployment(
+            deployment_id,
+            request,
+            resume=False,
+        )
+
+    @app.post(
+        "/api/deployments/{deployment_id}/resume",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def resume_deployment(
+        deployment_id: str,
+        request: DeploymentRunRequest | None = None,
+    ) -> DeploymentProgressDTO:
+        return service.start_deployment(
+            deployment_id,
+            request,
+            resume=True,
+        )
+
+    @app.post(
+        "/api/deployments/{deployment_id}/pause",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def pause_deployment(
+        deployment_id: str,
+    ) -> DeploymentProgressDTO:
+        return service.pause_deployment(deployment_id)
+
+    @app.post(
+        "/api/deployments/{deployment_id}/cancel",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def cancel_deployment(
+        deployment_id: str,
+    ) -> DeploymentProgressDTO:
+        return service.cancel_deployment(deployment_id)
+
+    @app.get(
+        "/api/deployments/{deployment_id}/progress",
+        response_model=DeploymentProgressDTO,
+    )
+    def deployment_progress(
+        deployment_id: str,
+    ) -> DeploymentProgressDTO:
+        return service.deployment_progress(deployment_id)
+
+    @app.get(
+        "/api/deployments/{deployment_id}/events",
+        response_class=StreamingResponse,
+    )
+    async def deployment_events(
+        deployment_id: str,
+        request: Request,
+    ) -> StreamingResponse:
+        service.get_deployment(deployment_id)
+        return StreamingResponse(
+            _deployment_progress_events(
+                service,
+                deployment_id,
+                request,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.get(
+        "/api/deployments/{deployment_id}/candidates",
+        response_model=DeploymentCandidateListResponse,
+    )
+    def deployment_candidates(
+        deployment_id: str,
+    ) -> DeploymentCandidateListResponse:
+        return service.list_deployment_candidates(deployment_id)
+
+    @app.get(
+        "/api/deployments/{deployment_id}/placements",
+        response_model=DeploymentPlacementListResponse,
+    )
+    def deployment_placements(
+        deployment_id: str,
+    ) -> DeploymentPlacementListResponse:
+        return service.list_deployment_placements(deployment_id)
+
+    @app.get(
+        "/api/deployments/{deployment_id}/runs",
+        response_model=DeploymentRunListResponse,
+    )
+    def deployment_runs(
+        deployment_id: str,
+    ) -> DeploymentRunListResponse:
+        return service.list_deployment_runs(deployment_id)
+
+    @app.get(
+        "/api/deployments/{deployment_id}/results",
+        response_model=DeploymentResultsResponse,
+    )
+    def deployment_results(
+        deployment_id: str,
+        filters: Annotated[
+            list[str] | None,
+            Query(alias="filter"),
+        ] = None,
+    ) -> DeploymentResultsResponse:
+        try:
+            parsed = parse_deployment_filters(tuple(filters or ()))
+        except ValueError as exc:
+            return _raise_bad_request(exc)
+        return service.deployment_results(
+            deployment_id,
+            filters=parsed,
+        )
+
+    @app.get(
+        "/api/deployments/{deployment_id}/pareto",
+        response_model=DeploymentParetoResponse,
+    )
+    def deployment_pareto(
+        deployment_id: str,
+        objectives: Annotated[list[str], Query(alias="objective")],
+        constraints: Annotated[
+            list[str] | None,
+            Query(alias="constraint"),
+        ] = None,
+        filters: Annotated[
+            list[str] | None,
+            Query(alias="filter"),
+        ] = None,
+    ) -> DeploymentParetoResponse:
+        try:
+            parsed_objectives = parse_deployment_objectives(
+                tuple(objectives)
+            )
+            parsed_constraints = parse_deployment_constraints(
+                tuple(constraints or ())
+            )
+            parsed_filters = parse_deployment_filters(
+                tuple(filters or ())
+            )
+        except ValueError as exc:
+            return _raise_bad_request(exc)
+        return service.deployment_pareto(
+            deployment_id,
+            objectives=parsed_objectives,
+            constraints=parsed_constraints,
+            filters=parsed_filters,
+        )
+
     @app.get("/api/placements", response_model=PlacementListResponse)
     def placements() -> PlacementListResponse:
         return service.list_placements()
@@ -490,6 +710,32 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
         request: PromotionRequest,
     ) -> PromotionResponse:
         return service.promote_candidate(candidate_id, request)
+
+
+async def _deployment_progress_events(
+    service: ApiService,
+    deployment_id: str,
+    request: Request,
+) -> AsyncIterator[str]:
+    previous: str | None = None
+    while True:
+        progress = service.deployment_progress(deployment_id)
+        payload = progress.model_dump_json()
+        if payload != previous:
+            yield f"event: progress\ndata: {payload}\n\n"
+            previous = payload
+
+        operation = progress.operation
+        if operation is None or operation.status in {
+            "completed",
+            "paused",
+            "cancelled",
+            "failed",
+        }:
+            return
+        if await request.is_disconnected():
+            return
+        await asyncio.sleep(0.25)
 
 
 async def _progress_events(
