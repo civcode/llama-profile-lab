@@ -172,6 +172,7 @@ def test_cancel_active_operation_from_separate_manager(
     assert cancelling.status == "cancelling"
     _wait_status(second, deployment_id, "cancelled")
 
+
 def test_resume_with_replacement_spec_still_requires_paused_state(
     tmp_path: Path,
 ) -> None:
@@ -201,4 +202,37 @@ def test_resume_with_replacement_spec_still_requires_paused_state(
         assert "no paused operation" in str(exc)
     else:
         raise AssertionError("resume unexpectedly started without paused state")
+
+
+def test_persisted_baseline_parser_rejects_type_coercion() -> None:
+    payload = {
+        "deployment_placement_id": "placement-test",
+        "instances": [
+            {
+                "instance_id": "qwen",
+                "model_path": "/models/qwen.gguf",
+                "draft_model_path": None,
+            }
+        ],
+        "standalone_baselines": [
+            {
+                "instance_id": "qwen",
+                "mode": "decode",
+                "prompt_tokens": "128",
+                "generate_tokens": 16,
+                "depth_tokens": 128,
+                "throughput_tps": 20.0,
+                "latency_ms": 1.0,
+            }
+        ],
+        "host": "127.0.0.1",
+        "readiness_timeout_seconds": 30.0,
+    }
+
+    try:
+        DeploymentOperationSpec.from_mapping(payload)
+    except DeploymentOperationError as exc:
+        assert "baseline" in str(exc)
+    else:
+        raise AssertionError("invalid persisted baseline was coerced")
 
