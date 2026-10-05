@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from threading import RLock, Thread
+from threading import Event, RLock, Thread
 from typing import Any, Literal, cast
 
 from llama_profile_lab.db import (
@@ -14,6 +14,7 @@ from llama_profile_lab.db import (
     transaction,
 )
 from llama_profile_lab.db.records import DeploymentOperationRecord
+from llama_profile_lab.domain import ConcurrentWorkloadMode
 from llama_profile_lab.execution import (
     ConcurrentDeploymentExecutor,
     ConcurrentDeploymentSummary,
@@ -142,18 +143,55 @@ class DeploymentOperationSpec:
                     "persisted standalone baseline is invalid"
                 )
             try:
+                instance_id = row["instance_id"]
+                mode = row["mode"]
+                prompt_tokens = row["prompt_tokens"]
+                generate_tokens = row["generate_tokens"]
+                depth_tokens = row["depth_tokens"]
+                throughput_tps = row["throughput_tps"]
+                latency_ms = row.get("latency_ms")
+                if not isinstance(instance_id, str) or not instance_id:
+                    raise ValueError("baseline instance_id is invalid")
+                if mode not in {"prefill", "decode"}:
+                    raise ValueError("baseline mode is invalid")
+                for value in (
+                    prompt_tokens,
+                    generate_tokens,
+                    depth_tokens,
+                ):
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, int)
+                        or value < 0
+                    ):
+                        raise ValueError("baseline token count is invalid")
+                if (
+                    isinstance(throughput_tps, bool)
+                    or not isinstance(throughput_tps, (int, float))
+                    or throughput_tps <= 0
+                ):
+                    raise ValueError("baseline throughput is invalid")
+                if (
+                    latency_ms is not None
+                    and (
+                        isinstance(latency_ms, bool)
+                        or not isinstance(latency_ms, (int, float))
+                        or latency_ms < 0
+                    )
+                ):
+                    raise ValueError("baseline latency is invalid")
                 baselines.append(
                     StandaloneBaselineInput(
-                        instance_id=str(row["instance_id"]),
-                        mode=str(row["mode"]),
-                        prompt_tokens=int(row["prompt_tokens"]),
-                        generate_tokens=int(row["generate_tokens"]),
-                        depth_tokens=int(row["depth_tokens"]),
-                        throughput_tps=float(row["throughput_tps"]),
+                        instance_id=instance_id,
+                        mode=cast(ConcurrentWorkloadMode, mode),
+                        prompt_tokens=prompt_tokens,
+                        generate_tokens=generate_tokens,
+                        depth_tokens=depth_tokens,
+                        throughput_tps=float(throughput_tps),
                         latency_ms=(
                             None
-                            if row.get("latency_ms") is None
-                            else float(row["latency_ms"])
+                            if latency_ms is None
+                            else float(latency_ms)
                         ),
                     )
                 )
@@ -200,10 +238,11 @@ class DeploymentOperationSnapshot:
     error: str | None
 
 
-class _PersistentControlSignal:
-    """Event-like signal backed by the durable operation row."""
+class _PersistentControlSignal(Event):
+    """Threading Event whose observed state is backed by SQLite."""
 
     def __init__(self, database: Database, operation_id: str) -> None:
+        super().__init__()
         self.database = database
         self.operation_id = operation_id
 
@@ -276,15 +315,15 @@ class DeploymentOperationManager:
         *,
         background: bool = True,
     ) -> DeploymentOperationSnapshot:
+        with self.database.session() as connection:
+            latest = DeploymentOperationRepository(
+                connection
+            ).latest_for_deployment(deployment_candidate_id)
+        if latest is None or latest.status != "paused":
+            raise DeploymentOperationError(
+                "deployment has no paused operation to resume"
+            )
         if spec is None:
-            with self.database.session() as connection:
-                latest = DeploymentOperationRepository(
-                    connection
-                ).latest_for_deployment(deployment_candidate_id)
-            if latest is None or latest.status != "paused":
-                raise DeploymentOperationError(
-                    "deployment has no paused operation to resume"
-                )
             spec = DeploymentOperationSpec.from_mapping(latest.request)
         return self.start(
             deployment_candidate_id,
@@ -375,7 +414,9 @@ class DeploymentOperationManager:
             if record is None:
                 return
             requested = record.requested_action
-            if requested == "pause":
+            if summary is not None:
+                terminal = "completed"
+            elif requested == "pause":
                 terminal = "paused"
             elif requested == "cancel":
                 terminal = "cancelled"
