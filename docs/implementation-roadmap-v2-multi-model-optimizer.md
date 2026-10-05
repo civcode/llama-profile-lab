@@ -1377,7 +1377,7 @@ CLI:
 
 The complete V2 workflow through M7 can be driven without importing internal Python modules, using only CLI or HTTP APIs.
 
-All V1 CLI/API tests remain green.
+The full acceptance gate additionally requires all V1 CLI/API tests to remain green.
 
 Implementation notes and validation:
 
