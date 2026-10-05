@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from llama_profile_lab.domain.telemetry import GpuTelemetrySample, TelemetrySample
 from llama_profile_lab.execution.telemetry import (
     CompositeGpuTelemetryProvider,
+    SysfsGpuTelemetryProvider,
     normalize_pci_bus_id,
     summarize_telemetry,
     summary_metrics,
@@ -82,6 +84,48 @@ def test_composite_returns_mixed_vendor_devices_and_deduplicates_nvidia() -> Non
     amd_sample = by_key["pci:0000:02:00.0"]
     assert amd_sample.utilization_pct == 55
     assert amd_sample.sources == ("sysfs",)
+
+
+def test_composite_with_synthetic_amd_sysfs_tree_returns_both(
+    tmp_path: Path,
+) -> None:
+    sysroot = tmp_path / "sys"
+    device = sysroot / "class/drm/card0/device"
+    hwmon = device / "hwmon/hwmon0"
+    hwmon.mkdir(parents=True)
+    (device / "gpu_busy_percent").write_text("51\n", encoding="utf-8")
+    (device / "mem_info_vram_used").write_text("600\n", encoding="utf-8")
+    (device / "mem_info_vram_total").write_text("1000\n", encoding="utf-8")
+    (hwmon / "temp1_input").write_text("65000\n", encoding="utf-8")
+    (hwmon / "power1_average").write_text("110000000\n", encoding="utf-8")
+
+    nvidia = StaticProvider(
+        (
+            GpuTelemetrySample(
+                device="0000:01:00.0",
+                name="NVIDIA Test",
+                utilization_pct=72,
+            ),
+        )
+    )
+
+    samples = CompositeGpuTelemetryProvider(
+        (
+            ("nvidia-smi", nvidia),
+            ("sysfs", SysfsGpuTelemetryProvider(sys_root=sysroot)),
+        )
+    ).sample()
+
+    assert len(samples) == 2
+    assert {sample.sources[0] for sample in samples} == {
+        "nvidia-smi",
+        "sysfs",
+    }
+    assert sorted(
+        sample.utilization_pct
+        for sample in samples
+        if sample.utilization_pct is not None
+    ) == [51, 72]
 
 
 def test_composite_survives_partial_provider_failure() -> None:
