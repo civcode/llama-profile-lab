@@ -384,11 +384,22 @@ def _add_deployment_parser(
 ) -> None:
     deployment = commands.add_parser(
         "deployment",
-        help="Plan or execute joint multi-model deployments.",
+        help="Create, plan, run, inspect, and analyze multi-model deployments.",
     )
     deployment_commands = deployment.add_subparsers(
         dest="deployment_command"
     )
+
+    create = deployment_commands.add_parser(
+        "create",
+        help="Persist one immutable base deployment definition.",
+    )
+    create.add_argument(
+        "spec",
+        type=Path,
+        help="JSON DeploymentCandidate or {deployment: ...} document.",
+    )
+    _add_database_argument(create)
 
     preview = deployment_commands.add_parser(
         "preview",
@@ -411,6 +422,122 @@ def _add_deployment_parser(
         help="JSON deployment planning specification.",
     )
     _add_database_argument(plan)
+
+    show = deployment_commands.add_parser(
+        "show",
+        help="Show one base deployment definition and computed state.",
+    )
+    show.add_argument("deployment_id")
+    show.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(show)
+
+    placement = deployment_commands.add_parser(
+        "placement",
+        help="Show planned placement memory matrices.",
+    )
+    placement.add_argument("deployment_id")
+    placement.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(placement)
+
+    run = deployment_commands.add_parser(
+        "run",
+        help="Run a durable concurrent deployment benchmark.",
+    )
+    run.add_argument("deployment_id")
+    run.add_argument(
+        "spec",
+        type=Path,
+        help="JSON concurrent deployment benchmark specification.",
+    )
+    _add_database_argument(run)
+
+    pause = deployment_commands.add_parser(
+        "pause",
+        help="Request cooperative pause of an active deployment run.",
+    )
+    pause.add_argument("deployment_id")
+    _add_database_argument(pause)
+
+    resume = deployment_commands.add_parser(
+        "resume",
+        help="Resume the latest paused deployment operation.",
+    )
+    resume.add_argument("deployment_id")
+    resume.add_argument(
+        "--spec",
+        type=Path,
+        default=None,
+        help="Optional replacement benchmark spec; defaults to persisted request.",
+    )
+    _add_database_argument(resume)
+
+    cancel = deployment_commands.add_parser(
+        "cancel",
+        help="Cancel an active or paused deployment operation.",
+    )
+    cancel.add_argument("deployment_id")
+    _add_database_argument(cancel)
+
+    results = deployment_commands.add_parser(
+        "results",
+        help="Show raw M7 deployment analysis rows.",
+    )
+    results.add_argument("deployment_id")
+    results.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Exact deployment analysis filter PATH=VALUE.",
+    )
+    results.add_argument(
+        "--format",
+        choices=("table", "json", "csv"),
+        default="table",
+        dest="format_name",
+    )
+    results.add_argument("--output", type=Path, default=None)
+    _add_database_argument(results)
+
+    pareto = deployment_commands.add_parser(
+        "pareto",
+        help="Show the constrained deployment Pareto frontier.",
+    )
+    pareto.add_argument("deployment_id")
+    pareto.add_argument(
+        "--objective",
+        action="append",
+        required=True,
+        help="KEY:DIRECTION:METRIC[@PATH=VALUE;PATH=VALUE].",
+    )
+    pareto.add_argument(
+        "--constraint",
+        action="append",
+        default=[],
+        help="METRIC:OP:VALUE[@PATH=VALUE;PATH=VALUE].",
+    )
+    pareto.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Exact deployment analysis filter PATH=VALUE.",
+    )
+    pareto.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(pareto)
 
     execute = deployment_commands.add_parser(
         "execute",
