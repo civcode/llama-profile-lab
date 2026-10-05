@@ -296,19 +296,29 @@ class DeploymentApiService:
                 raise ApiNotFoundError(
                     f"deployment Candidate not found: {deployment_id}"
                 )
+            scope = self._scope_ids(connection, deployment_id)
+            placeholders = ",".join("?" for _ in scope)
             counts = connection.execute(
-                """
+                f"""
                 SELECT
                     (SELECT COUNT(*) FROM deployment_instance
                      WHERE deployment_candidate_id = ?) AS instances,
                     (SELECT COUNT(*) FROM deployment_placement
-                     WHERE deployment_candidate_id = ?) AS placements,
+                     WHERE deployment_candidate_id IN ({placeholders}))
+                        AS placements,
                     (SELECT COUNT(*) FROM deployment_run
-                     WHERE deployment_candidate_id = ?) AS runs,
+                     WHERE deployment_candidate_id IN ({placeholders}))
+                        AS runs,
                     (SELECT COUNT(*) FROM deployment_rejection
-                     WHERE deployment_candidate_id = ?) AS rejections
+                     WHERE deployment_candidate_id IN ({placeholders}))
+                        AS rejections
                 """,
-                (deployment_id, deployment_id, deployment_id, deployment_id),
+                (
+                    deployment_id,
+                    *scope,
+                    *scope,
+                    *scope,
+                ),
             ).fetchone()
         if counts is None:
             raise RuntimeError("deployment count query returned no row")
@@ -404,13 +414,15 @@ class DeploymentApiService:
         self.get(deployment_id)
         with self.database.session() as connection:
             repository = DeploymentPlacementRepository(connection)
+            scope = self._scope_ids(connection, deployment_id)
+            placeholders = ",".join("?" for _ in scope)
             rows = connection.execute(
-                """
+                f"""
                 SELECT id FROM deployment_placement
-                WHERE deployment_candidate_id = ?
+                WHERE deployment_candidate_id IN ({placeholders})
                 ORDER BY created_at, id
                 """,
-                (deployment_id,),
+                scope,
             ).fetchall()
             items = tuple(
                 self._placement_dto(repository, str(row["id"]))
@@ -427,7 +439,11 @@ class DeploymentApiService:
         with self.database.session() as connection:
             repository = DeploymentPlacementRepository(connection)
             record = repository.record(placement_id)
-            if record is None or record.deployment_candidate_id != deployment_id:
+            scope = self._scope_ids(connection, deployment_id)
+            if (
+                record is None
+                or record.deployment_candidate_id not in scope
+            ):
                 raise ApiNotFoundError(
                     f"deployment placement not found: {placement_id}"
                 )
@@ -453,13 +469,15 @@ class DeploymentApiService:
         self.get(deployment_id)
         with self.database.session() as connection:
             repository = DeploymentRunRepository(connection)
+            scope = self._scope_ids(connection, deployment_id)
+            placeholders = ",".join("?" for _ in scope)
             rows = connection.execute(
-                """
+                f"""
                 SELECT id FROM deployment_run
-                WHERE deployment_candidate_id = ?
+                WHERE deployment_candidate_id IN ({placeholders})
                 ORDER BY created_at, id
                 """,
-                (deployment_id,),
+                scope,
             ).fetchall()
             items = tuple(
                 self._run_dto(connection, repository, str(row["id"]))
@@ -469,14 +487,11 @@ class DeploymentApiService:
 
     def results(self, deployment_id: str) -> DeploymentResultsResponse:
         self.get(deployment_id)
+        with self.database.session() as connection:
+            scope = self._scope_ids(connection, deployment_id)
         rendered = self.analysis.export(
             format_name="json",
-            filters=(
-                DeploymentAnalysisFilter(
-                    path="deployment.candidate_id",
-                    value=deployment_id,
-                ),
-            ),
+            deployment_candidate_ids=scope,
         )
         raw = json.loads(rendered)
         if not isinstance(raw, list) or any(
@@ -494,18 +509,14 @@ class DeploymentApiService:
         request: DeploymentParetoRequest,
     ) -> DeploymentParetoResult:
         self.get(deployment_id)
-        filters = (
-            DeploymentAnalysisFilter(
-                path="deployment.candidate_id",
-                value=deployment_id,
-            ),
-            *request.filters,
-        )
+        with self.database.session() as connection:
+            scope = self._scope_ids(connection, deployment_id)
         try:
             return self.analysis.pareto(
                 objectives=request.objectives,
                 constraints=request.constraints,
-                filters=filters,
+                filters=request.filters,
+                deployment_candidate_ids=scope,
             )
         except DeploymentAnalysisError as exc:
             raise ApiConflictError(str(exc)) from exc
@@ -560,8 +571,10 @@ class DeploymentApiService:
         self.get(deployment_id)
         operation = self.operations.snapshot(deployment_id)
         with self.database.session() as connection:
+            scope = self._scope_ids(connection, deployment_id)
+            placeholders = ",".join("?" for _ in scope)
             counts = connection.execute(
-                """
+                f"""
                 SELECT
                     (SELECT COUNT(DISTINCT dpc.deployment_candidate_id)
                      FROM deployment_plan_case AS dpc
@@ -570,24 +583,24 @@ class DeploymentApiService:
                      WHERE dp.base_deployment_candidate_id = ?) AS planned,
                     (SELECT COUNT(DISTINCT deployment_placement_id)
                      FROM deployment_run
-                     WHERE deployment_candidate_id = ?
+                     WHERE deployment_candidate_id IN ({placeholders})
                        AND status = 'completed') AS completed,
                     (SELECT COUNT(DISTINCT deployment_placement_id)
                      FROM deployment_run
-                     WHERE deployment_candidate_id = ?
+                     WHERE deployment_candidate_id IN ({placeholders})
                        AND status = 'failed') AS failed
                 """,
-                (deployment_id, deployment_id, deployment_id),
+                (deployment_id, *scope, *scope),
             ).fetchone()
             run_row = connection.execute(
-                """
+                f"""
                 SELECT id, status
                 FROM deployment_run
-                WHERE deployment_candidate_id = ?
+                WHERE deployment_candidate_id IN ({placeholders})
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
                 """,
-                (deployment_id,),
+                scope,
             ).fetchone()
             run_id = None if run_row is None else str(run_row["id"])
             phase_row = (
@@ -644,6 +657,29 @@ class DeploymentApiService:
             ),
             operation=_operation_dto(operation),
         )
+
+    @staticmethod
+    def _scope_ids(
+        connection: Any,
+        deployment_id: str,
+    ) -> tuple[str, ...]:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT dpc.deployment_candidate_id
+            FROM deployment_plan_case AS dpc
+            JOIN deployment_plan AS dp
+              ON dp.id = dpc.deployment_plan_id
+            WHERE dp.base_deployment_candidate_id = ?
+            ORDER BY dpc.deployment_candidate_id
+            """,
+            (deployment_id,),
+        ).fetchall()
+        derived = tuple(
+            str(row["deployment_candidate_id"])
+            for row in rows
+            if str(row["deployment_candidate_id"]) != deployment_id
+        )
+        return (deployment_id, *derived)
 
     def _execution_spec(
         self,
