@@ -121,6 +121,11 @@ def test_cache_identity_changes_with_memory_relevant_candidate_fields(
         selected_devices=("Vulkan0", "CUDA0"),
         **{key: value for key, value in kwargs.items() if key != "selected_devices"},
     ).identity
+    changed_host = adapter.build_invocation(
+        candidate=candidate(),
+        host_id="host_other",
+        **{key: value for key, value in kwargs.items() if key != "host_id"},
+    ).identity
 
     assert len(
         {
@@ -129,8 +134,9 @@ def test_cache_identity_changes_with_memory_relevant_candidate_fields(
             changed_kv.content_hash(),
             changed_batch.content_hash(),
             reversed_devices.content_hash(),
+            changed_host.content_hash(),
         }
-    ) == 5
+    ) == 6
 
 
 def test_missing_required_helper_option_is_rejected(tmp_path: Path) -> None:
@@ -145,6 +151,7 @@ def test_missing_required_helper_option_is_rejected(tmp_path: Path) -> None:
                 help_exit_code=0,
             ),
             helper_sha256="a" * 64,
+            host_id="host_test",
             model_path=tmp_path / "model.gguf",
             candidate=candidate(),
         )
