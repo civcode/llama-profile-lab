@@ -815,8 +815,7 @@ def _same_physical_gpu(
     left_key = left.stable_device_key
     right_key = right.stable_device_key
     if left_key is not None and right_key is not None:
-        if left_key.startswith(("pci:", "uuid:")):
-            return left_key == right_key
+        return left_key == right_key
     return False
 
 
