@@ -197,6 +197,7 @@ class MemoryEstimatorService:
                     binary_path=Path(helper.path),
                     capabilities=capabilities,
                     helper_sha256=helper.sha256,
+                    host_id=host_id,
                     model_path=model_path,
                     candidate=candidate,
                     selected_devices=selected_devices,
