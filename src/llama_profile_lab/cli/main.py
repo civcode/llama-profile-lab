@@ -1875,10 +1875,122 @@ def _deployment_pareto_command(
     return 0
 
 
+def _deployment_control_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    action: Literal["pause", "cancel"],
+) -> int:
+    database = Database(database_path)
+    try:
+        scope = _deployment_scope_ids(database, deployment_id)
+        with database.session() as connection:
+            placeholders = ",".join("?" for _ in scope)
+            active = connection.execute(
+                f"""
+                SELECT id, deployment_candidate_id
+                FROM deployment_run
+                WHERE deployment_candidate_id IN ({placeholders})
+                  AND status IN ('starting', 'ready', 'running')
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                scope,
+            ).fetchone()
+            if active is None:
+                raise DeploymentAnalysisError(
+                    "no active deployment run found in this deployment scope"
+                )
+            candidate_id = str(active["deployment_candidate_id"])
+            connection.execute(
+                """
+                INSERT INTO deployment_control_request(
+                    deployment_candidate_id, action, requested_at
+                )
+                VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                ON CONFLICT(deployment_candidate_id) DO UPDATE SET
+                    action = excluded.action,
+                    requested_at = excluded.requested_at
+                """,
+                (candidate_id, action),
+            )
+    except DeploymentAnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(
+        f"Requested {action} for deployment run {active['id']} "
+        f"(Candidate {candidate_id})."
+    )
+    return 0
+
+
+def _deployment_control_action(
+    database: Database,
+    deployment_candidate_id: str,
+) -> Literal["pause", "cancel"] | None:
+    with database.session() as connection:
+        row = connection.execute(
+            """
+            SELECT action
+            FROM deployment_control_request
+            WHERE deployment_candidate_id = ?
+            """,
+            (deployment_candidate_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    value = str(row["action"])
+    if value not in {"pause", "cancel"}:
+        return None
+    return cast(Literal["pause", "cancel"], value)
+
+
+def _clear_deployment_control(
+    database: Database,
+    deployment_candidate_id: str,
+) -> None:
+    with database.session() as connection:
+        connection.execute(
+            """
+            DELETE FROM deployment_control_request
+            WHERE deployment_candidate_id = ?
+            """,
+            (deployment_candidate_id,),
+        )
+
+
+def _watch_deployment_control(
+    database: Database,
+    deployment_candidate_id: str,
+    *,
+    cancel_event: Event,
+    stop_event: Event,
+) -> None:
+    while not stop_event.wait(0.1):
+        try:
+            action = _deployment_control_action(
+                database,
+                deployment_candidate_id,
+            )
+        except Exception:
+            continue
+        if action is not None:
+            cancel_event.set()
+            return
+
+
 def _deployment_benchmark_command(
     database_path: Path,
     spec_path: Path,
+    *,
+    watch_control: bool = False,
 ) -> int:
+    database = Database(database_path)
+    placement_id: str | None = None
+    deployment_candidate_id: str | None = None
+    stop_event: Event | None = None
+    watcher: Thread | None = None
     try:
         (
             placement_id,
@@ -1887,24 +1999,87 @@ def _deployment_benchmark_command(
             host,
             readiness_timeout_seconds,
         ) = _load_concurrent_deployment_spec(spec_path)
-        summary = ConcurrentDeploymentExecutor(
-            Database(database_path)
-        ).execute(
-            placement_id,
-            inputs,
-            standalone_baselines=baselines,
-            host=host,
-            readiness_timeout_seconds=readiness_timeout_seconds,
-        )
+        cancel_event = None
+        if watch_control:
+            with database.session() as connection:
+                placement = DeploymentPlacementRepository(
+                    connection
+                ).record(placement_id)
+            if placement is None:
+                raise ValueError(
+                    f"deployment placement not found: {placement_id}"
+                )
+            deployment_candidate_id = (
+                placement.deployment_candidate_id
+            )
+            _clear_deployment_control(
+                database,
+                deployment_candidate_id,
+            )
+            cancel_event = Event()
+            stop_event = Event()
+            watcher = Thread(
+                target=_watch_deployment_control,
+                args=(database, deployment_candidate_id),
+                kwargs={
+                    "cancel_event": cancel_event,
+                    "stop_event": stop_event,
+                },
+                name="llprof-deployment-control",
+                daemon=True,
+            )
+            watcher.start()
+
+        executor = ConcurrentDeploymentExecutor(database)
+        if cancel_event is None:
+            summary = executor.execute(
+                placement_id,
+                inputs,
+                standalone_baselines=baselines,
+                host=host,
+                readiness_timeout_seconds=readiness_timeout_seconds,
+            )
+        else:
+            summary = executor.execute(
+                placement_id,
+                inputs,
+                standalone_baselines=baselines,
+                host=host,
+                readiness_timeout_seconds=readiness_timeout_seconds,
+                cancel_event=cancel_event,
+            )
+    except DeploymentExecutionError as exc:
+        if (
+            watch_control
+            and exc.status == "cancelled"
+            and deployment_candidate_id is not None
+        ):
+            action = _deployment_control_action(
+                database,
+                deployment_candidate_id,
+            )
+            if action is not None:
+                print(
+                    f"Deployment {action} requested; "
+                    "run stopped cooperatively.",
+                    file=sys.stderr,
+                )
+                return 130
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     except (
         ConcurrentDeploymentError,
-        DeploymentExecutionError,
         OSError,
         ValueError,
         json.JSONDecodeError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    finally:
+        if stop_event is not None:
+            stop_event.set()
+        if watcher is not None:
+            watcher.join(timeout=1.0)
 
     print(_render_concurrent_deployment_summary(summary))
     return 0
