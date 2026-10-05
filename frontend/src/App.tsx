@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CandidatePage } from "./pages/CandidatePage";
 import { ComparisonPage } from "./pages/ComparisonPage";
+import { DeploymentCandidatePage } from "./pages/DeploymentCandidatePage";
 import { DeploymentPage } from "./pages/DeploymentPage";
 import { DeploymentsPage } from "./pages/DeploymentsPage";
 import { ExperimentPage } from "./pages/ExperimentPage";
@@ -14,6 +15,7 @@ type Route =
   | { kind: "deployments" }
   | { kind: "newDeployment" }
   | { kind: "deployment"; deploymentId: string }
+  | { kind: "deploymentCandidate"; deploymentId: string; candidateId: string }
   | { kind: "experiment"; experimentId: string }
   | { kind: "comparison"; experimentId: string }
   | { kind: "candidate"; experimentId: string; candidateId: string };
@@ -26,6 +28,13 @@ function parseRoute(hash: string): Route {
   if (value === "deployments/new") return { kind: "newDeployment" };
   const parts = value.split("/").filter(Boolean);
   if (parts[0] === "deployments" && parts[1]) {
+    if (parts[2] === "candidates" && parts[3]) {
+      return {
+        kind: "deploymentCandidate",
+        deploymentId: parts[1],
+        candidateId: parts[3]
+      };
+    }
     return { kind: "deployment", deploymentId: parts[1] };
   }
   if (parts[0] === "experiments" && parts[1]) {
@@ -78,6 +87,12 @@ export function App() {
       {route.kind === "newDeployment" ? <NewDeploymentPage /> : null}
       {route.kind === "deployment" ? (
         <DeploymentPage deploymentId={route.deploymentId} />
+      ) : null}
+      {route.kind === "deploymentCandidate" ? (
+        <DeploymentCandidatePage
+          deploymentId={route.deploymentId}
+          candidateId={route.candidateId}
+        />
       ) : null}
       {route.kind === "experiment" ? (
         <ExperimentPage experimentId={route.experimentId} />
