@@ -69,6 +69,7 @@ class MemoryEstimateIdentity(ContentAddressedModel):
         alias="schema",
     )
     version: Literal[1] = 1
+    host_id: NonEmptyString
     candidate_hash: NonEmptyString
     model_artifact_id: NonEmptyString
     helper_sha256: NonEmptyString
