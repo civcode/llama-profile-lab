@@ -170,3 +170,34 @@ def test_cancel_active_operation_from_separate_manager(
     cancelling = second.cancel(deployment_id)
     assert cancelling.status == "cancelling"
     _wait_status(second, deployment_id, "cancelled")
+
+def test_resume_with_replacement_spec_still_requires_paused_state(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs = _seed(tmp_path)
+    with database.session() as connection:
+        placement = DeploymentPlacementRepository(connection).record(
+            placement_id
+        )
+    assert placement is not None
+    deployment_id = placement.deployment_candidate_id
+    state: dict[str, Any] = {
+        "calls": 0,
+        "started": Event(),
+    }
+    manager = _manager(database, state)
+
+    try:
+        manager.resume(
+            deployment_id,
+            DeploymentOperationSpec(
+                deployment_placement_id=placement_id,
+                inputs=inputs,
+            ),
+            background=False,
+        )
+    except Exception as exc:
+        assert "no paused operation" in str(exc)
+    else:
+        raise AssertionError("resume unexpectedly started without paused state")
+
