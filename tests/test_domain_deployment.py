@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from llama_profile_lab.domain import (
+    BackendPair,
     DeploymentCandidate,
     DeploymentPlacementRequest,
     DeploymentWorkloadMix,
@@ -109,3 +110,13 @@ def test_memory_record_checks_total() -> None:
             device_free_bytes=50,
             source="fixture",
         )
+
+
+def test_homogeneous_backend_pair_is_valid() -> None:
+    policy = HostResourcePolicy(
+        allowed_backend_pairs=(BackendPair(left="CUDA", right="CUDA"),)
+    )
+
+    assert policy.allowed_backend_pairs == (
+        BackendPair(left="CUDA", right="CUDA"),
+    )
