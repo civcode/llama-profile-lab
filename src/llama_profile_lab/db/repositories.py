@@ -2595,6 +2595,20 @@ class DeploymentRunRepository:
     ) -> None:
         if status not in {"stopped", "failed", "cancelled"}:
             raise ValueError("finished deployment member must be terminal")
+        row = self.connection.execute(
+            """
+            SELECT result_json
+            FROM deployment_run_member
+            WHERE deployment_run_id = ? AND instance_id = ?
+            """,
+            (deployment_run_id, instance_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("deployment run member does not exist")
+        merged_result = _loads_object(str(row["result_json"]))
+        if result is not None:
+            merged_result.update(dict(result))
+
         cursor = self.connection.execute(
             """
             UPDATE deployment_run_member
@@ -2619,7 +2633,7 @@ class DeploymentRunRepository:
                 stderr,
                 int(forced_kill),
                 cleanup_error,
-                canonical_json(dict(result or {})),
+                canonical_json(merged_result),
                 deployment_run_id,
                 instance_id,
             ),
