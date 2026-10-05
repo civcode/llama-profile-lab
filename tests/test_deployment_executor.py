@@ -121,6 +121,10 @@ child = subprocess.Popen(
 with open(model + ".childpid", "w", encoding="utf-8") as handle:
     handle.write(str(child.pid))
 
+if "crashchild" in os.path.basename(model):
+    print("synthetic parent crash", file=sys.stderr, flush=True)
+    raise SystemExit(11)
+
 if "slow" in os.path.basename(model):
     time.sleep(0.35)
 if "neverready" in os.path.basename(model):
@@ -539,6 +543,23 @@ def test_missing_model_fails_before_server_start(tmp_path: Path) -> None:
     with database.session() as connection:
         run = DeploymentRunRepository(connection).get(captured.value.run_id)
     assert run is not None and run.status == "failed"
+
+
+def test_parent_crash_still_cleans_process_group(tmp_path: Path) -> None:
+    database, placement_id, inputs, qwen_path, _ = _seed(
+        tmp_path,
+        qwen_name="qwen-crashchild.gguf",
+    )
+
+    with pytest.raises(DeploymentExecutionError) as captured:
+        _executor(database).execute(
+            placement_id,
+            inputs,
+            readiness_timeout_seconds=1.0,
+        )
+
+    assert captured.value.failure_kind == "server_start_failed"
+    _assert_process_terminates(_child_pid(qwen_path))
 
 
 def test_runtime_oom_is_classified_from_member_logs(tmp_path: Path) -> None:
