@@ -21,6 +21,7 @@ from llama_profile_lab.db.records import (
     DeploymentCandidateRecord,
     DeploymentDeviceAllocationRecord,
     DeploymentInstanceRecord,
+    DeploymentMemberStatus,
     DeploymentPlacementRecord,
     DeploymentPlanCaseRecord,
     DeploymentPlanRecord,
@@ -2473,6 +2474,11 @@ class DeploymentRunRepository:
         instance_id: str,
         server_run_id: str | None = None,
         client_run_id: str | None = None,
+        endpoint: str | None = None,
+        member_status: DeploymentMemberStatus = "planned",
+        argv: tuple[str, ...] = (),
+        target_model_path: str | None = None,
+        draft_model_path: str | None = None,
         result: Mapping[str, Any] | None = None,
     ) -> None:
         row = self.connection.execute(
@@ -2498,13 +2504,28 @@ class DeploymentRunRepository:
             raise ValueError(
                 f"deployment instance not found for run: {instance_id}"
             )
+        if endpoint is not None:
+            duplicate = self.connection.execute(
+                """
+                SELECT 1
+                FROM deployment_run_member
+                WHERE deployment_run_id = ? AND endpoint = ?
+                LIMIT 1
+                """,
+                (deployment_run_id, endpoint),
+            ).fetchone()
+            if duplicate is not None:
+                raise ValueError(
+                    f"deployment member endpoint is already in use: {endpoint}"
+                )
         self.connection.execute(
             """
             INSERT INTO deployment_run_member(
                 deployment_run_id, deployment_candidate_id, instance_id,
-                server_run_id, client_run_id, result_json
+                server_run_id, client_run_id, endpoint, member_status,
+                argv_json, target_model_path, draft_model_path, result_json
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 deployment_run_id,
@@ -2512,9 +2533,141 @@ class DeploymentRunRepository:
                 instance_id,
                 server_run_id,
                 client_run_id,
+                endpoint,
+                member_status,
+                canonical_json(list(argv)),
+                target_model_path,
+                draft_model_path,
                 canonical_json(dict(result or {})),
             ),
         )
+
+    def set_member_status(
+        self,
+        deployment_run_id: str,
+        instance_id: str,
+        status: DeploymentMemberStatus,
+        *,
+        pid: int | None = None,
+        started_at: str | None = None,
+        ready_at: str | None = None,
+    ) -> None:
+        if status in {"stopped", "failed", "cancelled"}:
+            raise ValueError("use finish_member() for terminal member states")
+        cursor = self.connection.execute(
+            """
+            UPDATE deployment_run_member
+            SET member_status = ?,
+                pid = COALESCE(?, pid),
+                started_at = COALESCE(started_at, ?),
+                ready_at = COALESCE(ready_at, ?)
+            WHERE deployment_run_id = ? AND instance_id = ?
+              AND member_status NOT IN ('stopped', 'failed', 'cancelled')
+            """,
+            (
+                status,
+                pid,
+                started_at,
+                ready_at,
+                deployment_run_id,
+                instance_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "deployment run member does not exist or is already terminal"
+            )
+
+    def finish_member(
+        self,
+        deployment_run_id: str,
+        instance_id: str,
+        *,
+        status: DeploymentMemberStatus,
+        pid: int | None = None,
+        finished_at: str | None = None,
+        exit_code: int | None = None,
+        stdout: str = "",
+        stderr: str = "",
+        forced_kill: bool = False,
+        cleanup_error: str | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
+        if status not in {"stopped", "failed", "cancelled"}:
+            raise ValueError("finished deployment member must be terminal")
+        cursor = self.connection.execute(
+            """
+            UPDATE deployment_run_member
+            SET member_status = ?,
+                pid = COALESCE(?, pid),
+                finished_at = ?,
+                exit_code = ?,
+                stdout = ?,
+                stderr = ?,
+                forced_kill = ?,
+                cleanup_error = ?,
+                result_json = ?
+            WHERE deployment_run_id = ? AND instance_id = ?
+              AND member_status NOT IN ('stopped', 'failed', 'cancelled')
+            """,
+            (
+                status,
+                pid,
+                finished_at or _utc_now(),
+                exit_code,
+                stdout,
+                stderr,
+                int(forced_kill),
+                cleanup_error,
+                canonical_json(dict(result or {})),
+                deployment_run_id,
+                instance_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "deployment run member does not exist or is already terminal"
+            )
+
+    def recover_orphaned(self) -> int:
+        """Finalize stale deployment/member states left by a lost executor."""
+        now = _utc_now()
+        with transaction(self.connection, immediate=True):
+            members = self.connection.execute(
+                """
+                UPDATE deployment_run_member
+                SET member_status = 'failed',
+                    finished_at = COALESCE(finished_at, ?),
+                    cleanup_error = COALESCE(
+                        cleanup_error,
+                        'stale deployment member recovered after process loss'
+                    )
+                WHERE member_status IN ('starting', 'ready')
+                """,
+                (now,),
+            ).rowcount
+            runs = self.connection.execute(
+                """
+                UPDATE deployment_run
+                SET status = 'failed',
+                    failure_kind = 'member_crash',
+                    failure_details_json = ?,
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status IN ('starting', 'ready', 'running')
+                """,
+                (
+                    canonical_json(
+                        {
+                            "error": (
+                                "stale deployment run recovered after "
+                                "executor process loss"
+                            )
+                        }
+                    ),
+                    now,
+                ),
+            ).rowcount
+        return max(members, runs)
 
     def finish(
         self,
@@ -2610,24 +2763,48 @@ class DeploymentRunRepository:
         rows = self.connection.execute(
             """
             SELECT deployment_run_id, deployment_candidate_id, instance_id,
-                   server_run_id, client_run_id, result_json
+                   server_run_id, client_run_id, endpoint, member_status,
+                   pid, argv_json, target_model_path, draft_model_path,
+                   started_at, ready_at, finished_at, exit_code,
+                   stdout, stderr, forced_kill, cleanup_error, result_json
             FROM deployment_run_member
             WHERE deployment_run_id = ?
             ORDER BY instance_id
             """,
             (identifier,),
         ).fetchall()
-        return tuple(
-            DeploymentRunMemberRecord(
-                deployment_run_id=str(row["deployment_run_id"]),
-                deployment_candidate_id=str(row["deployment_candidate_id"]),
-                instance_id=str(row["instance_id"]),
-                server_run_id=row["server_run_id"],
-                client_run_id=row["client_run_id"],
-                result=_loads_object(str(row["result_json"])),
+        records: list[DeploymentRunMemberRecord] = []
+        for row in rows:
+            raw_argv = json.loads(str(row["argv_json"]))
+            if not isinstance(raw_argv, list):
+                raise ValueError("persisted deployment member argv must be a list")
+            records.append(
+                DeploymentRunMemberRecord(
+                    deployment_run_id=str(row["deployment_run_id"]),
+                    deployment_candidate_id=str(
+                        row["deployment_candidate_id"]
+                    ),
+                    instance_id=str(row["instance_id"]),
+                    server_run_id=row["server_run_id"],
+                    client_run_id=row["client_run_id"],
+                    endpoint=row["endpoint"],
+                    member_status=row["member_status"],
+                    pid=row["pid"],
+                    argv=tuple(str(item) for item in raw_argv),
+                    target_model_path=row["target_model_path"],
+                    draft_model_path=row["draft_model_path"],
+                    started_at=row["started_at"],
+                    ready_at=row["ready_at"],
+                    finished_at=row["finished_at"],
+                    exit_code=row["exit_code"],
+                    stdout=str(row["stdout"]),
+                    stderr=str(row["stderr"]),
+                    forced_kill=bool(row["forced_kill"]),
+                    cleanup_error=row["cleanup_error"],
+                    result=_loads_object(str(row["result_json"])),
+                )
             )
-            for row in rows
-        )
+        return tuple(records)
 
 
 class AcceleratorDeviceRepository:
