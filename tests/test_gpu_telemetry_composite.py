@@ -105,6 +105,36 @@ def test_composite_survives_partial_provider_failure() -> None:
     assert samples[0].stable_device_key == "pci:0000:02:00.0"
 
 
+def test_explicit_stable_mapping_can_correlate_devices_without_pci() -> None:
+    first = StaticProvider(
+        (
+            GpuTelemetrySample(
+                device="logical0",
+                stable_device_key="mapped:gpu-a",
+                utilization_pct=75,
+            ),
+        )
+    )
+    second = StaticProvider(
+        (
+            GpuTelemetrySample(
+                device="logical-amd-bridge",
+                stable_device_key="mapped:gpu-a",
+                power_w=95,
+            ),
+        )
+    )
+
+    samples = CompositeGpuTelemetryProvider(
+        (("provider-a", first), ("provider-b", second))
+    ).sample()
+
+    assert len(samples) == 1
+    assert samples[0].utilization_pct == 75
+    assert samples[0].power_w == 95
+    assert samples[0].sources == ("provider-a", "provider-b")
+
+
 def test_same_product_name_without_strong_identity_is_not_merged() -> None:
     first = StaticProvider(
         (
