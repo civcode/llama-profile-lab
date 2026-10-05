@@ -36,7 +36,10 @@ class FakeConcurrentDeploymentExecutor:
         assert standalone_baselines[0].latency_ms == 1000.0
         assert host == "127.0.0.1"
         assert readiness_timeout_seconds == 45.0
-        execution = FakeDeploymentExecutor(self.database).execute(
+        execution = FakeDeploymentExecutor(
+            self.database,
+            expected_residency_hold_seconds=0.0,
+        ).execute(
             placement_id,
             inputs,
             host=host,
@@ -71,8 +74,16 @@ class FakeConcurrentDeploymentExecutor:
 
 
 class FakeDeploymentExecutor:
-    def __init__(self, database) -> None:
+    def __init__(
+        self,
+        database,
+        *,
+        expected_residency_hold_seconds: float = 2.5,
+    ) -> None:
         self.database = database
+        self.expected_residency_hold_seconds = (
+            expected_residency_hold_seconds
+        )
 
     def execute(
         self,
@@ -91,7 +102,10 @@ class FakeDeploymentExecutor:
         ]
         assert host == "127.0.0.1"
         assert readiness_timeout_seconds == 45.0
-        assert residency_hold_seconds == 2.5
+        assert (
+            residency_hold_seconds
+            == self.expected_residency_hold_seconds
+        )
         return DeploymentExecutionSummary(
             run_id="deployrun_1",
             deployment_candidate_id="deploy_1",
