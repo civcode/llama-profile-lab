@@ -1157,6 +1157,47 @@ textarea.planner-textarea:focus {
   margin-top: 14px;
 }
 
+.promotion-panel {
+  border-color: #c7d8f7;
+}
+
+.promotion-source-grid,
+.promotion-change-list {
+  display: grid;
+  gap: 10px;
+}
+
+.promotion-review {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.promotion-change-list {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.promotion-change-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-muted);
+}
+
+.promotion-patch {
+  max-height: 520px;
+  margin: 0;
+  overflow: auto;
+  padding: 15px;
+  border-radius: 10px;
+  color: #dbeafe;
+  background: #152033;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .app-footer {
   padding: 22px 20px 34px;
   color: #94a3b8;
