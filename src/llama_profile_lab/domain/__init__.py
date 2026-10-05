@@ -18,15 +18,6 @@ from llama_profile_lab.domain.candidate import (
     ServerConfig,
     SpeculativeConfig,
 )
-from llama_profile_lab.domain.device import (
-    AcceleratorDevice,
-    DeviceMappingStatus,
-    MemoryEstimateDevice,
-    MemoryEstimateIdentity,
-    MemoryEstimateOutput,
-    MemoryEstimateResolved,
-    physical_device_key,
-)
 from llama_profile_lab.domain.deployment import (
     BackendPair,
     DeploymentCandidate,
@@ -43,6 +34,15 @@ from llama_profile_lab.domain.deployment import (
     HostResourcePolicy,
     ModelInstanceCandidate,
     PlacementDeviceMemory,
+)
+from llama_profile_lab.domain.device import (
+    AcceleratorDevice,
+    DeviceMappingStatus,
+    MemoryEstimateDevice,
+    MemoryEstimateIdentity,
+    MemoryEstimateOutput,
+    MemoryEstimateResolved,
+    physical_device_key,
 )
 from llama_profile_lab.domain.experiment import (
     BaseCandidateBaseline,
