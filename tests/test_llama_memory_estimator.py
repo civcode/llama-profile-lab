@@ -12,6 +12,7 @@ from llama_profile_lab.domain import (
     FitConfig,
     ModelSelection,
     PlacementConfig,
+    PlacementConstraints,
 )
 from llama_profile_lab.llama import (
     CapabilitySet,
@@ -137,6 +138,33 @@ def test_cache_identity_changes_with_memory_relevant_candidate_fields(
             changed_host.content_hash(),
         }
     ) == 6
+
+
+def test_build_invocation_accepts_joint_planner_placement_override(
+    tmp_path: Path,
+) -> None:
+    invocation = MemoryEstimatorAdapter().build_invocation(
+        binary_path=tmp_path / "llama-memory-estimator",
+        capabilities=capabilities(),
+        helper_sha256="a" * 64,
+        host_id="host_test",
+        model_path=tmp_path / "model.gguf",
+        candidate=candidate(),
+        placement_constraints=PlacementConstraints(
+            devices=("CUDA0", "Vulkan0"),
+            n_gpu_layers="all",
+            split_mode="layer",
+            tensor_split=(3.0, 1.0),
+        ),
+        selected_devices=("CUDA0", "Vulkan0"),
+    )
+
+    device_index = invocation.argv.index("--device")
+    split_index = invocation.argv.index("--tensor-split")
+    assert invocation.argv[device_index + 1] == "CUDA0,Vulkan0"
+    assert invocation.argv[split_index + 1] == "3,1"
+    assert invocation.identity.n_gpu_layers == "all"
+    assert invocation.identity.tensor_split == (3.0, 1.0)
 
 
 def test_missing_required_helper_option_is_rejected(tmp_path: Path) -> None:
