@@ -168,6 +168,18 @@ class DeploymentMemoryRow(FrozenModel):
     values: dict[str, NonNegativeInt | None]
 
 
+class DeploymentMemoryDelta(FrozenModel):
+    """Signed projected-versus-runtime memory deltas for one physical device."""
+
+    device_id: NonEmptyString
+    projected_bytes: NonNegativeInt
+    runtime_peak_used_bytes: NonNegativeInt | None = None
+    used_delta_bytes: int | None = None
+    projected_free_bytes: NonNegativeInt
+    runtime_min_free_bytes: NonNegativeInt | None = None
+    free_delta_bytes: int | None = None
+
+
 class DeploymentMemoryMatrix(FrozenModel):
     """Device-by-instance memory projection with runtime evidence separated."""
 
@@ -175,6 +187,7 @@ class DeploymentMemoryMatrix(FrozenModel):
     deployment_run_id: NonEmptyString | None = None
     devices: tuple[NonEmptyString, ...]
     rows: tuple[DeploymentMemoryRow, ...]
+    deltas: tuple[DeploymentMemoryDelta, ...] = ()
 
 
 class DeploymentInterferenceMember(FrozenModel):
