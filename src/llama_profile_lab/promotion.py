@@ -444,17 +444,18 @@ class DeploymentPromotionService:
                     """,
                     (instance.candidate_id, placement.host_id),
                 ).fetchone()
+                if helper is None:
+                    raise PromotionError(
+                        "deployment promotion requires persisted memory-estimator "
+                        f"provenance for {instance.instance_id}"
+                    )
                 binary_evidence.append(
                     {
                         "instance_id": instance.instance_id,
                         "server_binary_id": binary.id,
                         "server_sha256": binary.sha256,
-                        "helper_binary_id": (
-                            None if helper is None else str(helper["helper_binary_id"])
-                        ),
-                        "helper_sha256": (
-                            None if helper is None else str(helper["sha256"])
-                        ),
+                        "helper_binary_id": str(helper["helper_binary_id"]),
+                        "helper_sha256": str(helper["sha256"]),
                         "model_artifact_id": instance.model_artifact_id,
                     }
                 )
