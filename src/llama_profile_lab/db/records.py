@@ -385,6 +385,23 @@ class DeploymentOperationRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentPromotionProposalRecord:
+    """One append-only coordinated launcher promotion proposal."""
+
+    id: str
+    base_deployment_candidate_id: str
+    deployment_candidate_id: str
+    deployment_placement_id: str
+    sources: tuple[Mapping[str, Any], ...]
+    changes: tuple[Mapping[str, Any], ...]
+    source_snapshot: Mapping[str, Any]
+    proposed_snapshot: Mapping[str, Any]
+    evidence: Mapping[str, Any]
+    patch: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentGpuSampleRecord:
     """One timestamped per-device GPU snapshot during deployment residency."""
 
