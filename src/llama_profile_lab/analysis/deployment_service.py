@@ -234,14 +234,22 @@ class DeploymentAnalysisService:
         run_id = deployment_run_id
         if run_id is None:
             candidates = sorted(
-                {
-                    item.deployment_run_id
+                (
+                    item
                     for item in observations
                     if item.gpu_samples
-                },
+                ),
+                key=lambda item: (
+                    item.deployment_run_created_at,
+                    item.deployment_run_id,
+                ),
                 reverse=True,
             )
-            run_id = candidates[0] if candidates else None
+            run_id = (
+                candidates[0].deployment_run_id
+                if candidates
+                else None
+            )
         run_observation = None
         if run_id is not None:
             run_observation = next(
