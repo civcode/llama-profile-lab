@@ -130,7 +130,7 @@ Real-GPU acceptance belongs to V2-M10, not ordinary unit tests.
 
 ## 5. V2-M1 — Deployment domain model and additive persistence
 
-**Status: Planned**
+**Status: Implemented — targeted validation complete; full manual CI gate pending**
 
 ### Objective
 
@@ -206,21 +206,21 @@ Canonical serialization should sort instances by stable instance ID before hashi
 
 ### Work items
 
-- [ ] Add deployment domain module.
-- [ ] Add Pydantic models and validation rules.
-- [ ] Require at least two instances for V2 deployment optimization.
-- [ ] Reject duplicate instance IDs.
-- [ ] Validate that referenced V1 Candidates exist at service boundaries.
-- [ ] Define HostResourcePolicy fields.
-- [ ] Define deployment status/failure enums.
-- [ ] Add canonical deployment hashing.
-- [ ] Add migration for deployment tables.
-- [ ] Add persistence record dataclasses.
-- [ ] Add repositories.
-- [ ] Add model-to-record and record-to-model conversion helpers.
-- [ ] Add archive/export inclusion for new tables only if the current archive mechanism requires explicit table enumeration.
-- [ ] Add database-check row counts for V2 tables where appropriate.
-- [ ] Document migration semantics.
+- [x] Add deployment domain module.
+- [x] Add Pydantic models and validation rules.
+- [x] Require at least two instances for V2 deployment optimization.
+- [x] Reject duplicate instance IDs.
+- [x] Validate that referenced V1 Candidates exist at persistence/service boundaries.
+- [x] Define HostResourcePolicy fields.
+- [x] Define deployment status/failure enums.
+- [x] Add canonical deployment hashing.
+- [x] Add additive migrations for deployment tables and rejection history.
+- [x] Add persistence record dataclasses.
+- [x] Add repositories.
+- [x] Add model-to-record and record-to-model conversion helpers.
+- [x] Confirm archive snapshots include V2 tables automatically through whole-database backup; no explicit enumeration change is required.
+- [x] Confirm database diagnostics count all SQLite tables dynamically, including V2 tables.
+- [x] Document migration semantics.
 
 ### Tests
 
@@ -258,6 +258,14 @@ uv run --frozen pytest
 ~~~
 
 succeeds and tests demonstrate that a two-instance DeploymentCandidate can be persisted, reloaded, and content-addressed without modifying any V1 row.
+
+Implementation validation completed in this environment:
+
+- deployment/Pydantic identity tests pass in a targeted local harness;
+- migrations 006 and 007 pass SQLite integrity and foreign-key checks;
+- a two-instance deployment placement/rejection/run-member lifecycle passes a targeted SQLite harness.
+
+The repository-wide Ruff, mypy, and pytest gate remains pending because the available checkout environment cannot resolve GitHub and the repository CI workflow is intentionally manual-only. It has not been dispatched.
 
 ### Suggested checkpoint commits
 
