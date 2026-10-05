@@ -240,7 +240,6 @@ class CandidateEvaluationRecord:
     created_at: str
 
 
-
 @dataclass(frozen=True, slots=True)
 class DeploymentCandidateRecord:
     """Persisted metadata for one immutable deployment Candidate."""
@@ -248,6 +247,18 @@ class DeploymentCandidateRecord:
     id: str
     deployment_hash: str
     workload_suite_id: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentRejectionRecord:
+    """One persisted planner/feasibility rejection for a deployment Candidate."""
+
+    id: str
+    deployment_candidate_id: str
+    stage: str
+    reason: str
+    details: Mapping[str, Any]
     created_at: str
 
 
