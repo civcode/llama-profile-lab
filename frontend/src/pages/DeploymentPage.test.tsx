@@ -344,6 +344,17 @@ describe("DeploymentPage", () => {
           rows: [
             { key: "qwen.model", source: "projected", values: { GPU0: 1024 } },
             { key: "runtime_peak", source: "runtime", values: { GPU0: 900 } }
+          ],
+          deltas: [
+            {
+              device_id: "GPU0",
+              projected_bytes: 800,
+              runtime_peak_used_bytes: 900,
+              used_delta_bytes: 100,
+              projected_free_bytes: 224,
+              runtime_min_free_bytes: 200,
+              free_delta_bytes: -24
+            }
           ]
         }
       }
@@ -354,5 +365,8 @@ describe("DeploymentPage", () => {
     expect(await screen.findByText("projected")).toBeInTheDocument();
     expect(screen.getByText("runtime")).toBeInTheDocument();
     expect(screen.getByText("qwen.model")).toBeInTheDocument();
+    expect(screen.getByText("Peak-use delta")).toBeInTheDocument();
+    expect(screen.getByText("Free-headroom delta")).toBeInTheDocument();
+    expect(screen.getByText("+0 MiB")).toBeInTheDocument();
   });
 });
