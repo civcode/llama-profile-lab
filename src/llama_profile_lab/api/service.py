@@ -1430,11 +1430,10 @@ class ApiService:
             )
             evidence_run_id = (
                 active_run_id
-                or latest_run_id
                 or (
-                    None
-                    if operation is None
-                    else operation.deployment_run_id
+                    operation.deployment_run_id
+                    if operation is not None
+                    else latest_run_id
                 )
             )
 
@@ -1499,17 +1498,13 @@ class ApiService:
             )
 
         memory = None
-        if current_placement_id is not None:
+        if current_placement_id is not None and evidence_run is not None:
             try:
                 memory = DeploymentAnalysisService(
                     self.database
                 ).memory_matrix(
                     current_placement_id,
-                    deployment_run_id=(
-                        None
-                        if evidence_run is None
-                        else evidence_run.id
-                    ),
+                    deployment_run_id=evidence_run.id,
                 )
             except DeploymentAnalysisError:
                 memory = None
