@@ -198,7 +198,10 @@ def test_reference_experiment_runs_five_then_resumes_remaining_39(
     model = tmp_path / "model.gguf"
     model.write_bytes(b"fake-model")
 
-    executor = ExperimentExecutor(database)
+    executor = ExperimentExecutor(
+        database,
+        telemetry_provider_factory=LoadedTelemetryProvider,
+    )
     first = executor.execute(
         experiment_id,
         binary_id=binary_id,
