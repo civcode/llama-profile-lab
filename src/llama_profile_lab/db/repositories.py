@@ -22,6 +22,8 @@ from llama_profile_lab.db.records import (
     DeploymentDeviceAllocationRecord,
     DeploymentInstanceRecord,
     DeploymentPlacementRecord,
+    DeploymentPlanCaseRecord,
+    DeploymentPlanRecord,
     DeploymentRejectionRecord,
     DeploymentRunMemberRecord,
     DeploymentRunRecord,
@@ -48,6 +50,7 @@ from llama_profile_lab.domain import (
     DeploymentFailureKind,
     DeploymentPlacement,
     DeploymentRunStatus,
+    DeploymentSearchSpace,
     ExperimentDefinition,
     MeasurementPolicy,
     MemoryEstimateIdentity,
@@ -3078,5 +3081,154 @@ class MemoryEstimateRepository:
             identity=_loads_object(str(row["identity_json"])),
             result=_loads_object(str(row["result_json"])),
             created_at=str(row["created_at"]),
+        )
+
+class DeploymentPlanRepository:
+    """Persistence for deployment planner summaries and feasible cases."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create(
+        self,
+        *,
+        base_deployment_candidate_id: str,
+        host_id: str,
+        search_space: DeploymentSearchSpace,
+        request: Mapping[str, Any],
+        raw_combinations: int,
+        rejected_by_constraints: int,
+        duplicate_candidates: int,
+        symmetry_reduced: int,
+        capability_rejected: int,
+        estimate_failed: int,
+        memory_rejected: int,
+        valid_count: int,
+    ) -> str:
+        identifier = _event_id("deployplan")
+        self.connection.execute(
+            """
+            INSERT INTO deployment_plan(
+                id, base_deployment_candidate_id, host_id, search_hash,
+                search_json, request_json, raw_combinations,
+                rejected_by_constraints, duplicate_candidates,
+                symmetry_reduced, capability_rejected, estimate_failed,
+                memory_rejected, valid_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identifier,
+                base_deployment_candidate_id,
+                host_id,
+                search_space.content_hash(),
+                canonical_json(search_space),
+                canonical_json(dict(request)),
+                raw_combinations,
+                rejected_by_constraints,
+                duplicate_candidates,
+                symmetry_reduced,
+                capability_rejected,
+                estimate_failed,
+                memory_rejected,
+                valid_count,
+            ),
+        )
+        return identifier
+
+    def add_case(
+        self,
+        deployment_plan_id: str,
+        *,
+        ordinal: int,
+        deployment_candidate_id: str,
+        deployment_placement_id: str,
+        generation: Mapping[str, Any],
+    ) -> str:
+        case_hash = sha256_json(
+            {
+                "deployment_candidate_id": deployment_candidate_id,
+                "deployment_placement_id": deployment_placement_id,
+            }
+        )
+        self.connection.execute(
+            """
+            INSERT INTO deployment_plan_case(
+                deployment_plan_id, ordinal, case_hash,
+                deployment_candidate_id, deployment_placement_id,
+                generation_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                deployment_plan_id,
+                ordinal,
+                case_hash,
+                deployment_candidate_id,
+                deployment_placement_id,
+                canonical_json(dict(generation)),
+            ),
+        )
+        return case_hash
+
+    def record(self, identifier: str) -> DeploymentPlanRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, base_deployment_candidate_id, host_id, search_hash,
+                   request_json, raw_combinations, rejected_by_constraints,
+                   duplicate_candidates, symmetry_reduced,
+                   capability_rejected, estimate_failed, memory_rejected,
+                   valid_count, created_at
+            FROM deployment_plan
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DeploymentPlanRecord(
+            id=str(row["id"]),
+            base_deployment_candidate_id=str(
+                row["base_deployment_candidate_id"]
+            ),
+            host_id=str(row["host_id"]),
+            search_hash=str(row["search_hash"]),
+            raw_combinations=int(row["raw_combinations"]),
+            rejected_by_constraints=int(row["rejected_by_constraints"]),
+            duplicate_candidates=int(row["duplicate_candidates"]),
+            symmetry_reduced=int(row["symmetry_reduced"]),
+            capability_rejected=int(row["capability_rejected"]),
+            estimate_failed=int(row["estimate_failed"]),
+            memory_rejected=int(row["memory_rejected"]),
+            valid_count=int(row["valid_count"]),
+            request=_loads_object(str(row["request_json"])),
+            created_at=str(row["created_at"]),
+        )
+
+    def cases(
+        self,
+        identifier: str,
+    ) -> tuple[DeploymentPlanCaseRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT deployment_plan_id, ordinal, case_hash,
+                   deployment_candidate_id, deployment_placement_id,
+                   generation_json
+            FROM deployment_plan_case
+            WHERE deployment_plan_id = ?
+            ORDER BY ordinal
+            """,
+            (identifier,),
+        ).fetchall()
+        return tuple(
+            DeploymentPlanCaseRecord(
+                deployment_plan_id=str(row["deployment_plan_id"]),
+                ordinal=int(row["ordinal"]),
+                case_hash=str(row["case_hash"]),
+                deployment_candidate_id=str(row["deployment_candidate_id"]),
+                deployment_placement_id=str(row["deployment_placement_id"]),
+                generation=_loads_object(str(row["generation_json"])),
+            )
+            for row in rows
         )
 
