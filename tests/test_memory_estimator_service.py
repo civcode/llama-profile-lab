@@ -22,6 +22,7 @@ from llama_profile_lab.domain import (
     FitConfig,
     ModelSelection,
     PlacementConfig,
+    PlacementConstraints,
 )
 from llama_profile_lab.execution import (
     DeviceInventoryService,
@@ -116,6 +117,14 @@ if "--device" in args:
 else:
     devices = ["CUDA0", "Vulkan0"]
 
+split_mode = args[args.index("--split-mode") + 1]
+main_gpu = int(args[args.index("--main-gpu") + 1])
+tensor_split = (
+    [float(value) for value in args[args.index("--tensor-split") + 1].split(",")]
+    if "--tensor-split" in args
+    else None
+)
+
 rows = []
 for index, name in enumerate(devices):
     model_bytes = 100 + index * 10
@@ -138,9 +147,9 @@ print(json.dumps({{
     "resolved": {{
         "n_gpu_layers": 48,
         "devices": devices,
-        "split_mode": "layer",
-        "main_gpu": 0,
-        "tensor_split": None,
+        "split_mode": split_mode,
+        "main_gpu": main_gpu,
+        "tensor_split": tensor_split,
         "override_tensor": [],
     }},
     "metadata": {{"source": "synthetic"}},
@@ -244,6 +253,38 @@ def test_device_inventory_and_memory_estimate_cache(tmp_path: Path) -> None:
     assert second.cache_hit is True
     assert second.estimate_id == first.estimate_id
     assert second.attempt_id == first.attempt_id
+
+
+def test_joint_planner_placement_override_round_trips(
+    tmp_path: Path,
+) -> None:
+    database, candidate_id, helper_id, _ = seed(tmp_path)
+    constraints = PlacementConstraints(
+        devices=("CUDA0", "Vulkan0"),
+        n_gpu_layers="all",
+        split_mode="layer",
+        main_gpu=1,
+        tensor_split=(3.0, 1.0),
+    )
+
+    observation = MemoryEstimatorService(database).estimate(
+        candidate_id,
+        helper_binary_id=helper_id,
+        model_path=tmp_path / "model.gguf",
+        selected_devices=("CUDA0", "Vulkan0"),
+        placement_constraints=constraints,
+    )
+
+    assert observation.output.resolved.devices == ("CUDA0", "Vulkan0")
+    assert observation.output.resolved.main_gpu == 1
+    assert observation.output.resolved.tensor_split == (3.0, 1.0)
+    with database.session() as connection:
+        attempt = MemoryEstimateRepository(connection).attempt(
+            observation.attempt_id
+        )
+        assert attempt is not None
+        assert "--tensor-split" in attempt.argv
+        assert attempt.argv[attempt.argv.index("--tensor-split") + 1] == "3,1"
 
 
 def test_helper_hash_drift_is_rejected_before_cache_use(tmp_path: Path) -> None:
