@@ -450,7 +450,7 @@ The repository-wide Ruff, mypy, and complete pytest gate remains pending because
 
 ## 7. V2-M3 — Mixed-vendor composite GPU telemetry
 
-**Status: Planned**
+**Status: Implemented — local mixed-vendor telemetry and V1/M1/M2 regression tests passing; full repository lint/type/full-test gate pending**
 
 ### Objective
 
@@ -509,20 +509,20 @@ If metric-key constraints make a raw hardware key unsuitable, introduce a stable
 
 ### Work items
 
-- [ ] Introduce composite GPU provider.
-- [ ] Query NVIDIA and sysfs providers independently.
-- [ ] Add PCI identity normalization.
-- [ ] Add record merge/de-duplication.
-- [ ] Retain provider/source provenance.
-- [ ] Keep existing aggregate summary metrics.
-- [ ] Add per-device summary structure.
-- [ ] Emit per-device generic metrics.
-- [ ] Update telemetry API DTOs if required.
-- [ ] Update frontend telemetry types only if backend DTO shape changes.
-- [ ] Add mixed NVIDIA/AMD fixture tree.
-- [ ] Test partial provider failure.
-- [ ] Test duplicate NVIDIA device correlation.
-- [ ] Test two unrelated GPUs with same/similar names are not merged.
+- [x] Introduce composite GPU provider.
+- [x] Query NVIDIA and sysfs providers independently.
+- [x] Add PCI identity normalization.
+- [x] Add record merge/de-duplication.
+- [x] Retain provider/source provenance.
+- [x] Keep existing aggregate summary metrics.
+- [x] Add per-device summary structure.
+- [x] Emit per-device generic metrics.
+- [x] Update telemetry API DTOs if required.
+- [x] Update frontend telemetry types only if backend DTO shape changes.
+- [x] Add mixed NVIDIA/AMD fixture tree.
+- [x] Test partial provider failure.
+- [x] Test duplicate NVIDIA device correlation.
+- [x] Test two unrelated GPUs with same/similar names are not merged.
 
 ### Run-quality policy
 
@@ -541,6 +541,23 @@ Add tests before concurrent execution depends on this behavior.
 A deterministic telemetry test with one synthetic NVIDIA device and one synthetic AMD DRM device returns both devices in every sample and emits distinct per-device summaries.
 
 All existing V1 telemetry tests remain green.
+
+Implementation validation completed locally without GitHub Actions:
+
+- one synthetic NVIDIA device plus one synthetic AMD/sysfs device are returned together;
+- duplicate NVIDIA/sysfs observations merge by normalized PCI identity, with NVIDIA values preferred and sysfs filling missing fields;
+- explicit stable mappings can correlate devices when PCI/UUID is unavailable;
+- unrelated devices with identical product names remain distinct;
+- partial provider failure preserves telemetry from surviving providers;
+- provider provenance is retained on raw samples and per-device summaries;
+- aggregate V1 telemetry metrics remain present while per-device generic metrics are emitted under stable encoded IDs;
+- intentional during-run GPU utilization does not become external-GPU contamination when before/after baselines are quiet;
+- 80 relevant pytest tests pass across V1 domain, V2-M1, V2-M2, and V2-M3 coverage;
+- Python compile checks pass.
+
+No schema migration is required because raw GPU observations are already persisted as JSON and generic metric rows already support the new per-device metric names. The API telemetry DTO reuses the domain TelemetrySample type, so the new fields are additive. The current frontend has no dedicated telemetry sample type requiring a synchronized TypeScript change.
+
+The repository-wide Ruff, mypy, and complete pytest gate remains pending because Ruff/mypy are not installed or cached in the local execution environment and the full repository cannot be cloned through the container DNS. The manual GitHub Actions workflow has not been dispatched.
 
 ### Suggested checkpoint commits
 
