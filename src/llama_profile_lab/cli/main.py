@@ -358,7 +358,7 @@ def _add_deployment_parser(
 ) -> None:
     deployment = commands.add_parser(
         "deployment",
-        help="Preview or persist joint multi-model deployment plans.",
+        help="Plan or execute joint multi-model deployments.",
     )
     deployment_commands = deployment.add_subparsers(
         dest="deployment_command"
