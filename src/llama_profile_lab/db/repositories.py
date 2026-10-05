@@ -3740,6 +3740,13 @@ class ConcurrentWorkloadRepository:
         latency_increase_pct: float | None,
         failure_details: Mapping[str, Any] | None = None,
     ) -> None:
+        raw_payload = dict(result.raw)
+        raw_payload["token_events_json"] = canonical_json(
+            [
+                event.model_dump(mode="json")
+                for event in result.token_events
+            ]
+        )
         self.connection.execute(
             """
             INSERT INTO deployment_workload_member(
@@ -3785,8 +3792,7 @@ class ConcurrentWorkloadRepository:
                 baseline_latency_ms,
                 latency_increase_pct,
                 int(result.correctness_valid),
-                canonical_json(dict(result.raw)),
-                (
+                canonical_json(raw_payload),                (
                     None
                     if failure_details is None
                     else canonical_json(dict(failure_details))
