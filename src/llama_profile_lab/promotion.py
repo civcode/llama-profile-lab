@@ -516,7 +516,7 @@ class DeploymentPromotionService:
         with self.database.session() as connection:
             identifier = DeploymentPromotionRepository(connection).create(
                 base_deployment_candidate_id=base_deployment_candidate_id,
-                deployment_candidate_id=deployment.id,
+                deployment_candidate_id=placement.deployment_candidate_id,
                 deployment_placement_id=deployment_placement_id,
                 sources=source_payloads,
                 changes=change_payloads,
@@ -529,7 +529,7 @@ class DeploymentPromotionService:
         return DeploymentPromotionProposal(
             id=identifier,
             base_deployment_candidate_id=base_deployment_candidate_id,
-            deployment_candidate_id=deployment.id,
+            deployment_candidate_id=placement.deployment_candidate_id,
             deployment_placement_id=deployment_placement_id,
             sources=tuple(source_payloads),
             changes=tuple(change_payloads),
@@ -804,9 +804,12 @@ def _deployment_launcher_changes(
     candidate: Candidate,
     resolved: Any,
 ) -> tuple[tuple[LauncherArgChange, ...], dict[str, JsonScalar]]:
+    promotion_candidate = candidate.model_copy(
+        update={"placement": profile.candidate.placement}
+    )
     changes, updates = _launcher_changes(
         profile,
-        candidate,
+        promotion_candidate,
         allow_placement_lists=True,
     )
     change_list = list(changes)
@@ -892,8 +895,16 @@ def _deployment_launcher_changes(
         source_tensor_split,
         tensor_split,
     )
-    override_tensor = ",".join(resolved.override_tensor)
-    source_override = ",".join(source.override_tensor)
+    override_tensor = (
+        None
+        if not resolved.override_tensor
+        else ",".join(resolved.override_tensor)
+    )
+    source_override = (
+        None
+        if not source.override_tensor
+        else ",".join(source.override_tensor)
+    )
     set_arg(
         "placement.resolved.override_tensor",
         "--override-tensor",
