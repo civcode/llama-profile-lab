@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import (
     Field,
@@ -274,6 +274,10 @@ type DeploymentFeasibility = Literal[
 
 class DeploymentPlacement(ContentAddressedModel):
     """Concrete joint placement and memory projection for one deployment Candidate."""
+
+    identity_exclude: ClassVar[frozenset[str]] = frozenset(
+        {"provenance", "measured_at"}
+    )
 
     schema_name: Literal["llama-profile-deployment-placement"] = Field(
         default="llama-profile-deployment-placement",
