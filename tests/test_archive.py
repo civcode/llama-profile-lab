@@ -38,7 +38,7 @@ def test_archive_contains_consistent_database_snapshot_and_hashed_manifest(
     manifest = ArchiveService(database).create(output, artifacts=(artifact,))
 
     assert manifest.format == "llprof-archive-v1"
-    assert manifest.schema_version == 11
+    assert manifest.schema_version == 12
     assert output.is_file()
 
     extraction = tmp_path / "archive"
@@ -63,7 +63,7 @@ def test_archive_contains_consistent_database_snapshot_and_hashed_manifest(
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert (
             connection.execute("SELECT MAX(version) FROM schema_migration").fetchone()[0]
-            == 11
+            == 12
         )
         assert connection.execute("SELECT COUNT(*) FROM benchmark_run").fetchone()[0] > 0
     finally:
@@ -77,7 +77,7 @@ def test_full_experiment_export_contains_plan_runs_and_environment(tmp_path: Pat
 
     assert payload["format"] == "llprof-experiment-export-v1"
     assert payload["experiment"]["id"] == experiment_id
-    assert len(payload["plan"]["experiment_candidates"]) == 11
+    assert len(payload["plan"]["experiment_candidates"]) == 12
     assert len(payload["plan"]["benchmark_cases"]) == 44
     assert len(payload["execution"]["benchmark_runs"]) == 44
     assert len(payload["execution"]["benchmark_samples"]) == 132
