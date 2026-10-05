@@ -276,7 +276,12 @@ class DeploymentPlacement(ContentAddressedModel):
     """Concrete joint placement and memory projection for one deployment Candidate."""
 
     identity_exclude: ClassVar[frozenset[str]] = frozenset(
-        {"provenance", "measured_at"}
+        {
+            "device_memory",
+            "device_allocations",
+            "feasibility",
+            "provenance",
+        }
     )
 
     schema_name: Literal["llama-profile-deployment-placement"] = Field(
