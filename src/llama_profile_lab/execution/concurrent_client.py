@@ -152,10 +152,14 @@ class _PreparedLlamaCompletionClient:
                         event = json.loads(line[6:])
                     except json.JSONDecodeError as exc:
                         raise ConcurrentClientError(
-                            "llama-server emitted invalid SSE JSON"
+                            "llama-server emitted invalid SSE JSON",
+                            kind="invalid",
                         ) from exc
                     if not isinstance(event, dict):
-                        continue
+                        raise ConcurrentClientError(
+                            "llama-server emitted a non-object SSE event",
+                            kind="invalid",
+                        )
                     now_ns = time.monotonic_ns()
                     final_payload = event
                     _append_prompt_progress(
@@ -182,6 +186,8 @@ class _PreparedLlamaCompletionClient:
             status = (
                 "cancelled"
                 if exc.kind == "cancelled"
+                else "invalid"
+                if exc.kind == "invalid"
                 else "failed"
             )
             failure = str(exc)
@@ -201,8 +207,26 @@ class _PreparedLlamaCompletionClient:
         finished_ns = time.monotonic_ns()
         timings = final_payload.get("timings")
         timing_map = timings if isinstance(timings, dict) else {}
-        prompt_n = _non_negative_int(timing_map.get("prompt_n")) or 0
-        predicted_n = _non_negative_int(timing_map.get("predicted_n")) or 0
+        prompt_n_value = _non_negative_int(timing_map.get("prompt_n"))
+        predicted_n_value = _non_negative_int(
+            timing_map.get("predicted_n")
+        )
+        prompt_n = prompt_n_value or 0
+        predicted_n = predicted_n_value or 0
+        final_predicted = _non_negative_int(
+            final_payload.get("tokens_predicted")
+        )
+        if (
+            status == "completed"
+            and final_predicted is not None
+            and predicted_n_value is not None
+            and final_predicted != predicted_n_value
+        ):
+            status = "invalid"
+            failure = (
+                "llama-server final token counters disagree: "
+                f"stream={final_predicted}, timings={predicted_n_value}"
+            )
         prompt_tps = _non_negative_float(
             timing_map.get("prompt_per_second")
         )
@@ -357,8 +381,15 @@ def _append_cumulative(
 ) -> None:
     if events:
         last = events[-1]
-        if last.kind == kind and last.cumulative_tokens == cumulative_tokens:
-            return
+        if last.kind == kind:
+            if cumulative_tokens < last.cumulative_tokens:
+                raise ConcurrentClientError(
+                    f"llama-server {kind} token counter regressed "
+                    f"from {last.cumulative_tokens} to {cumulative_tokens}",
+                    kind="invalid",
+                )
+            if last.cumulative_tokens == cumulative_tokens:
+                return
     events.append(
         ConcurrentTokenEvent(
             kind=kind,
