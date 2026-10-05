@@ -33,6 +33,7 @@ from llama_profile_lab.db import (
 )
 from llama_profile_lab.db.records import BinaryRecord
 from llama_profile_lab.diagnostics import inspect_database
+from llama_profile_lab.domain import DeploymentSearchSpace
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     DeviceInventoryError,
@@ -55,7 +56,14 @@ from llama_profile_lab.llama import (
     discover_binary_paths,
     probe_binary,
 )
-from llama_profile_lab.planning import PlanningError, plan_experiment, render_plan_summary
+from llama_profile_lab.planning import (
+    DeploymentEstimatorInput,
+    DeploymentPlannerService,
+    DeploymentPlanSummary,
+    PlanningError,
+    plan_experiment,
+    render_plan_summary,
+)
 from llama_profile_lab.promotion import PromotionError, PromotionService
 
 _BINARY_KIND_CHOICES = (
@@ -86,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_binary_parser(commands)
     _add_run_parser(commands)
     _add_placement_parser(commands)
+    _add_deployment_parser(commands)
     _add_results_parser(commands)
     _add_server_parser(commands)
     _add_api_parser(commands)
@@ -338,6 +347,40 @@ def _add_placement_parser(
     )
     estimate.add_argument("--timeout-seconds", type=float, default=300.0)
     _add_database_argument(estimate)
+
+
+def _add_deployment_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    deployment = commands.add_parser(
+        "deployment",
+        help="Preview or persist joint multi-model deployment plans.",
+    )
+    deployment_commands = deployment.add_subparsers(
+        dest="deployment_command"
+    )
+
+    preview = deployment_commands.add_parser(
+        "preview",
+        help="Evaluate deployment search counts without persisting plan cases.",
+    )
+    preview.add_argument(
+        "spec",
+        type=Path,
+        help="JSON deployment planning specification.",
+    )
+    _add_database_argument(preview)
+
+    plan = deployment_commands.add_parser(
+        "plan",
+        help="Persist feasible deployment cases and rejection history.",
+    )
+    plan.add_argument(
+        "spec",
+        type=Path,
+        help="JSON deployment planning specification.",
+    )
+    _add_database_argument(plan)
 
 
 def _add_results_parser(
@@ -1288,6 +1331,132 @@ def _ui_command(
     return 0
 
 
+def _deployment_plan_command(
+    database_path: Path,
+    spec_path: Path,
+    *,
+    persist: bool,
+) -> int:
+    try:
+        base_id, search_space, inputs, timeout_seconds = (
+            _load_deployment_plan_spec(spec_path)
+        )
+        service = DeploymentPlannerService(Database(database_path))
+        summary = (
+            service.plan(
+                base_id,
+                search_space,
+                inputs,
+                timeout_seconds=timeout_seconds,
+            )
+            if persist
+            else service.preview(
+                base_id,
+                search_space,
+                inputs,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(_render_deployment_plan_summary(summary))
+    return 0
+
+
+def _load_deployment_plan_spec(
+    path: Path,
+) -> tuple[
+    str,
+    DeploymentSearchSpace,
+    tuple[DeploymentEstimatorInput, ...],
+    float | None,
+]:
+    resolved = path.expanduser().resolve()
+    raw = json.loads(resolved.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("deployment planning spec must be a JSON object")
+
+    base_id = raw.get("base_deployment_candidate_id")
+    if not isinstance(base_id, str) or not base_id:
+        raise ValueError(
+            "deployment planning spec requires base_deployment_candidate_id"
+        )
+    search_raw = raw.get("search_space")
+    if not isinstance(search_raw, dict):
+        raise ValueError(
+            "deployment planning spec requires search_space object"
+        )
+    search_space = DeploymentSearchSpace.model_validate(search_raw)
+
+    instance_rows = raw.get("instances")
+    if not isinstance(instance_rows, list) or not instance_rows:
+        raise ValueError(
+            "deployment planning spec requires non-empty instances list"
+        )
+    inputs: list[DeploymentEstimatorInput] = []
+    for row in instance_rows:
+        if not isinstance(row, dict):
+            raise ValueError("deployment instance estimator entry must be object")
+        instance_id = row.get("instance_id")
+        helper_binary_id = row.get("helper_binary_id")
+        model_path = row.get("model_path")
+        if (
+            not isinstance(instance_id, str)
+            or not instance_id
+            or not isinstance(helper_binary_id, str)
+            or not helper_binary_id
+            or not isinstance(model_path, str)
+            or not model_path
+        ):
+            raise ValueError(
+                "each deployment estimator entry requires instance_id, "
+                "helper_binary_id, and model_path"
+            )
+        inputs.append(
+            DeploymentEstimatorInput(
+                instance_id=instance_id,
+                helper_binary_id=helper_binary_id,
+                model_path=Path(model_path),
+            )
+        )
+
+    timeout_raw = raw.get("timeout_seconds", 300.0)
+    if timeout_raw is None:
+        timeout_seconds = None
+    elif isinstance(timeout_raw, bool) or not isinstance(
+        timeout_raw,
+        (int, float),
+    ):
+        raise ValueError("timeout_seconds must be numeric or null")
+    elif timeout_raw <= 0:
+        raise ValueError("timeout_seconds must be positive")
+    else:
+        timeout_seconds = float(timeout_raw)
+    return base_id, search_space, tuple(inputs), timeout_seconds
+
+
+def _render_deployment_plan_summary(
+    summary: DeploymentPlanSummary,
+) -> str:
+    lines = [
+        f"Base deployment: {summary.base_deployment_candidate_id}",
+        f"Host: {summary.host_id}",
+        f"Raw combinations: {summary.raw_combinations}",
+        f"Rejected by constraints: {summary.rejected_by_constraints}",
+        f"Duplicate candidates: {summary.duplicate_candidates}",
+        f"Symmetry reduced: {summary.symmetry_reduced}",
+        f"Capability rejected: {summary.capability_rejected}",
+        f"Estimate failed: {summary.estimate_failed}",
+        f"Memory rejected: {summary.memory_rejected}",
+        f"Valid: {summary.valid_count}",
+    ]
+    if summary.plan_id is not None:
+        lines.append(f"Plan: {summary.plan_id}")
+    return "\n".join(lines)
+
+
 def _placement_list_command(database_path: Path) -> int:
     with Database(database_path).session() as connection:
         records = PlacementRepository(connection).list()
@@ -1637,6 +1806,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_path=args.model_path,
                 devices=args.devices,
                 timeout_seconds=args.timeout_seconds,
+            )
+
+    if args.command == "deployment":
+        if args.deployment_command == "preview":
+            return _deployment_plan_command(
+                args.database,
+                args.spec,
+                persist=False,
+            )
+        if args.deployment_command == "plan":
+            return _deployment_plan_command(
+                args.database,
+                args.spec,
+                persist=True,
             )
 
     if args.command == "server":
