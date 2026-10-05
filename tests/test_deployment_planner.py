@@ -458,6 +458,76 @@ def test_gpu1_only_overflow_and_backend_pair_rejection(
     assert summary2.valid_count == 0
 
 
+def test_both_models_can_split_across_both_gpus(
+    tmp_path: Path,
+) -> None:
+    request = DeploymentPlacementRequest(
+        devices=("GPU0", "GPU1"),
+        tensor_split=(1.0, 1.0),
+    )
+    database, deployment_id, helper_id = seed(
+        tmp_path,
+        qwen_request=request,
+        flash_request=request,
+    )
+    search = DeploymentSearchSpace(
+        dimensions=(
+            DeploymentSearchDimension(
+                path="resource_policy.device_memory_margin_bytes.GPU0",
+                values=(50,),
+            ),
+        )
+    )
+
+    summary = DeploymentPlannerService(
+        database,
+        memory_estimator=FakeEstimator(
+            database,
+            lambda candidate: 400,
+        ),
+        host_detector=lambda: HOST,
+    ).preview(deployment_id, search, inputs(helper_id))
+
+    assert summary.valid_count == 1
+    assert summary.memory_rejected == 0
+
+
+class FailingEstimator:
+    def estimate(self, *args, **kwargs):
+        raise ValueError("synthetic estimate failure")
+
+
+def test_memory_estimate_failure_is_counted_and_persisted(
+    tmp_path: Path,
+) -> None:
+    database, deployment_id, helper_id = seed(tmp_path)
+    search = DeploymentSearchSpace(
+        dimensions=(
+            DeploymentSearchDimension(
+                path="instances.qwen.context.size",
+                values=(8192,),
+            ),
+        )
+    )
+
+    summary = DeploymentPlannerService(
+        database,
+        memory_estimator=FailingEstimator(),
+        host_detector=lambda: HOST,
+    ).plan(deployment_id, search, inputs(helper_id))
+
+    assert summary.estimate_failed == 1
+    assert summary.valid_count == 0
+    with database.session() as connection:
+        reasons = [
+            row["reason"]
+            for row in connection.execute(
+                "SELECT reason FROM deployment_rejection"
+            ).fetchall()
+        ]
+    assert reasons == ["memory_estimate_failed"]
+
+
 def test_invalid_split_and_kv_precision_rescue(tmp_path: Path) -> None:
     database, deployment_id, helper_id = seed(tmp_path)
     invalid = DeploymentSearchSpace(
