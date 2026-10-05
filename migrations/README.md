@@ -15,9 +15,9 @@ The migration runner records each applied migration's version, name, and SHA-256
 Schema changes must therefore be forward migrations rather than ad-hoc `CREATE TABLE IF NOT EXISTS` changes.
 
 
-## V1 migration policy
+## Migration policy
 
-V1 currently contains migrations 001 through 005. The test suite creates databases at every historical schema prefix and verifies that each one upgrades through the current migration set with SQLite integrity and foreign-key checks passing.
+The V1 schema is migrations 001 through 005. V2 begins with additive migration 006 for multi-model deployment persistence. The test suite creates databases at every historical schema prefix and verifies that each one upgrades through the current migration set with SQLite integrity and foreign-key checks passing.
 
 Operational rules:
 
