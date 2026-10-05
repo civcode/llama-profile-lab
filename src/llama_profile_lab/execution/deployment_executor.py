@@ -69,6 +69,21 @@ class DeploymentExecutionError(RuntimeError):
         self.failure_kind = failure_kind
 
 
+class DeploymentResidentActionError(RuntimeError):
+    """Typed failure raised by work executed while all servers are resident."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_kind: DeploymentFailureKind = "concurrent_workload_failed",
+        cancelled: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.failure_kind = failure_kind
+        self.cancelled = cancelled
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentServerInput:
     """Filesystem inputs required to launch one deployment instance."""
@@ -100,6 +115,36 @@ class DeploymentExecutionSummary:
     status: str
     members: tuple[DeploymentExecutionMember, ...]
     runtime_memory: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ResidentDeploymentMember:
+    """One ready member exposed to work executed before server teardown."""
+
+    instance_id: str
+    endpoint: str
+    pid: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResidentDeployment:
+    """Ready deployment view provided to an in-residency action."""
+
+    run_id: str
+    deployment_candidate_id: str
+    deployment_placement_id: str
+    members: tuple[ResidentDeploymentMember, ...]
+
+
+class ResidentDeploymentAction(Protocol):
+    """Work performed while all managed servers remain resident."""
+
+    def __call__(
+        self,
+        deployment: ResidentDeployment,
+        cancel_event: Event | None,
+    ) -> Mapping[str, object] | None:
+        """Execute resident work and return summary metadata."""
 
 
 class GpuSnapshotProvider(Protocol):
@@ -231,6 +276,7 @@ class DeploymentExecutor:
         readiness_timeout_seconds: float = 300.0,
         residency_hold_seconds: float = 0.0,
         cancel_event: Event | None = None,
+        resident_action: ResidentDeploymentAction | None = None,
     ) -> DeploymentExecutionSummary:
         if not host:
             raise DeploymentExecutionError("server host must not be empty")
@@ -251,6 +297,7 @@ class DeploymentExecutor:
                     readiness_timeout_seconds=readiness_timeout_seconds,
                     residency_hold_seconds=residency_hold_seconds,
                     cancel_event=cancel_event,
+                    resident_action=resident_action,
                 )
         except HostLockError as exc:
             raise DeploymentExecutionError(str(exc)) from exc
@@ -264,6 +311,7 @@ class DeploymentExecutor:
         readiness_timeout_seconds: float,
         residency_hold_seconds: float,
         cancel_event: Event | None,
+        resident_action: ResidentDeploymentAction | None,
     ) -> DeploymentExecutionSummary:
         started_ns = time.monotonic_ns()
         started_at = _utc_now()
@@ -327,6 +375,7 @@ class DeploymentExecutor:
             violations=(),
             missing_devices=(),
         )
+        resident_result: Mapping[str, object] = {}
 
         try:
             member_plans = self._prepare_members(
@@ -424,6 +473,37 @@ class DeploymentExecutor:
                             "runtime GPU memory headroom violated planned margin"
                         )
 
+            if failure_message is None and resident_action is not None:
+                with self.database.session() as connection:
+                    DeploymentRunRepository(connection).set_status(
+                        run_id,
+                        "running",
+                    )
+                resident = ResidentDeployment(
+                    run_id=run_id,
+                    deployment_candidate_id=deployment_id,
+                    deployment_placement_id=deployment_placement_id,
+                    members=tuple(
+                        ResidentDeploymentMember(
+                            instance_id=plan.instance_id,
+                            endpoint=plan.endpoint,
+                            pid=(
+                                None
+                                if registry.get(plan.instance_id) is None
+                                else registry.get(plan.instance_id).pid
+                            ),
+                        )
+                        for plan in member_plans
+                    ),
+                )
+                try:
+                    action_output = resident_action(resident, cancel_event)
+                    resident_result = dict(action_output or {})
+                except DeploymentResidentActionError as exc:
+                    cancelled = exc.cancelled
+                    failure_kind = exc.failure_kind
+                    failure_message = str(exc)
+
             if failure_message is None:
                 probe_error = self._residency_probe(
                     member_plans,
@@ -479,6 +559,7 @@ class DeploymentExecutor:
                     quality_details={
                         "reason": failure_message or "cancelled",
                         "runtime_memory": runtime_check.details,
+                        "resident_action": dict(resident_result),
                     },
                 )
             raise DeploymentExecutionError(
@@ -498,6 +579,7 @@ class DeploymentExecutor:
                     failure_details={
                         "error": failure_message,
                         "runtime_memory": runtime_check.details,
+                        "resident_action": dict(resident_result),
                         "cleanup_failed": cleanup_failed,
                     },
                 )
@@ -513,7 +595,10 @@ class DeploymentExecutor:
                 run_id,
                 status="completed",
                 duration_ns=duration_ns,
-                quality_details={"runtime_memory": runtime_check.details},
+                quality_details={
+                    "runtime_memory": runtime_check.details,
+                    "resident_action": dict(resident_result),
+                },
             )
             persisted_members = DeploymentRunRepository(connection).members(
                 run_id
