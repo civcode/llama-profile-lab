@@ -42,6 +42,7 @@ from llama_profile_lab.api.dto import (
     DeploymentPlanRequest,
     DeploymentPlanResponse,
     DeploymentProgressDTO,
+    DeploymentRejectionDTO,
     DeploymentResultsResponse,
     DeploymentRunDTO,
     DeploymentRunListResponse,
@@ -1194,6 +1195,7 @@ class ApiService:
                     or not isinstance(placements, list)
                 ):
                     raise RuntimeError("deployment candidate aggregate is invalid")
+                rejections = repository.rejections(candidate_id)
                 items.append(
                     DeploymentCandidateItemDTO(
                         id=candidate_id,
@@ -1202,8 +1204,16 @@ class ApiService:
                             str(key): value
                             for key, value in generation.items()
                         },
-                        rejection_count=len(
-                            repository.rejections(candidate_id)
+                        rejection_count=len(rejections),
+                        rejections=tuple(
+                            DeploymentRejectionDTO(
+                                id=rejection.id,
+                                stage=rejection.stage,
+                                reason=rejection.reason,
+                                details=dict(rejection.details),
+                                created_at=rejection.created_at,
+                            )
+                            for rejection in rejections
                         ),
                         placement_ids=tuple(
                             str(value) for value in placements
