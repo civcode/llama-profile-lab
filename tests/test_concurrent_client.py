@@ -15,6 +15,7 @@ from llama_profile_lab.execution.concurrent_client import (
 class _Handler(BaseHTTPRequestHandler):
     requests: list[dict[str, object]] = []
     predicted_n = 0
+    stream_mode = "normal"
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -50,10 +51,28 @@ class _Handler(BaseHTTPRequestHandler):
                 "predicted_per_second": 4.0,
             },
         }
-        body = (
-            f"data: {json.dumps(prompt_progress)}\n\n"
-            f"data: {json.dumps(final)}\n\n"
-        ).encode("utf-8")
+        mode = self.__class__.stream_mode
+        if mode == "invalid-json":
+            body = b"data: not-json\n\n"
+        elif mode == "counter-regression":
+            first = {"tokens_predicted": 2}
+            second = {"tokens_predicted": 1}
+            body = (
+                f"data: {json.dumps(first)}\n\n"
+                f"data: {json.dumps(second)}\n\n"
+            ).encode("utf-8")
+        elif mode == "counter-mismatch":
+            final["tokens_predicted"] = 2
+            final["timings"]["predicted_n"] = 1
+            body = (
+                f"data: {json.dumps(prompt_progress)}\n\n"
+                f"data: {json.dumps(final)}\n\n"
+            ).encode("utf-8")
+        else:
+            body = (
+                f"data: {json.dumps(prompt_progress)}\n\n"
+                f"data: {json.dumps(final)}\n\n"
+            ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(body)))
@@ -64,9 +83,14 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
-def _server(predicted_n: int) -> tuple[ThreadingHTTPServer, Thread]:
+def _server(
+    predicted_n: int,
+    *,
+    stream_mode: str = "normal",
+) -> tuple[ThreadingHTTPServer, Thread]:
     _Handler.requests = []
     _Handler.predicted_n = predicted_n
+    _Handler.stream_mode = stream_mode
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = Thread(target=server.serve_forever)
     thread.start()
@@ -102,6 +126,93 @@ def test_completion_client_prewarms_depth_and_records_prompt_events() -> None:
         assert _Handler.requests[0]["n_predict"] == 0
         assert _Handler.requests[1]["prompt"] == [1, 1, 1, 1, 1, 1]
         assert _Handler.requests[1]["return_progress"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
+def test_completion_client_marks_invalid_sse_json_as_invalid() -> None:
+    server, thread = _server(predicted_n=2, stream_mode="invalid-json")
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+        workload = ConcurrentWorkloadMemberSpec(
+            ordinal=0,
+            instance_id="qwen",
+            mode="decode",
+            generate_tokens=2,
+            depth_tokens=4,
+        )
+
+        prepared = LlamaCompletionConcurrentClient().prepare(
+            endpoint,
+            workload,
+        )
+        result = prepared.run(barrier_release_ns=prepared.client_ready_ns)
+
+        assert result.status == "invalid"
+        assert not result.correctness_valid
+        assert "invalid SSE JSON" in (result.failure or "")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
+def test_completion_client_rejects_regressing_token_counter() -> None:
+    server, thread = _server(
+        predicted_n=2,
+        stream_mode="counter-regression",
+    )
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+        workload = ConcurrentWorkloadMemberSpec(
+            ordinal=0,
+            instance_id="qwen",
+            mode="decode",
+            generate_tokens=2,
+            depth_tokens=4,
+        )
+
+        prepared = LlamaCompletionConcurrentClient().prepare(
+            endpoint,
+            workload,
+        )
+        result = prepared.run(barrier_release_ns=prepared.client_ready_ns)
+
+        assert result.status == "invalid"
+        assert not result.correctness_valid
+        assert "counter regressed" in (result.failure or "")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
+def test_completion_client_rejects_contradictory_final_counters() -> None:
+    server, thread = _server(
+        predicted_n=2,
+        stream_mode="counter-mismatch",
+    )
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+        workload = ConcurrentWorkloadMemberSpec(
+            ordinal=0,
+            instance_id="qwen",
+            mode="decode",
+            generate_tokens=2,
+            depth_tokens=4,
+        )
+
+        prepared = LlamaCompletionConcurrentClient().prepare(
+            endpoint,
+            workload,
+        )
+        result = prepared.run(barrier_release_ns=prepared.client_ready_ns)
+
+        assert result.status == "invalid"
+        assert not result.correctness_valid
+        assert "counters disagree" in (result.failure or "")
     finally:
         server.shutdown()
         server.server_close()
