@@ -14,7 +14,7 @@ def test_reference_database_diagnostics_are_healthy_and_indexed(tmp_path: Path) 
 
     report = inspect_database(database)
 
-    assert report.schema_version == 8
+    assert report.schema_version == 9
     assert report.integrity_ok
     assert report.foreign_key_violations == 0
     assert report.database_bytes > 0
