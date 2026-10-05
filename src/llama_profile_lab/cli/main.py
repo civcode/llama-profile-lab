@@ -6,7 +6,6 @@ import argparse
 import csv
 import io
 import json
-import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
