@@ -12,6 +12,7 @@ from llama_profile_lab.domain import (
     Candidate,
     MemoryEstimateIdentity,
     MemoryEstimateOutput,
+    PlacementConstraints,
 )
 from llama_profile_lab.llama.capabilities import CapabilitySet
 
@@ -59,6 +60,7 @@ class MemoryEstimatorAdapter:
         host_id: str,
         model_path: Path,
         candidate: Candidate,
+        placement_constraints: PlacementConstraints | None = None,
         selected_devices: tuple[str, ...] | None = None,
     ) -> MemoryEstimatorInvocation:
         """Build argv and the cache identity for one estimate."""
@@ -78,7 +80,7 @@ class MemoryEstimatorAdapter:
                 + ", ".join(missing)
             )
 
-        constraints = candidate.placement.constraints
+        constraints = placement_constraints or candidate.placement.constraints
         effective_devices = (
             selected_devices
             if selected_devices is not None
