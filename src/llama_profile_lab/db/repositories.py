@@ -11,15 +11,23 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
+from llama_profile_lab.db.connection import transaction
 from llama_profile_lab.db.records import (
     BenchmarkCaseRecord,
     BenchmarkRunRecord,
     BinaryRecord,
     CandidateEvaluationRecord,
+    DeploymentCandidateRecord,
+    DeploymentDeviceAllocationRecord,
+    DeploymentInstanceRecord,
+    DeploymentPlacementRecord,
+    DeploymentRunMemberRecord,
+    DeploymentRunRecord,
     ExperimentRecord,
     ExperimentStatus,
     PlacementAttemptRecord,
     PlacementAttemptStatus,
+    PlacementDeviceMemoryRecord,
     ResolvedPlacementRecord,
     RunStatus,
     ServerBenchmarkRecord,
@@ -29,6 +37,12 @@ from llama_profile_lab.db.records import (
 )
 from llama_profile_lab.domain import (
     Candidate,
+    DeploymentCandidate,
+    DeploymentDeviceAllocation,
+    DeploymentFailureKind,
+    DeploymentPlacement,
+    DeploymentRunStatus,
+    PlacementDeviceMemory,
     ExperimentDefinition,
     MeasurementPolicy,
     ResolvedPlacement,
@@ -1898,3 +1912,653 @@ class ServerValidationRepository:
             accept_rate=row["accept_rate"],
             created_at=str(row["created_at"]),
         )
+
+class DeploymentCandidateRepository:
+    """Persistence for immutable multi-model deployment Candidates."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def put(self, deployment: DeploymentCandidate) -> str:
+        """Persist one deployment and its normalized instance rows atomically."""
+        digest = deployment.content_hash()
+        identifier = _content_id("deploy", digest)
+        with transaction(self.connection, immediate=True):
+            cursor = self.connection.execute(
+                """
+                INSERT INTO deployment_candidate(
+                    id, deployment_hash, workload_suite_id,
+                    resource_policy_json, definition_json
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(deployment_hash) DO NOTHING
+                """,
+                (
+                    identifier,
+                    digest,
+                    deployment.workload_mix.workload_suite_id,
+                    canonical_json(deployment.resource_policy),
+                    canonical_json(deployment),
+                ),
+            )
+            row = self.connection.execute(
+                "SELECT id FROM deployment_candidate WHERE deployment_hash = ?",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("deployment insert did not produce a row")
+            persisted_id = str(row["id"])
+
+            if cursor.rowcount == 1:
+                self.connection.executemany(
+                    """
+                    INSERT INTO deployment_instance(
+                        deployment_candidate_id, instance_id, candidate_id,
+                        role, model_artifact_id, binary_id,
+                        requested_placement_json, server_identity, ordinal
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            persisted_id,
+                            instance.instance_id,
+                            instance.candidate_id,
+                            instance.role,
+                            instance.model_artifact_id,
+                            instance.binary_id,
+                            canonical_json(instance.requested_placement),
+                            instance.server_identity,
+                            ordinal,
+                        )
+                        for ordinal, instance in enumerate(deployment.instances)
+                    ),
+                )
+            else:
+                existing = self.get(persisted_id)
+                if existing != deployment:
+                    raise RuntimeError(
+                        "deployment hash collision or persisted definition mismatch"
+                    )
+
+        return persisted_id
+
+    def get(self, identifier: str) -> DeploymentCandidate | None:
+        row = self.connection.execute(
+            "SELECT definition_json FROM deployment_candidate WHERE id = ?",
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DeploymentCandidate.model_validate_json(str(row["definition_json"]))
+
+    def find_by_hash(self, deployment_hash: str) -> DeploymentCandidateRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, deployment_hash, workload_suite_id, created_at
+            FROM deployment_candidate
+            WHERE deployment_hash = ?
+            """,
+            (deployment_hash,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def record(self, identifier: str) -> DeploymentCandidateRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, deployment_hash, workload_suite_id, created_at
+            FROM deployment_candidate
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def instances(self, identifier: str) -> tuple[DeploymentInstanceRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT deployment_candidate_id, instance_id, candidate_id,
+                   role, model_artifact_id, binary_id,
+                   requested_placement_json, server_identity, ordinal
+            FROM deployment_instance
+            WHERE deployment_candidate_id = ?
+            ORDER BY ordinal
+            """,
+            (identifier,),
+        ).fetchall()
+        return tuple(
+            DeploymentInstanceRecord(
+                deployment_candidate_id=str(row["deployment_candidate_id"]),
+                instance_id=str(row["instance_id"]),
+                candidate_id=str(row["candidate_id"]),
+                role=str(row["role"]),
+                model_artifact_id=str(row["model_artifact_id"]),
+                binary_id=str(row["binary_id"]),
+                requested_placement=_loads_object(
+                    str(row["requested_placement_json"])
+                ),
+                server_identity=str(row["server_identity"]),
+                ordinal=int(row["ordinal"]),
+            )
+            for row in rows
+        )
+
+    @staticmethod
+    def _record(row: sqlite3.Row) -> DeploymentCandidateRecord:
+        return DeploymentCandidateRecord(
+            id=str(row["id"]),
+            deployment_hash=str(row["deployment_hash"]),
+            workload_suite_id=str(row["workload_suite_id"]),
+            created_at=str(row["created_at"]),
+        )
+
+
+class DeploymentPlacementRepository:
+    """Persistence for immutable joint placements and per-device memory."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def put(
+        self,
+        placement: DeploymentPlacement,
+        *,
+        request: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Persist one fully resolved deployment placement atomically."""
+        expected_rows = self.connection.execute(
+            """
+            SELECT instance_id, candidate_id
+            FROM deployment_instance
+            WHERE deployment_candidate_id = ?
+            ORDER BY instance_id
+            """,
+            (placement.deployment_candidate_id,),
+        ).fetchall()
+        if not expected_rows:
+            raise ValueError(
+                f"deployment candidate not found: {placement.deployment_candidate_id}"
+            )
+        expected = {
+            str(row["instance_id"]): str(row["candidate_id"])
+            for row in expected_rows
+        }
+        actual = {item.instance_id for item in placement.instance_placements}
+        if actual != set(expected):
+            raise ValueError(
+                "deployment placement must contain exactly the deployment instances"
+            )
+
+        for item in placement.instance_placements:
+            row = self.connection.execute(
+                """
+                SELECT candidate_id, host_id
+                FROM resolved_placement
+                WHERE id = ?
+                """,
+                (item.resolved_placement_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(
+                    f"resolved placement not found: {item.resolved_placement_id}"
+                )
+            if str(row["candidate_id"]) != expected[item.instance_id]:
+                raise ValueError(
+                    "resolved placement Candidate does not match deployment instance"
+                )
+            if str(row["host_id"]) != placement.host_id:
+                raise ValueError(
+                    "resolved placement host does not match deployment placement host"
+                )
+
+        for item in placement.device_memory:
+            if item.instance_id not in expected:
+                raise ValueError(
+                    f"device memory references unknown instance: {item.instance_id}"
+                )
+
+        digest = placement.content_hash()
+        identifier = _content_id("deployplace", digest)
+        with transaction(self.connection, immediate=True):
+            cursor = self.connection.execute(
+                """
+                INSERT INTO deployment_placement(
+                    id, placement_hash, deployment_candidate_id, host_id,
+                    feasibility, request_json, result_json, provenance_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(placement_hash) DO NOTHING
+                """,
+                (
+                    identifier,
+                    digest,
+                    placement.deployment_candidate_id,
+                    placement.host_id,
+                    placement.feasibility,
+                    canonical_json(dict(request or {})),
+                    canonical_json(placement),
+                    canonical_json(dict(placement.provenance)),
+                ),
+            )
+            if cursor.rowcount == 1:
+                self.connection.executemany(
+                    """
+                    INSERT INTO deployment_instance_placement(
+                        deployment_placement_id, deployment_candidate_id,
+                        instance_id, resolved_placement_id
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            identifier,
+                            placement.deployment_candidate_id,
+                            item.instance_id,
+                            item.resolved_placement_id,
+                        )
+                        for item in placement.instance_placements
+                    ),
+                )
+                self.connection.executemany(
+                    """
+                    INSERT INTO placement_device_memory(
+                        id, deployment_placement_id, deployment_candidate_id,
+                        instance_id, device_id, model_bytes, context_bytes,
+                        compute_bytes, total_bytes, device_total_bytes,
+                        device_free_bytes, source, measured_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            _content_id(
+                                "depmem",
+                                sha256_json(
+                                    {
+                                        "deployment_placement_id": identifier,
+                                        "instance_id": item.instance_id,
+                                        "device_id": item.device_id,
+                                    }
+                                ),
+                            ),
+                            identifier,
+                            placement.deployment_candidate_id,
+                            item.instance_id,
+                            item.device_id,
+                            item.model_bytes,
+                            item.context_bytes,
+                            item.compute_bytes,
+                            item.total_bytes,
+                            item.device_total_bytes,
+                            item.device_free_bytes,
+                            item.source,
+                            item.measured_at,
+                        )
+                        for item in placement.device_memory
+                    ),
+                )
+                self.connection.executemany(
+                    """
+                    INSERT INTO deployment_device_allocation(
+                        deployment_placement_id, device_id, projected_bytes,
+                        reserved_margin_bytes, device_total_bytes,
+                        projected_free_bytes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            identifier,
+                            item.device_id,
+                            item.projected_bytes,
+                            item.reserved_margin_bytes,
+                            item.device_total_bytes,
+                            item.projected_free_bytes,
+                        )
+                        for item in placement.device_allocations
+                    ),
+                )
+            else:
+                existing = self.get(identifier)
+                if existing != placement:
+                    raise RuntimeError(
+                        "deployment placement hash collision or persisted mismatch"
+                    )
+
+        return identifier
+
+    def get(self, identifier: str) -> DeploymentPlacement | None:
+        row = self.connection.execute(
+            "SELECT result_json FROM deployment_placement WHERE id = ?",
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DeploymentPlacement.model_validate_json(str(row["result_json"]))
+
+    def record(self, identifier: str) -> DeploymentPlacementRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, placement_hash, deployment_candidate_id, host_id,
+                   feasibility, request_json, provenance_json, created_at
+            FROM deployment_placement
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DeploymentPlacementRecord(
+            id=str(row["id"]),
+            placement_hash=str(row["placement_hash"]),
+            deployment_candidate_id=str(row["deployment_candidate_id"]),
+            host_id=str(row["host_id"]),
+            feasibility=row["feasibility"],
+            request=_loads_object(str(row["request_json"])),
+            provenance=_loads_object(str(row["provenance_json"])),
+            created_at=str(row["created_at"]),
+        )
+
+    def memory(
+        self,
+        identifier: str,
+    ) -> tuple[PlacementDeviceMemoryRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT id, deployment_placement_id, deployment_candidate_id,
+                   instance_id, device_id, model_bytes, context_bytes,
+                   compute_bytes, total_bytes, device_total_bytes,
+                   device_free_bytes, source, measured_at
+            FROM placement_device_memory
+            WHERE deployment_placement_id = ?
+            ORDER BY instance_id, device_id
+            """,
+            (identifier,),
+        ).fetchall()
+        return tuple(
+            PlacementDeviceMemoryRecord(
+                id=str(row["id"]),
+                deployment_placement_id=str(row["deployment_placement_id"]),
+                deployment_candidate_id=str(row["deployment_candidate_id"]),
+                instance_id=str(row["instance_id"]),
+                device_id=str(row["device_id"]),
+                model_bytes=int(row["model_bytes"]),
+                context_bytes=int(row["context_bytes"]),
+                compute_bytes=int(row["compute_bytes"]),
+                total_bytes=int(row["total_bytes"]),
+                device_total_bytes=int(row["device_total_bytes"]),
+                device_free_bytes=int(row["device_free_bytes"]),
+                source=str(row["source"]),
+                measured_at=row["measured_at"],
+            )
+            for row in rows
+        )
+
+    def allocations(
+        self,
+        identifier: str,
+    ) -> tuple[DeploymentDeviceAllocationRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT deployment_placement_id, device_id, projected_bytes,
+                   reserved_margin_bytes, device_total_bytes,
+                   projected_free_bytes
+            FROM deployment_device_allocation
+            WHERE deployment_placement_id = ?
+            ORDER BY device_id
+            """,
+            (identifier,),
+        ).fetchall()
+        return tuple(
+            DeploymentDeviceAllocationRecord(
+                deployment_placement_id=str(row["deployment_placement_id"]),
+                device_id=str(row["device_id"]),
+                projected_bytes=int(row["projected_bytes"]),
+                reserved_margin_bytes=int(row["reserved_margin_bytes"]),
+                device_total_bytes=int(row["device_total_bytes"]),
+                projected_free_bytes=int(row["projected_free_bytes"]),
+            )
+            for row in rows
+        )
+
+
+class DeploymentRunRepository:
+    """Persistence for deployment execution attempts and their member processes."""
+
+    _TERMINAL = frozenset({"completed", "cancelled", "failed"})
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create(
+        self,
+        *,
+        deployment_candidate_id: str,
+        deployment_placement_id: str | None = None,
+        workload_case_id: str | None = None,
+        status: DeploymentRunStatus = "planned",
+        started_at: str | None = None,
+    ) -> str:
+        if deployment_placement_id is not None:
+            row = self.connection.execute(
+                """
+                SELECT deployment_candidate_id
+                FROM deployment_placement
+                WHERE id = ?
+                """,
+                (deployment_placement_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(
+                    f"deployment placement not found: {deployment_placement_id}"
+                )
+            if str(row["deployment_candidate_id"]) != deployment_candidate_id:
+                raise ValueError(
+                    "deployment placement belongs to a different deployment Candidate"
+                )
+
+        identifier = _event_id("deployrun")
+        self.connection.execute(
+            """
+            INSERT INTO deployment_run(
+                id, deployment_candidate_id, deployment_placement_id,
+                workload_case_id, status, started_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identifier,
+                deployment_candidate_id,
+                deployment_placement_id,
+                workload_case_id,
+                status,
+                started_at,
+            ),
+        )
+        return identifier
+
+    def set_status(
+        self,
+        identifier: str,
+        status: DeploymentRunStatus,
+        *,
+        started_at: str | None = None,
+    ) -> None:
+        if status in self._TERMINAL:
+            raise ValueError("use finish() for terminal deployment-run states")
+        cursor = self.connection.execute(
+            """
+            UPDATE deployment_run
+            SET status = ?,
+                started_at = COALESCE(started_at, ?)
+            WHERE id = ?
+              AND status NOT IN ('completed', 'cancelled', 'failed')
+            """,
+            (status, started_at, identifier),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("deployment run does not exist or is already terminal")
+
+    def add_member(
+        self,
+        deployment_run_id: str,
+        *,
+        instance_id: str,
+        server_run_id: str | None = None,
+        client_run_id: str | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
+        row = self.connection.execute(
+            """
+            SELECT deployment_candidate_id
+            FROM deployment_run
+            WHERE id = ?
+            """,
+            (deployment_run_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"deployment run not found: {deployment_run_id}")
+        deployment_candidate_id = str(row["deployment_candidate_id"])
+        member = self.connection.execute(
+            """
+            SELECT 1
+            FROM deployment_instance
+            WHERE deployment_candidate_id = ? AND instance_id = ?
+            """,
+            (deployment_candidate_id, instance_id),
+        ).fetchone()
+        if member is None:
+            raise ValueError(
+                f"deployment instance not found for run: {instance_id}"
+            )
+        self.connection.execute(
+            """
+            INSERT INTO deployment_run_member(
+                deployment_run_id, deployment_candidate_id, instance_id,
+                server_run_id, client_run_id, result_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                deployment_run_id,
+                deployment_candidate_id,
+                instance_id,
+                server_run_id,
+                client_run_id,
+                canonical_json(dict(result or {})),
+            ),
+        )
+
+    def finish(
+        self,
+        identifier: str,
+        *,
+        status: DeploymentRunStatus,
+        duration_ns: int,
+        quality: RunQuality | None = None,
+        quality_details: Mapping[str, Any] | None = None,
+        failure_kind: DeploymentFailureKind | None = None,
+        failure_details: Mapping[str, Any] | None = None,
+        finished_at: str | None = None,
+    ) -> None:
+        if status not in self._TERMINAL:
+            raise ValueError("finished deployment run must have a terminal status")
+        if status == "failed" and failure_kind is None:
+            raise ValueError("failed deployment run requires failure_kind")
+        if status != "failed" and failure_kind is not None:
+            raise ValueError("non-failed deployment run cannot set failure_kind")
+        cursor = self.connection.execute(
+            """
+            UPDATE deployment_run
+            SET status = ?, duration_ns = ?, quality = ?,
+                quality_details_json = ?, failure_kind = ?,
+                failure_details_json = ?, finished_at = ?
+            WHERE id = ?
+              AND status NOT IN ('completed', 'cancelled', 'failed')
+            """,
+            (
+                status,
+                duration_ns,
+                quality,
+                (
+                    canonical_json(dict(quality_details))
+                    if quality_details is not None
+                    else None
+                ),
+                failure_kind,
+                (
+                    canonical_json(dict(failure_details))
+                    if failure_details is not None
+                    else None
+                ),
+                finished_at or _utc_now(),
+                identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("deployment run does not exist or is already terminal")
+
+    def get(self, identifier: str) -> DeploymentRunRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, deployment_candidate_id, deployment_placement_id,
+                   workload_case_id, status, quality, quality_details_json,
+                   failure_kind, failure_details_json, started_at, finished_at,
+                   duration_ns, created_at
+            FROM deployment_run
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DeploymentRunRecord(
+            id=str(row["id"]),
+            deployment_candidate_id=str(row["deployment_candidate_id"]),
+            deployment_placement_id=row["deployment_placement_id"],
+            workload_case_id=row["workload_case_id"],
+            status=row["status"],
+            quality=row["quality"],
+            quality_details=(
+                None
+                if row["quality_details_json"] is None
+                else _loads_object(str(row["quality_details_json"]))
+            ),
+            failure_kind=row["failure_kind"],
+            failure_details=(
+                None
+                if row["failure_details_json"] is None
+                else _loads_object(str(row["failure_details_json"]))
+            ),
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+            duration_ns=row["duration_ns"],
+            created_at=str(row["created_at"]),
+        )
+
+    def members(
+        self,
+        identifier: str,
+    ) -> tuple[DeploymentRunMemberRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT deployment_run_id, deployment_candidate_id, instance_id,
+                   server_run_id, client_run_id, result_json
+            FROM deployment_run_member
+            WHERE deployment_run_id = ?
+            ORDER BY instance_id
+            """,
+            (identifier,),
+        ).fetchall()
+        return tuple(
+            DeploymentRunMemberRecord(
+                deployment_run_id=str(row["deployment_run_id"]),
+                deployment_candidate_id=str(row["deployment_candidate_id"]),
+                instance_id=str(row["instance_id"]),
+                server_run_id=row["server_run_id"],
+                client_run_id=row["client_run_id"],
+                result=_loads_object(str(row["result_json"])),
+            )
+            for row in rows
+        )
+
