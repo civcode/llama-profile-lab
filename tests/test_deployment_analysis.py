@@ -418,7 +418,7 @@ def _seed_subject(
             phase="dd",
             depth=extra_dd_depth,
             combined_tps=dd_tps - 2.0,
-            retention=retention - 0.02,
+            retention=retention,
         )
     runs.finish(
         deployment_run_id,
