@@ -15,8 +15,8 @@ from llama_profile_lab.db import (
 def test_initial_migration_creates_schema(tmp_path: Path) -> None:
     connection = connect_database(tmp_path / "benchmarks.db")
     try:
-        assert migrate(connection) == 5
-        assert schema_version(connection) == 5
+        assert migrate(connection) == 6
+        assert schema_version(connection) == 6
 
         tables = {
             row[0]
@@ -38,9 +38,17 @@ def test_initial_migration_creates_schema(tmp_path: Path) -> None:
             "server_run",
             "server_benchmark",
             "candidate_evaluation",
+            "deployment_candidate",
+            "deployment_instance",
+            "deployment_placement",
+            "deployment_instance_placement",
+            "placement_device_memory",
+            "deployment_device_allocation",
+            "deployment_run",
+            "deployment_run_member",
         } <= tables
 
-        assert migrate(connection) == 5
+        assert migrate(connection) == 6
     finally:
         connection.close()
 
@@ -82,7 +90,7 @@ def test_non_contiguous_migrations_are_rejected(tmp_path: Path) -> None:
 def test_every_historical_schema_prefix_upgrades_to_current(tmp_path: Path) -> None:
     source_dir = Path(__file__).parents[1] / "migrations"
     migration_files = sorted(source_dir.glob("[0-9][0-9][0-9]_*.sql"))
-    assert len(migration_files) == 5
+    assert len(migration_files) == 6
 
     for prefix_length in range(1, len(migration_files)):
         partial_dir = tmp_path / f"migrations-{prefix_length}"
