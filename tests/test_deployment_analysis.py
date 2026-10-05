@@ -556,6 +556,34 @@ def _seed(tmp_path: Path) -> tuple[Database, dict[str, tuple[str, ...]]]:
         )
         subjects["d"] = (failed[0], failed[1], failed_run, "")
 
+        invalid = _seed_subject(
+            connection,
+            label="e",
+            binary_id=binary_id,
+            host_id=host_id,
+            suite_id=suite_id,
+            qwen_context=5500,
+            flash_context=4500,
+            projected_headroom=1800,
+            runtime_headroom=1700,
+            dd_tps=17.0,
+            pp_tps=85.0,
+            retention=0.72,
+            power_samples=((52.0, 58.0),),
+        )
+        connection.execute(
+            """
+            UPDATE deployment_workload_run
+            SET status = 'invalid',
+                quality = 'correctness_invalid',
+                correctness_valid = 0,
+                failure_kind = 'output_validation_failed'
+            WHERE deployment_run_id = ?
+            """,
+            (invalid[2],),
+        )
+        subjects["e"] = invalid
+
     return database, subjects
 
 
@@ -712,6 +740,7 @@ def test_pareto_applies_constraints_before_multiobjective_dominance(
         for item in unconstrained.frontier
     } == {subjects["a"][1], subjects["b"][1], subjects["c"][1]}
     assert subjects["d"][1] in unconstrained.excluded
+    assert subjects["e"][1] in unconstrained.excluded
 
     constrained = service.pareto(
         objectives=objectives,
@@ -742,6 +771,12 @@ def test_export_round_trip_keeps_failed_rows(tmp_path: Path) -> None:
     assert any(
         row["deployment_run_id"] == subjects["d"][2]
         and row["deployment_status"] == "failed"
+        for row in json_rows
+    )
+    assert any(
+        row["deployment_placement_id"] == subjects["e"][1]
+        and row["workload_status"] == "invalid"
+        and row["correctness_valid"] is False
         for row in json_rows
     )
     assert any(
