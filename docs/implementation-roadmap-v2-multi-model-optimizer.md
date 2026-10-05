@@ -1789,6 +1789,7 @@ V2 workstation acceptance passes when:
 - [x] Add runtime projection-delta reporting.
 - [x] Add correctness probes for finalists.
 - [x] Write V2 operator docs.
+- [x] Add machine-checkable workstation acceptance report.
 - [ ] Execute target-workstation acceptance.
 - [ ] Record acceptance artifacts/results.
 - [ ] Update known limitations from measured behavior.
@@ -1831,6 +1832,7 @@ Implementation notes and validation:
 - deployment memory analysis reports signed runtime-versus-projection peak-use and free-headroom deltas per physical device;
 - the production concurrent client classifies malformed/non-object SSE, regressing token counters, contradictory final counters, and exact token-count mismatches as correctness-invalid output;
 - V2 operator documentation now includes getting started, architecture, benchmark workflow, troubleshooting, known limitations, release checklist, and draft release notes;
+- `llprof deployment acceptance-report` evaluates persisted target-workstation evidence without launching new workloads and explicitly leaves Pareto selection, target identity confirmation, and clean-checkout gates pending for operator/release sign-off;
 - GitHub Actions were not dispatched. This environment still cannot obtain a runnable clean checkout, so the locked Python and frontend acceptance gates remain explicitly pending.
 
 ### Final acceptance gate
