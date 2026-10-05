@@ -359,7 +359,11 @@ def _identity_evidence(payload: dict[str, Any], deployment_id: str) -> dict[str,
     ]
     estimates = payload["planning"]["memory_estimates"]
     binaries = {str(row["id"]): row for row in payload["environment"]["binaries"]}
-    candidate_ids = {str(row["candidate_id"]) for row in instances}
+    candidate_ids = {
+        str(row["candidate_id"])
+        for row in payload["planning"]["resolved_placements"]
+        if row.get("candidate_id")
+    }
     estimated_ids = {
         str(row["candidate_id"]) for row in estimates if row.get("candidate_id")
     }
