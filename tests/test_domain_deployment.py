@@ -120,3 +120,34 @@ def test_homogeneous_backend_pair_is_valid() -> None:
     assert policy.allowed_backend_pairs == (
         BackendPair(left="CUDA", right="CUDA"),
     )
+
+def test_performance_relevant_change_changes_deployment_hash() -> None:
+    original = candidate((instance("qwen"), instance("flash")))
+    changed_instance = instance("qwen").model_copy(
+        update={
+            "requested_placement": DeploymentPlacementRequest(
+                devices=("CUDA0", "Vulkan0"),
+                tensor_split=(1.0, 1.0),
+            )
+        }
+    )
+    changed = candidate((changed_instance, instance("flash")))
+
+    assert original.content_hash() != changed.content_hash()
+
+
+def test_deployment_round_trips_through_canonical_json() -> None:
+    original = candidate((instance("qwen"), instance("flash")))
+
+    restored = DeploymentCandidate.model_validate_json(
+        original.canonical_identity_json()
+    )
+
+    assert restored == original
+    assert restored.content_hash() == original.content_hash()
+
+
+def test_resource_policy_rejects_duplicate_devices() -> None:
+    with pytest.raises(ValidationError, match="allowed_devices"):
+        HostResourcePolicy(allowed_devices=("CUDA0", "CUDA0"))
+
