@@ -422,18 +422,18 @@ class DeploymentExecutor:
                     else:
                         failure_kind = "member_crash"
                     failure_message = f"{instance_id}: {error}"
-        except (
-            DeploymentExecutionError,
-            LlamaServerConfigurationError,
-            PlacementConfigurationError,
-            OSError,
-            ValueError,
-        ) as exc:
+        except Exception as exc:
             failure_kind = failure_kind or "server_start_failed"
             failure_message = str(exc)
         finally:
             if reservations is not None:
                 reservations.close()
+
+        cleanup = registry.stop_all()
+        cleanup_failed = any(error is not None for _, error in cleanup.values())
+        if cleanup_failed and failure_message is None:
+            failure_kind = "member_crash"
+            failure_message = "one or more deployment members failed cleanup"
 
         terminal_member_status: DeploymentMemberStatus = (
             "cancelled"
@@ -442,12 +442,6 @@ class DeploymentExecutor:
             if failure_message is not None
             else "stopped"
         )
-        cleanup = registry.stop_all()
-        cleanup_failed = any(error is not None for _, error in cleanup.values())
-        if cleanup_failed and failure_message is None:
-            failure_kind = "member_crash"
-            failure_message = "one or more deployment members failed cleanup"
-
         self._finalize_members(
             run_id,
             member_plans,
@@ -632,7 +626,6 @@ class DeploymentExecutor:
             }
             instances = {item.instance_id: item for item in deployment.instances}
             result: list[_MemberPlan] = []
-            runs = DeploymentRunRepository(connection)
             for plan in plans:
                 instance = instances[plan.instance_id]
                 candidate = candidates.get(instance.candidate_id)
@@ -663,19 +656,6 @@ class DeploymentExecutor:
                     )
                 except LlamaServerConfigurationError as exc:
                     raise DeploymentExecutionError(str(exc)) from exc
-                runs.add_member(
-                    run_id,
-                    instance_id=plan.instance_id,
-                    endpoint=endpoint,
-                    argv=argv,
-                    target_model_path=str(plan.model_path),
-                    draft_model_path=(
-                        None
-                        if plan.draft_model_path is None
-                        else str(plan.draft_model_path)
-                    ),
-                    result={"server_identity": instance.server_identity},
-                )
                 result.append(
                     _MemberPlan(
                         instance_id=plan.instance_id,
@@ -685,6 +665,23 @@ class DeploymentExecutor:
                         model_path=plan.model_path,
                         draft_model_path=plan.draft_model_path,
                     )
+                )
+
+            runs = DeploymentRunRepository(connection)
+            for plan in result:
+                instance = instances[plan.instance_id]
+                runs.add_member(
+                    run_id,
+                    instance_id=plan.instance_id,
+                    endpoint=plan.endpoint,
+                    argv=plan.argv,
+                    target_model_path=str(plan.model_path),
+                    draft_model_path=(
+                        None
+                        if plan.draft_model_path is None
+                        else str(plan.draft_model_path)
+                    ),
+                    result={"server_identity": instance.server_identity},
                 )
             return tuple(result)
 
