@@ -430,6 +430,9 @@ class DeploymentExecutor:
                     else:
                         failure_kind = "member_crash"
                     failure_message = f"{instance_id}: {error}"
+        except KeyboardInterrupt:
+            cancelled = True
+            failure_message = "deployment execution interrupted"
         except Exception as exc:
             failure_kind = failure_kind or "server_start_failed"
             failure_message = str(exc)
