@@ -638,6 +638,13 @@ def test_memory_matrix_distinguishes_projected_and_runtime(
     assert rows["runtime_peak"].source == "runtime"
     assert rows["runtime_peak"].values["gpu0"] == 8000
     assert rows["runtime_free_min"].values["gpu0"] == 2000
+    deltas = {item.device_id: item for item in matrix.deltas}
+    assert deltas["gpu0"].projected_bytes == 7300
+    assert deltas["gpu0"].runtime_peak_used_bytes == 8000
+    assert deltas["gpu0"].used_delta_bytes == 700
+    assert deltas["gpu0"].projected_free_bytes == 2200
+    assert deltas["gpu0"].runtime_min_free_bytes == 2000
+    assert deltas["gpu0"].free_delta_bytes == -200
 
 
 def test_interference_preserves_member_and_latency_metrics(
