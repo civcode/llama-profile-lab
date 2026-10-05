@@ -109,6 +109,7 @@ def test_sysfs_gpu_provider_reads_generic_drm_metrics(tmp_path: Path) -> None:
     assert samples[0].power_w == 125
     assert samples[0].sources == ("sysfs",)
 
+
 def test_nvidia_provider_normalizes_pci_identity_and_source(
     monkeypatch,
 ) -> None:
