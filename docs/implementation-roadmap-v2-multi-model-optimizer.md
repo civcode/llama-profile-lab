@@ -1977,18 +1977,22 @@ Avoid claiming target-workstation behavior before it has been measured.
 
 ## 21. Branch and commit strategy
 
-V2 implementation should use a feature branch or milestone branches rather than direct changes to the default branch.
-
-Recommended pattern:
+The canonical V2 development branch for this repository is:
 
 ~~~text
-feature/multi-model-gpu-optimizer
+feature/multi-model-gpu-optimizer-spec
+~~~
+
+Commit V2 implementation checkpoints directly to that branch. Do not use `main` as the routine V2 development target, and do not create auxiliary PR, staging, or milestone branches unless explicitly requested.
+
+The branch should retain checkpoint commits for each milestone:
+
+~~~text
+feature/multi-model-gpu-optimizer-spec
   checkpoint commits for V2-M1
   checkpoint commits for V2-M2
   ...
 ~~~
-
-or separate milestone branches when review size warrants it.
 
 Commit after each meaningful subtask and push promptly.
 
