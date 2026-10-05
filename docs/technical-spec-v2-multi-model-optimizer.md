@@ -587,6 +587,8 @@ Raw samples remain canonical.
 
 GPU-wide telemetry cannot fully attribute utilization to a particular model process on every backend. V2 should report per-device totals without pretending they are per-process unless a provider supplies reliable process attribution.
 
+The V2-M3 implementation uses normalized PCI identity first, UUID second, and explicit stable mappings third for correlation. It never merges by product name alone. Provider provenance is retained on raw GPU samples, aggregate V1 summary fields remain unchanged, and stable encoded per-device metric keys are emitted alongside a structured per-device summary.
+
 ## 17. Persistence
 
 Add normalized records rather than embedding the entire deployment result in JSON only.
