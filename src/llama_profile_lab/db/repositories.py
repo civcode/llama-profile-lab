@@ -3453,7 +3453,25 @@ class StandaloneBaselineRepository:
         latency_ms: float | None = None,
         source: Mapping[str, Any] | None = None,
     ) -> str:
-        identifier = _event_id("standalone")
+        source_payload = dict(source or {})
+        identifier = _content_id(
+            "standalone",
+            sha256_json(
+                {
+                    "candidate_id": candidate_id,
+                    "resolved_placement_id": resolved_placement_id,
+                    "host_id": host_id,
+                    "binary_id": binary_id,
+                    "mode": mode,
+                    "prompt_tokens": prompt_tokens,
+                    "generate_tokens": generate_tokens,
+                    "depth_tokens": depth_tokens,
+                    "throughput_tps": throughput_tps,
+                    "latency_ms": latency_ms,
+                    "source": source_payload,
+                }
+            ),
+        )
         self.connection.execute(
             """
             INSERT INTO deployment_standalone_baseline(
@@ -3462,6 +3480,7 @@ class StandaloneBaselineRepository:
                 throughput_tps, latency_ms, source_json
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
             """,
             (
                 identifier,
@@ -3475,7 +3494,7 @@ class StandaloneBaselineRepository:
                 depth_tokens,
                 throughput_tps,
                 latency_ms,
-                canonical_json(dict(source or {})),
+                canonical_json(source_payload),
             ),
         )
         return identifier
