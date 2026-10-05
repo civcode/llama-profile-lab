@@ -583,7 +583,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
             {plannerDimensions.map((dimension, index) => (
               <div className="planner-dimension-row" key={dimension.key}>
                 <label className="field">
-                  <span>Search path</span>
+                  <span>{"Search path " + (index + 1)}</span>
                   <input
                     list={"deployment-paths-" + index}
                     value={dimension.path}
@@ -604,7 +604,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                   </datalist>
                 </label>
                 <label className="field">
-                  <span>Values · JSON array</span>
+                  <span>{"Values " + (index + 1) + " · JSON array"}</span>
                   <input
                     value={dimension.values}
                     onChange={(event) =>
@@ -614,7 +614,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                   />
                 </label>
                 <label className="field">
-                  <span>Condition · optional</span>
+                  <span>{"Condition " + (index + 1) + " · optional"}</span>
                   <input
                     value={dimension.condition}
                     onChange={(event) =>
@@ -706,7 +706,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
         </div>
       </section>
 
-      <section className="panel live-panel">
+      <section className="panel live-panel" aria-live="polite">
         <div className="section-body">
           <div className="section-heading-row">
             <div>
@@ -1002,6 +1002,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                 <label className="field">
                   <span>Direction</span>
                   <select
+                    aria-label="Deployment objective X direction"
                     value={paretoDirectionA}
                     onChange={(event) =>
                       setParetoDirectionA(event.target.value as "max" | "min")
@@ -1014,6 +1015,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                 <label className="field">
                   <span>Phase filter</span>
                   <select
+                    aria-label="Deployment objective X phase filter"
                     value={paretoPhaseA}
                     onChange={(event) => setParetoPhaseA(event.target.value)}
                   >
@@ -1046,6 +1048,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                 <label className="field">
                   <span>Direction</span>
                   <select
+                    aria-label="Deployment objective Y direction"
                     value={paretoDirectionB}
                     onChange={(event) =>
                       setParetoDirectionB(event.target.value as "max" | "min")
@@ -1058,6 +1061,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                 <label className="field">
                   <span>Phase filter</span>
                   <select
+                    aria-label="Deployment objective Y phase filter"
                     value={paretoPhaseB}
                     onChange={(event) => setParetoPhaseB(event.target.value)}
                   >
