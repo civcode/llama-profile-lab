@@ -24,6 +24,7 @@ from llama_profile_lab.db.records import (
     DeploymentGpuSampleRecord,
     DeploymentInstanceRecord,
     DeploymentMemberStatus,
+    DeploymentOperationRecord,
     DeploymentPlacementRecord,
     DeploymentPlanCaseRecord,
     DeploymentPlanRecord,
@@ -2397,6 +2398,290 @@ class DeploymentPlacementRepository:
             )
             for row in rows
         )
+
+
+class DeploymentOperationRepository:
+    """Durable control state for deployment run/pause/resume/cancel."""
+
+    _ACTIVE = frozenset({"running", "pausing", "cancelling"})
+    _TERMINAL = frozenset({"completed", "paused", "cancelled", "failed"})
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create(
+        self,
+        *,
+        base_deployment_candidate_id: str,
+        deployment_placement_id: str,
+        request: Mapping[str, Any],
+        started_at: str | None = None,
+    ) -> str:
+        active = self.connection.execute(
+            """
+            SELECT id
+            FROM deployment_operation
+            WHERE status IN ('running', 'pausing', 'cancelling')
+            ORDER BY created_at, id
+            LIMIT 1
+            """
+        ).fetchone()
+        if active is not None:
+            raise ValueError(
+                "another deployment operation is already active on this host"
+            )
+        row = self.connection.execute(
+            """
+            SELECT 1
+            FROM deployment_candidate
+            WHERE id = ?
+            """,
+            (base_deployment_candidate_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"deployment Candidate not found: "
+                f"{base_deployment_candidate_id}"
+            )
+        placement = self.connection.execute(
+            """
+            SELECT deployment_candidate_id
+            FROM deployment_placement
+            WHERE id = ?
+            """,
+            (deployment_placement_id,),
+        ).fetchone()
+        if placement is None:
+            raise ValueError(
+                f"deployment placement not found: {deployment_placement_id}"
+            )
+        if not _deployment_contains_placement(
+            self.connection,
+            base_deployment_candidate_id,
+            deployment_placement_id,
+        ):
+            raise ValueError(
+                "deployment placement does not belong to this deployment "
+                "or one of its planned candidates"
+            )
+        identifier = _event_id("deployop")
+        self.connection.execute(
+            """
+            INSERT INTO deployment_operation(
+                id, base_deployment_candidate_id, deployment_placement_id,
+                request_json, status, started_at
+            )
+            VALUES (?, ?, ?, ?, 'running', ?)
+            """,
+            (
+                identifier,
+                base_deployment_candidate_id,
+                deployment_placement_id,
+                canonical_json(dict(request)),
+                started_at or _utc_now(),
+            ),
+        )
+        return identifier
+
+    def get(self, identifier: str) -> DeploymentOperationRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, base_deployment_candidate_id, deployment_placement_id,
+                   deployment_run_id, request_json, status,
+                   requested_action, started_at, finished_at, error, created_at
+            FROM deployment_operation
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def latest_for_deployment(
+        self,
+        deployment_candidate_id: str,
+    ) -> DeploymentOperationRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, base_deployment_candidate_id, deployment_placement_id,
+                   deployment_run_id, request_json, status,
+                   requested_action, started_at, finished_at, error, created_at
+            FROM deployment_operation
+            WHERE base_deployment_candidate_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (deployment_candidate_id,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def active_for_deployment(
+        self,
+        deployment_candidate_id: str,
+    ) -> DeploymentOperationRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, base_deployment_candidate_id, deployment_placement_id,
+                   deployment_run_id, request_json, status,
+                   requested_action, started_at, finished_at, error, created_at
+            FROM deployment_operation
+            WHERE base_deployment_candidate_id = ?
+              AND status IN ('running', 'pausing', 'cancelling')
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (deployment_candidate_id,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def request_action(
+        self,
+        deployment_candidate_id: str,
+        action: str,
+    ) -> DeploymentOperationRecord:
+        if action not in {"pause", "cancel"}:
+            raise ValueError("deployment action must be pause or cancel")
+        active = self.active_for_deployment(deployment_candidate_id)
+        if active is None:
+            latest = self.latest_for_deployment(deployment_candidate_id)
+            if latest is None:
+                raise ValueError("deployment has no operation to control")
+            if action == "cancel" and latest.status == "paused":
+                self.connection.execute(
+                    """
+                    UPDATE deployment_operation
+                    SET status = 'cancelled',
+                        requested_action = 'cancel',
+                        finished_at = COALESCE(finished_at, ?)
+                    WHERE id = ?
+                    """,
+                    (_utc_now(), latest.id),
+                )
+                cancelled = self.get(latest.id)
+                if cancelled is None:
+                    raise RuntimeError("deployment operation disappeared")
+                return cancelled
+            raise ValueError(
+                f"deployment has no active operation to {action}"
+            )
+        status = "pausing" if action == "pause" else "cancelling"
+        self.connection.execute(
+            """
+            UPDATE deployment_operation
+            SET status = ?, requested_action = ?
+            WHERE id = ?
+            """,
+            (status, action, active.id),
+        )
+        updated = self.get(active.id)
+        if updated is None:
+            raise RuntimeError("deployment operation disappeared")
+        return updated
+
+    def attach_run(self, identifier: str, deployment_run_id: str) -> None:
+        cursor = self.connection.execute(
+            """
+            UPDATE deployment_operation
+            SET deployment_run_id = COALESCE(deployment_run_id, ?)
+            WHERE id = ?
+            """,
+            (deployment_run_id, identifier),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("deployment operation not found")
+
+    def finish(
+        self,
+        identifier: str,
+        *,
+        status: str,
+        deployment_run_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        if status not in self._TERMINAL:
+            raise ValueError("deployment operation finish status is not terminal")
+        cursor = self.connection.execute(
+            """
+            UPDATE deployment_operation
+            SET status = ?,
+                deployment_run_id = COALESCE(?, deployment_run_id),
+                finished_at = ?,
+                error = ?
+            WHERE id = ?
+              AND status IN ('running', 'pausing', 'cancelling')
+            """,
+            (
+                status,
+                deployment_run_id,
+                _utc_now(),
+                error,
+                identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "deployment operation does not exist or is already terminal"
+            )
+
+    def is_control_requested(self, identifier: str) -> bool:
+        row = self.connection.execute(
+            """
+            SELECT requested_action
+            FROM deployment_operation
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        return row is not None and row["requested_action"] is not None
+
+    @staticmethod
+    def _record(row: sqlite3.Row) -> DeploymentOperationRecord:
+        return DeploymentOperationRecord(
+            id=str(row["id"]),
+            base_deployment_candidate_id=str(
+                row["base_deployment_candidate_id"]
+            ),
+            deployment_placement_id=str(row["deployment_placement_id"]),
+            deployment_run_id=row["deployment_run_id"],
+            request=_loads_object(str(row["request_json"])),
+            status=str(row["status"]),
+            requested_action=row["requested_action"],
+            started_at=str(row["started_at"]),
+            finished_at=row["finished_at"],
+            error=row["error"],
+            created_at=str(row["created_at"]),
+        )
+
+
+def _deployment_contains_placement(
+    connection: sqlite3.Connection,
+    base_deployment_candidate_id: str,
+    deployment_placement_id: str,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1
+        FROM deployment_placement AS dp
+        WHERE dp.id = ?
+          AND (
+              dp.deployment_candidate_id = ?
+              OR EXISTS (
+                  SELECT 1
+                  FROM deployment_plan AS plan
+                  JOIN deployment_plan_case AS pc
+                    ON pc.deployment_plan_id = plan.id
+                  WHERE plan.base_deployment_candidate_id = ?
+                    AND pc.deployment_placement_id = dp.id
+              )
+          )
+        LIMIT 1
+        """,
+        (
+            deployment_placement_id,
+            base_deployment_candidate_id,
+            base_deployment_candidate_id,
+        ),
+    ).fetchone()
+    return row is not None
 
 
 class DeploymentRunRepository:

@@ -58,7 +58,7 @@ def test_initial_migration_creates_schema(tmp_path: Path) -> None:
             "deployment_standalone_baseline",
             "deployment_workload_member",
             "deployment_gpu_sample",
-            "deployment_control_request",
+            "deployment_operation",
         } <= tables
 
         assert migrate(connection) == 14

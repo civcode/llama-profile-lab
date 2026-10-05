@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from threading import Event, Thread
 from typing import Literal, cast
 
 from llama_profile_lab import __version__
@@ -17,12 +18,24 @@ from llama_profile_lab.analysis import (
     AnalysisFilter,
     AnalysisService,
     DeploymentAnalysisError,
-    DeploymentAnalysisFilter,
-    DeploymentAnalysisService,
-    DeploymentMetricConstraint,
-    DeploymentParetoObjective,
     ParetoObjective,
     serialize_export,
+)
+from llama_profile_lab.api.deployment_operations import (
+    DeploymentOperationError,
+    DeploymentOperationManager,
+    DeploymentOperationSnapshot,
+    DeploymentOperationSpec,
+)
+from llama_profile_lab.api.dto import DeploymentCreateRequest
+from llama_profile_lab.api.operations import OperationManager
+from llama_profile_lab.api.service import (
+    ApiConflictError,
+    ApiNotFoundError,
+    ApiService,
+    parse_deployment_constraints,
+    parse_deployment_filters,
+    parse_deployment_objectives,
 )
 from llama_profile_lab.api.profiles import LauncherProfileError, LauncherProfileProvider
 from llama_profile_lab.archive import (
@@ -33,15 +46,16 @@ from llama_profile_lab.archive import (
 from llama_profile_lab.db import (
     BenchmarkRunRepository,
     Database,
-    DeploymentCandidateRepository,
-    DeploymentPlacementRepository,
     EnvironmentRepository,
     PlacementRepository,
     TelemetryRepository,
 )
 from llama_profile_lab.db.records import BinaryRecord
 from llama_profile_lab.diagnostics import inspect_database
-from llama_profile_lab.domain import DeploymentCandidate, DeploymentSearchSpace
+from llama_profile_lab.domain import (
+    DeploymentCandidate,
+    DeploymentSearchSpace,
+)
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     ConcurrentDeploymentError,
@@ -370,11 +384,22 @@ def _add_deployment_parser(
 ) -> None:
     deployment = commands.add_parser(
         "deployment",
-        help="Plan or execute joint multi-model deployments.",
+        help="Create, plan, run, inspect, and analyze multi-model deployments.",
     )
     deployment_commands = deployment.add_subparsers(
         dest="deployment_command"
     )
+
+    create = deployment_commands.add_parser(
+        "create",
+        help="Persist one immutable base deployment definition.",
+    )
+    create.add_argument(
+        "spec",
+        type=Path,
+        help="JSON DeploymentCandidate or {deployment: ...} document.",
+    )
+    _add_database_argument(create)
 
     preview = deployment_commands.add_parser(
         "preview",
@@ -398,6 +423,122 @@ def _add_deployment_parser(
     )
     _add_database_argument(plan)
 
+    show = deployment_commands.add_parser(
+        "show",
+        help="Show one base deployment definition and computed state.",
+    )
+    show.add_argument("deployment_id")
+    show.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(show)
+
+    placement = deployment_commands.add_parser(
+        "placement",
+        help="Show planned placement memory matrices.",
+    )
+    placement.add_argument("deployment_id")
+    placement.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(placement)
+
+    run = deployment_commands.add_parser(
+        "run",
+        help="Run a durable concurrent deployment benchmark.",
+    )
+    run.add_argument("deployment_id")
+    run.add_argument(
+        "spec",
+        type=Path,
+        help="JSON concurrent deployment benchmark specification.",
+    )
+    _add_database_argument(run)
+
+    pause = deployment_commands.add_parser(
+        "pause",
+        help="Request cooperative pause of an active deployment run.",
+    )
+    pause.add_argument("deployment_id")
+    _add_database_argument(pause)
+
+    resume = deployment_commands.add_parser(
+        "resume",
+        help="Resume the latest paused deployment operation.",
+    )
+    resume.add_argument("deployment_id")
+    resume.add_argument(
+        "--spec",
+        type=Path,
+        default=None,
+        help="Optional replacement benchmark spec; defaults to persisted request.",
+    )
+    _add_database_argument(resume)
+
+    cancel = deployment_commands.add_parser(
+        "cancel",
+        help="Cancel an active or paused deployment operation.",
+    )
+    cancel.add_argument("deployment_id")
+    _add_database_argument(cancel)
+
+    results = deployment_commands.add_parser(
+        "results",
+        help="Show raw M7 deployment analysis rows.",
+    )
+    results.add_argument("deployment_id")
+    results.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Exact deployment analysis filter PATH=VALUE.",
+    )
+    results.add_argument(
+        "--format",
+        choices=("table", "json", "csv"),
+        default="table",
+        dest="format_name",
+    )
+    results.add_argument("--output", type=Path, default=None)
+    _add_database_argument(results)
+
+    pareto = deployment_commands.add_parser(
+        "pareto",
+        help="Show the constrained deployment Pareto frontier.",
+    )
+    pareto.add_argument("deployment_id")
+    pareto.add_argument(
+        "--objective",
+        action="append",
+        required=True,
+        help="KEY:DIRECTION:METRIC[@PATH=VALUE;PATH=VALUE].",
+    )
+    pareto.add_argument(
+        "--constraint",
+        action="append",
+        default=[],
+        help="METRIC:OP:VALUE[@PATH=VALUE;PATH=VALUE].",
+    )
+    pareto.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Exact deployment analysis filter PATH=VALUE.",
+    )
+    pareto.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(pareto)
+
     execute = deployment_commands.add_parser(
         "execute",
         help="Launch every server in one persisted deployment placement.",
@@ -419,123 +560,6 @@ def _add_deployment_parser(
         help="JSON concurrent deployment benchmark specification.",
     )
     _add_database_argument(benchmark)
-
-    create = deployment_commands.add_parser(
-        "create",
-        help="Persist one immutable deployment Candidate from JSON.",
-    )
-    create.add_argument("spec", type=Path)
-    _add_database_argument(create)
-
-    show = deployment_commands.add_parser(
-        "show",
-        help="Show one deployment workflow and its derived plan scope.",
-    )
-    show.add_argument("deployment_id")
-    show.add_argument(
-        "--format",
-        choices=("table", "json"),
-        default="table",
-        dest="format_name",
-    )
-    _add_database_argument(show)
-
-    placement = deployment_commands.add_parser(
-        "placement",
-        help="Inspect one persisted deployment placement and memory evidence.",
-    )
-    placement.add_argument("placement_id")
-    placement.add_argument("--run", dest="deployment_run_id", default=None)
-    placement.add_argument(
-        "--format",
-        choices=("table", "json"),
-        default="table",
-        dest="format_name",
-    )
-    _add_database_argument(placement)
-
-    run = deployment_commands.add_parser(
-        "run",
-        help="Run synchronized deployment workloads from an execution spec.",
-    )
-    run.add_argument("spec", type=Path)
-    _add_database_argument(run)
-
-    resume = deployment_commands.add_parser(
-        "resume",
-        help="Replay a deployment execution spec after a stopped run.",
-    )
-    resume.add_argument("spec", type=Path)
-    _add_database_argument(resume)
-
-    pause = deployment_commands.add_parser(
-        "pause",
-        help="Request cooperative teardown of a running CLI deployment.",
-    )
-    pause.add_argument("deployment_id")
-    _add_database_argument(pause)
-
-    cancel = deployment_commands.add_parser(
-        "cancel",
-        help="Cancel a running CLI deployment cooperatively.",
-    )
-    cancel.add_argument("deployment_id")
-    _add_database_argument(cancel)
-
-    deployment_results = deployment_commands.add_parser(
-        "results",
-        help="Export observations for a base deployment and its planned Candidates.",
-    )
-    deployment_results.add_argument("deployment_id")
-    deployment_results.add_argument(
-        "--format",
-        choices=("csv", "json"),
-        default="json",
-        dest="format_name",
-    )
-    deployment_results.add_argument("--output", type=Path, default=None)
-    deployment_results.add_argument(
-        "--filter",
-        action="append",
-        default=[],
-        dest="filters",
-        help="Exact deployment filter PATH=VALUE; may be repeated.",
-    )
-    _add_database_argument(deployment_results)
-
-    deployment_pareto = deployment_commands.add_parser(
-        "pareto",
-        help="Return Pareto-optimal placements for one deployment plan scope.",
-    )
-    deployment_pareto.add_argument("deployment_id")
-    deployment_pareto.add_argument(
-        "--objective",
-        action="append",
-        required=True,
-        dest="objectives",
-        help="KEY:DIRECTION:METRIC[@PATH=VALUE;...]",
-    )
-    deployment_pareto.add_argument(
-        "--constraint",
-        action="append",
-        default=[],
-        dest="constraints",
-        help="METRIC:OPERATOR:VALUE[@PATH=VALUE;...]",
-    )
-    deployment_pareto.add_argument(
-        "--filter",
-        action="append",
-        default=[],
-        dest="filters",
-        help="Exact deployment filter PATH=VALUE; may be repeated.",
-    )
-    deployment_pareto.add_argument(
-        "--format",
-        choices=("table", "json"),
-        default="table",
-        dest="format_name",
-    )
-    _add_database_argument(deployment_pareto)
 
 
 def _add_results_parser(
@@ -1486,33 +1510,14 @@ def _ui_command(
     return 0
 
 
-def _deployment_scope_ids(
-    database: Database,
-    deployment_id: str,
-) -> tuple[str, ...]:
-    with database.session() as connection:
-        repository = DeploymentCandidateRepository(connection)
-        if repository.get(deployment_id) is None:
-            raise DeploymentAnalysisError(
-                f"deployment Candidate not found: {deployment_id}"
-            )
-        rows = connection.execute(
-            """
-            SELECT DISTINCT dpc.deployment_candidate_id
-            FROM deployment_plan_case AS dpc
-            JOIN deployment_plan AS dp
-              ON dp.id = dpc.deployment_plan_id
-            WHERE dp.base_deployment_candidate_id = ?
-            ORDER BY dpc.deployment_candidate_id
-            """,
-            (deployment_id,),
-        ).fetchall()
-    derived = tuple(
-        str(row["deployment_candidate_id"])
-        for row in rows
-        if str(row["deployment_candidate_id"]) != deployment_id
+def _deployment_api_service(database_path: Path) -> ApiService:
+    database = Database(database_path)
+    return ApiService(
+        database,
+        profiles=LauncherProfileProvider(None),
+        operations=OperationManager(database),
+        deployment_operations=DeploymentOperationManager(database),
     )
-    return (deployment_id, *derived)
 
 
 def _deployment_create_command(
@@ -1523,20 +1528,29 @@ def _deployment_create_command(
         raw = json.loads(
             spec_path.expanduser().resolve().read_text(encoding="utf-8")
         )
-        payload = (
-            raw.get("deployment")
-            if isinstance(raw, dict) and "deployment" in raw
-            else raw
+        if not isinstance(raw, dict):
+            raise ValueError("deployment create spec must be a JSON object")
+        deployment_raw = raw.get("deployment", raw)
+        if not isinstance(deployment_raw, dict):
+            raise ValueError("deployment definition must be a JSON object")
+        deployment = DeploymentCandidate.model_validate(deployment_raw)
+        result = _deployment_api_service(
+            database_path
+        ).create_deployment(
+            DeploymentCreateRequest(deployment=deployment)
         )
-        deployment = DeploymentCandidate.model_validate(payload)
-        with Database(database_path).session() as connection:
-            identifier = DeploymentCandidateRepository(connection).put(
-                deployment
-            )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (
+        ApiConflictError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    print(identifier)
+
+    print(f"Deployment: {result.id}")
+    print(f"Status: {result.status}")
+    print(f"Instances: {len(result.definition.instances)}")
     return 0
 
 
@@ -1546,279 +1560,232 @@ def _deployment_show_command(
     *,
     format_name: str,
 ) -> int:
-    database = Database(database_path)
     try:
-        scope = _deployment_scope_ids(database, deployment_id)
-        with database.session() as connection:
-            repository = DeploymentCandidateRepository(connection)
-            record = repository.record(deployment_id)
-            definition = repository.get(deployment_id)
-            if record is None or definition is None:
-                raise DeploymentAnalysisError(
-                    f"deployment Candidate not found: {deployment_id}"
-                )
-            placeholders = ",".join("?" for _ in scope)
-            counts = connection.execute(
-                f"""
-                SELECT
-                    (SELECT COUNT(*) FROM deployment_placement
-                     WHERE deployment_candidate_id IN ({placeholders}))
-                        AS placements,
-                    (SELECT COUNT(*) FROM deployment_run
-                     WHERE deployment_candidate_id IN ({placeholders}))
-                        AS runs
-                """,
-                (*scope, *scope),
-            ).fetchone()
-    except DeploymentAnalysisError as exc:
+        result = _deployment_api_service(
+            database_path
+        ).get_deployment(deployment_id)
+    except ApiNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    placement_count = 0 if counts is None else int(counts["placements"])
-    run_count = 0 if counts is None else int(counts["runs"])
     if format_name == "json":
-        print(
-            json.dumps(
-                {
-                    "id": deployment_id,
-                    "deployment_hash": record.deployment_hash,
-                    "created_at": record.created_at,
-                    "scope_candidate_ids": scope,
-                    "placement_count": placement_count,
-                    "run_count": run_count,
-                    "definition": definition.model_dump(mode="json"),
-                },
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        print(result.model_dump_json(indent=2))
         return 0
 
-    print(f"Deployment: {deployment_id}")
-    print(f"Derived Candidates: {max(0, len(scope) - 1)}")
-    print(f"Placements: {placement_count}")
-    print(f"Runs: {run_count}")
-    print(f"Created: {record.created_at}")
+    print(f"Deployment: {result.id}")
+    print(f"Status: {result.status}")
+    print(f"Created: {result.created_at}")
+    print(f"Plans: {result.plan_count}")
+    print(f"Placements: {result.placement_count}")
+    print(f"Runs: {result.run_count}")
+    print(f"Latest plan: {result.latest_plan_id or '-'}")
+    for instance in result.definition.instances:
+        print(
+            f"{instance.instance_id}: role={instance.role} "
+            f"candidate={instance.candidate_id} "
+            f"binary={instance.binary_id}"
+        )
     return 0
 
 
 def _deployment_placement_command(
     database_path: Path,
-    placement_id: str,
+    deployment_id: str,
     *,
-    deployment_run_id: str | None,
     format_name: str,
 ) -> int:
-    database = Database(database_path)
-    with database.session() as connection:
-        repository = DeploymentPlacementRepository(connection)
-        record = repository.record(placement_id)
-        placement = repository.get(placement_id)
-        memory = repository.memory(placement_id)
-        allocations = repository.allocations(placement_id)
-    if record is None or placement is None:
-        print(
-            f"error: deployment placement not found: {placement_id}",
-            file=sys.stderr,
-        )
+    try:
+        response = _deployment_api_service(
+            database_path
+        ).list_deployment_placements(deployment_id)
+    except (ApiNotFoundError, DeploymentAnalysisError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    matrix = None
-    if deployment_run_id is not None:
-        try:
-            matrix = DeploymentAnalysisService(database).memory_matrix(
-                placement_id,
-                deployment_run_id=deployment_run_id,
-            )
-        except DeploymentAnalysisError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
-
     if format_name == "json":
-        payload = {
-            "record": {
-                "id": record.id,
-                "deployment_candidate_id": record.deployment_candidate_id,
-                "host_id": record.host_id,
-                "feasibility": record.feasibility,
-                "request": dict(record.request),
-                "provenance": dict(record.provenance),
-                "created_at": record.created_at,
-            },
-            "placement": placement.model_dump(mode="json"),
-            "memory": [
-                {
-                    "instance_id": item.instance_id,
-                    "device_id": item.device_id,
-                    "model_bytes": item.model_bytes,
-                    "context_bytes": item.context_bytes,
-                    "compute_bytes": item.compute_bytes,
-                    "total_bytes": item.total_bytes,
-                    "device_total_bytes": item.device_total_bytes,
-                    "device_free_bytes": item.device_free_bytes,
-                    "source": item.source,
-                    "measured_at": item.measured_at,
-                }
-                for item in memory
-            ],
-            "allocations": [
-                {
-                    "device_id": item.device_id,
-                    "projected_bytes": item.projected_bytes,
-                    "reserved_margin_bytes": item.reserved_margin_bytes,
-                    "device_total_bytes": item.device_total_bytes,
-                    "projected_free_bytes": item.projected_free_bytes,
-                }
-                for item in allocations
-            ],
-            "runtime_matrix": (
-                None if matrix is None else matrix.model_dump(mode="json")
-            ),
-        }
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(response.model_dump_json(indent=2))
+        return 0
+    if not response.items:
+        print("No deployment placements.")
         return 0
 
-    print(f"Placement: {record.id}")
-    print(f"Deployment Candidate: {record.deployment_candidate_id}")
-    print(f"Host: {record.host_id}")
-    print(f"Feasibility: {record.feasibility}")
-    for item in allocations:
+    for index, item in enumerate(response.items):
+        if index:
+            print()
         print(
-            f"{item.device_id}: projected={item.projected_bytes} "
-            f"reserved={item.reserved_margin_bytes} "
-            f"free={item.projected_free_bytes}"
+            f"Placement: {item.id} "
+            f"candidate={item.deployment_candidate_id} "
+            f"feasibility={item.feasibility}"
         )
-    if matrix is not None:
-        print(f"Runtime run: {matrix.deployment_run_id}")
-        for row in matrix.rows:
-            values = ", ".join(
-                f"{device}={value if value is not None else '-'}"
-                for device, value in row.values.items()
+        devices = item.memory.devices
+        print("Memory matrix:")
+        print("  row/source  " + "  ".join(devices))
+        for row in item.memory.rows:
+            values = "  ".join(
+                "-"
+                if row.values.get(device) is None
+                else str(row.values[device])
+                for device in devices
             )
-            print(f"{row.source}:{row.key}: {values}")
+            print(f"  {row.key}/{row.source}  {values}")
     return 0
 
 
-def _parse_deployment_filter(
-    value: str,
-) -> DeploymentAnalysisFilter:
-    path, separator, raw_value = value.partition("=")
-    if not separator or not path:
-        raise DeploymentAnalysisError(
-            f"invalid deployment filter {value!r}; expected PATH=VALUE"
-        )
-    return DeploymentAnalysisFilter(
-        path=path,
-        value=_parse_scalar(raw_value),
+def _operation_spec_from_path(path: Path) -> DeploymentOperationSpec:
+    (
+        placement_id,
+        inputs,
+        baselines,
+        host,
+        readiness_timeout_seconds,
+    ) = _load_concurrent_deployment_spec(path)
+    return DeploymentOperationSpec(
+        deployment_placement_id=placement_id,
+        inputs=inputs,
+        standalone_baselines=baselines,
+        host=host,
+        readiness_timeout_seconds=readiness_timeout_seconds,
     )
 
 
-def _parse_deployment_objective(
-    value: str,
-) -> DeploymentParetoObjective:
-    head, separator, raw_filters = value.partition("@")
-    parts = head.split(":", 2)
-    if len(parts) != 3 or any(not item for item in parts):
-        raise DeploymentAnalysisError(
-            "invalid deployment objective; expected "
-            "KEY:DIRECTION:METRIC[@FILTERS]"
-        )
-    key, raw_direction, metric = parts
-    direction_map: dict[str, Literal["maximize", "minimize"]] = {
-        "max": "maximize",
-        "maximize": "maximize",
-        "min": "minimize",
-        "minimize": "minimize",
-    }
-    direction = direction_map.get(raw_direction)
-    if direction is None:
-        raise DeploymentAnalysisError(
-            f"invalid deployment Pareto direction: {raw_direction}"
-        )
-    filters = (
-        tuple(
-            _parse_deployment_filter(item)
-            for item in raw_filters.split(";")
-            if item
-        )
-        if separator
-        else ()
-    )
-    return DeploymentParetoObjective(
-        key=key,
-        direction=direction,
-        metric=metric,
-        filters=filters,
+def _render_deployment_operation(
+    snapshot: DeploymentOperationSnapshot,
+) -> str:
+    return (
+        f"Operation: {snapshot.id}\n"
+        f"Deployment: {snapshot.deployment_candidate_id}\n"
+        f"Placement: {snapshot.deployment_placement_id}\n"
+        f"Run: {snapshot.deployment_run_id or '-'}\n"
+        f"Status: {snapshot.status}\n"
+        f"Action: {snapshot.requested_action or '-'}\n"
+        f"Error: {snapshot.error or '-'}"
     )
 
 
-def _parse_deployment_constraint(
-    value: str,
-) -> DeploymentMetricConstraint:
-    head, separator, raw_filters = value.partition("@")
-    parts = head.split(":", 2)
-    if len(parts) != 3 or any(not item for item in parts):
-        raise DeploymentAnalysisError(
-            "invalid deployment constraint; expected "
-            "METRIC:OPERATOR:VALUE[@FILTERS]"
-        )
-    metric, operator, raw_threshold = parts
-    if operator not in {"ge", "gt", "le", "lt", "eq"}:
-        raise DeploymentAnalysisError(
-            f"invalid deployment constraint operator: {operator}"
-        )
+def _deployment_run_command(
+    database_path: Path,
+    deployment_id: str,
+    spec_path: Path,
+) -> int:
     try:
-        threshold = float(raw_threshold)
-    except ValueError as exc:
-        raise DeploymentAnalysisError(
-            "deployment constraint VALUE must be numeric"
-        ) from exc
-    filters = (
-        tuple(
-            _parse_deployment_filter(item)
-            for item in raw_filters.split(";")
-            if item
+        snapshot = DeploymentOperationManager(
+            Database(database_path)
+        ).start(
+            deployment_id,
+            _operation_spec_from_path(spec_path),
+            background=False,
         )
-        if separator
-        else ()
-    )
-    return DeploymentMetricConstraint(
-        metric=metric,
-        operator=operator,
-        value=threshold,
-        filters=filters,
-    )
+    except (
+        DeploymentOperationError,
+        DeploymentExecutionError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(_render_deployment_operation(snapshot))
+    return 0 if snapshot.status == "completed" else 2
+
+
+def _deployment_resume_command(
+    database_path: Path,
+    deployment_id: str,
+    spec_path: Path | None,
+) -> int:
+    try:
+        spec = (
+            None
+            if spec_path is None
+            else _operation_spec_from_path(spec_path)
+        )
+        snapshot = DeploymentOperationManager(
+            Database(database_path)
+        ).resume(
+            deployment_id,
+            spec,
+            background=False,
+        )
+    except (
+        DeploymentOperationError,
+        DeploymentExecutionError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(_render_deployment_operation(snapshot))
+    return 0 if snapshot.status == "completed" else 2
+
+
+def _deployment_control_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    action: str,
+) -> int:
+    manager = DeploymentOperationManager(Database(database_path))
+    try:
+        if action == "pause":
+            snapshot = manager.pause(deployment_id)
+        elif action == "cancel":
+            snapshot = manager.cancel(deployment_id)
+        else:
+            raise ValueError(f"unsupported deployment action: {action}")
+    except (DeploymentOperationError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(_render_deployment_operation(snapshot))
+    return 0
 
 
 def _deployment_results_command(
     database_path: Path,
     deployment_id: str,
     *,
+    filter_args: Sequence[str],
     format_name: str,
     output: Path | None,
-    filter_args: Sequence[str],
 ) -> int:
-    database = Database(database_path)
     try:
-        scope = _deployment_scope_ids(database, deployment_id)
-        rendered = DeploymentAnalysisService(database).export(
-            format_name=format_name,
-            filters=tuple(
-                _parse_deployment_filter(value)
-                for value in filter_args
-            ),
-            deployment_candidate_ids=scope,
+        filters = parse_deployment_filters(tuple(filter_args))
+        response = _deployment_api_service(
+            database_path
+        ).deployment_results(
+            deployment_id,
+            filters=filters,
         )
-    except (AnalysisError, DeploymentAnalysisError) as exc:
+    except (
+        ApiNotFoundError,
+        DeploymentAnalysisError,
+        ValueError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    if output is None:
-        print(rendered, end="" if rendered.endswith("\n") else "\n")
+    if format_name == "json":
+        rendered = response.model_dump_json(indent=2)
+    elif format_name == "csv":
+        rendered = _deployment_rows_csv(response.rows)
     else:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(rendered, encoding="utf-8")
-        print(f"Wrote deployment results to {output}")
+        lines = [
+            f"Deployment: {response.deployment_id}",
+            f"Rows: {len(response.rows)}",
+        ]
+        for row in response.rows:
+            lines.append(
+                "  "
+                f"placement={row.get('deployment_placement_id', '-')} "
+                f"run={row.get('deployment_run_id', '-')} "
+                f"phase={row.get('phase', '-')} "
+                f"status={row.get('workload_status') or row.get('deployment_status', '-')} "
+                f"pp_tps={row.get('combined_pp_tps', '-')} "
+                f"tg_tps={row.get('combined_tg_tps', '-')} "
+                f"retention={row.get('min_retention', '-')}"
+            )
+        rendered = "\n".join(lines)
+    _write_text_output(rendered, output)
     return 0
 
 
@@ -1831,42 +1798,43 @@ def _deployment_pareto_command(
     filter_args: Sequence[str],
     format_name: str,
 ) -> int:
-    database = Database(database_path)
     try:
-        scope = _deployment_scope_ids(database, deployment_id)
-        result = DeploymentAnalysisService(database).pareto(
-            objectives=tuple(
-                _parse_deployment_objective(value)
-                for value in objective_args
+        response = _deployment_api_service(
+            database_path
+        ).deployment_pareto(
+            deployment_id,
+            objectives=parse_deployment_objectives(
+                tuple(objective_args)
             ),
-            constraints=tuple(
-                _parse_deployment_constraint(value)
-                for value in constraint_args
+            constraints=parse_deployment_constraints(
+                tuple(constraint_args)
             ),
-            filters=tuple(
-                _parse_deployment_filter(value)
-                for value in filter_args
-            ),
-            deployment_candidate_ids=scope,
+            filters=parse_deployment_filters(tuple(filter_args)),
         )
-    except (AnalysisError, DeploymentAnalysisError) as exc:
+    except (
+        ApiNotFoundError,
+        DeploymentAnalysisError,
+        ValueError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
     if format_name == "json":
-        print(result.model_dump_json(indent=2))
+        print(response.model_dump_json(indent=2))
         return 0
 
-    print(f"Evaluated placements: {result.evaluated_count}")
-    print(f"Frontier placements: {len(result.frontier)}")
+    result = response.result
+    print(f"Deployment: {deployment_id}")
+    print(f"Evaluated: {result.evaluated_count}")
+    print(f"Frontier: {len(result.frontier)}")
     for point in result.frontier:
         values = " ".join(
-            f"{key}={_format_number(value)}"
-            for key, value in sorted(point.values.items())
+            f"{key}={value:.6g}"
+            for key, value in point.values.items()
         )
         print(
-            f"{point.deployment_placement_id}\t"
-            f"{point.deployment_candidate_id}\t{values}"
+            f"  {point.deployment_placement_id} "
+            f"candidate={point.deployment_candidate_id} {values}"
         )
     if result.excluded:
         print("Excluded:")
@@ -1875,122 +1843,40 @@ def _deployment_pareto_command(
     return 0
 
 
-def _deployment_control_command(
-    database_path: Path,
-    deployment_id: str,
-    *,
-    action: Literal["pause", "cancel"],
-) -> int:
-    database = Database(database_path)
-    try:
-        scope = _deployment_scope_ids(database, deployment_id)
-        with database.session() as connection:
-            placeholders = ",".join("?" for _ in scope)
-            active = connection.execute(
-                f"""
-                SELECT id, deployment_candidate_id
-                FROM deployment_run
-                WHERE deployment_candidate_id IN ({placeholders})
-                  AND status IN ('starting', 'ready', 'running')
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                """,
-                scope,
-            ).fetchone()
-            if active is None:
-                raise DeploymentAnalysisError(
-                    "no active deployment run found in this deployment scope"
-                )
-            candidate_id = str(active["deployment_candidate_id"])
-            connection.execute(
-                """
-                INSERT INTO deployment_control_request(
-                    deployment_candidate_id, action, requested_at
-                )
-                VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                ON CONFLICT(deployment_candidate_id) DO UPDATE SET
-                    action = excluded.action,
-                    requested_at = excluded.requested_at
-                """,
-                (candidate_id, action),
-            )
-    except DeploymentAnalysisError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
-    print(
-        f"Requested {action} for deployment run {active['id']} "
-        f"(Candidate {candidate_id})."
-    )
-    return 0
+def _deployment_rows_csv(
+    rows: Sequence[dict[str, object]],
+) -> str:
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue()
 
 
-def _deployment_control_action(
-    database: Database,
-    deployment_candidate_id: str,
-) -> Literal["pause", "cancel"] | None:
-    with database.session() as connection:
-        row = connection.execute(
-            """
-            SELECT action
-            FROM deployment_control_request
-            WHERE deployment_candidate_id = ?
-            """,
-            (deployment_candidate_id,),
-        ).fetchone()
-    if row is None:
-        return None
-    value = str(row["action"])
-    if value not in {"pause", "cancel"}:
-        return None
-    return cast(Literal["pause", "cancel"], value)
-
-
-def _clear_deployment_control(
-    database: Database,
-    deployment_candidate_id: str,
+def _write_text_output(
+    value: str,
+    output: Path | None,
 ) -> None:
-    with database.session() as connection:
-        connection.execute(
-            """
-            DELETE FROM deployment_control_request
-            WHERE deployment_candidate_id = ?
-            """,
-            (deployment_candidate_id,),
-        )
-
-
-def _watch_deployment_control(
-    database: Database,
-    deployment_candidate_id: str,
-    *,
-    cancel_event: Event,
-    stop_event: Event,
-) -> None:
-    while not stop_event.wait(0.1):
-        try:
-            action = _deployment_control_action(
-                database,
-                deployment_candidate_id,
-            )
-        except Exception:
-            continue
-        if action is not None:
-            cancel_event.set()
-            return
+    if output is None:
+        print(value)
+        return
+    resolved = output.expanduser().resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(value, encoding="utf-8")
+    print(resolved)
 
 
 def _deployment_benchmark_command(
     database_path: Path,
     spec_path: Path,
-    *,
-    watch_control: bool = False,
 ) -> int:
-    database = Database(database_path)
-    placement_id: str | None = None
-    deployment_candidate_id: str | None = None
-    stop_event: Event | None = None
-    watcher: Thread | None = None
     try:
         (
             placement_id,
@@ -1999,87 +1885,24 @@ def _deployment_benchmark_command(
             host,
             readiness_timeout_seconds,
         ) = _load_concurrent_deployment_spec(spec_path)
-        cancel_event = None
-        if watch_control:
-            with database.session() as connection:
-                placement = DeploymentPlacementRepository(
-                    connection
-                ).record(placement_id)
-            if placement is None:
-                raise ValueError(
-                    f"deployment placement not found: {placement_id}"
-                )
-            deployment_candidate_id = (
-                placement.deployment_candidate_id
-            )
-            _clear_deployment_control(
-                database,
-                deployment_candidate_id,
-            )
-            cancel_event = Event()
-            stop_event = Event()
-            watcher = Thread(
-                target=_watch_deployment_control,
-                args=(database, deployment_candidate_id),
-                kwargs={
-                    "cancel_event": cancel_event,
-                    "stop_event": stop_event,
-                },
-                name="llprof-deployment-control",
-                daemon=True,
-            )
-            watcher.start()
-
-        executor = ConcurrentDeploymentExecutor(database)
-        if cancel_event is None:
-            summary = executor.execute(
-                placement_id,
-                inputs,
-                standalone_baselines=baselines,
-                host=host,
-                readiness_timeout_seconds=readiness_timeout_seconds,
-            )
-        else:
-            summary = executor.execute(
-                placement_id,
-                inputs,
-                standalone_baselines=baselines,
-                host=host,
-                readiness_timeout_seconds=readiness_timeout_seconds,
-                cancel_event=cancel_event,
-            )
-    except DeploymentExecutionError as exc:
-        if (
-            watch_control
-            and exc.status == "cancelled"
-            and deployment_candidate_id is not None
-        ):
-            action = _deployment_control_action(
-                database,
-                deployment_candidate_id,
-            )
-            if action is not None:
-                print(
-                    f"Deployment {action} requested; "
-                    "run stopped cooperatively.",
-                    file=sys.stderr,
-                )
-                return 130
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+        summary = ConcurrentDeploymentExecutor(
+            Database(database_path)
+        ).execute(
+            placement_id,
+            inputs,
+            standalone_baselines=baselines,
+            host=host,
+            readiness_timeout_seconds=readiness_timeout_seconds,
+        )
     except (
         ConcurrentDeploymentError,
+        DeploymentExecutionError,
         OSError,
         ValueError,
         json.JSONDecodeError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    finally:
-        if stop_event is not None:
-            stop_event.set()
-        if watcher is not None:
-            watcher.join(timeout=1.0)
 
     print(_render_concurrent_deployment_summary(summary))
     return 0
@@ -2839,6 +2662,59 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.database,
                 args.spec,
             )
+        if args.deployment_command == "show":
+            return _deployment_show_command(
+                args.database,
+                args.deployment_id,
+                format_name=args.format_name,
+            )
+        if args.deployment_command == "placement":
+            return _deployment_placement_command(
+                args.database,
+                args.deployment_id,
+                format_name=args.format_name,
+            )
+        if args.deployment_command == "run":
+            return _deployment_run_command(
+                args.database,
+                args.deployment_id,
+                args.spec,
+            )
+        if args.deployment_command == "pause":
+            return _deployment_control_command(
+                args.database,
+                args.deployment_id,
+                action="pause",
+            )
+        if args.deployment_command == "resume":
+            return _deployment_resume_command(
+                args.database,
+                args.deployment_id,
+                args.spec,
+            )
+        if args.deployment_command == "cancel":
+            return _deployment_control_command(
+                args.database,
+                args.deployment_id,
+                action="cancel",
+            )
+        if args.deployment_command == "results":
+            return _deployment_results_command(
+                args.database,
+                args.deployment_id,
+                filter_args=args.filter,
+                format_name=args.format_name,
+                output=args.output,
+            )
+        if args.deployment_command == "pareto":
+            return _deployment_pareto_command(
+                args.database,
+                args.deployment_id,
+                objective_args=args.objective,
+                constraint_args=args.constraint,
+                filter_args=args.filter,
+                format_name=args.format_name,
+            )
         if args.deployment_command == "preview":
             return _deployment_plan_command(
                 args.database,
@@ -2851,19 +2727,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.spec,
                 persist=True,
             )
-        if args.deployment_command == "show":
-            return _deployment_show_command(
-                args.database,
-                args.deployment_id,
-                format_name=args.format_name,
-            )
-        if args.deployment_command == "placement":
-            return _deployment_placement_command(
-                args.database,
-                args.placement_id,
-                deployment_run_id=args.deployment_run_id,
-                format_name=args.format_name,
-            )
         if args.deployment_command == "execute":
             return _deployment_execute_command(
                 args.database,
@@ -2873,35 +2736,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _deployment_benchmark_command(
                 args.database,
                 args.spec,
-            )
-        if args.deployment_command in {"run", "resume"}:
-            return _deployment_benchmark_command(
-                args.database,
-                args.spec,
-                watch_control=True,
-            )
-        if args.deployment_command in {"pause", "cancel"}:
-            return _deployment_control_command(
-                args.database,
-                args.deployment_id,
-                action=args.deployment_command,
-            )
-        if args.deployment_command == "results":
-            return _deployment_results_command(
-                args.database,
-                args.deployment_id,
-                format_name=args.format_name,
-                output=args.output,
-                filter_args=args.filters,
-            )
-        if args.deployment_command == "pareto":
-            return _deployment_pareto_command(
-                args.database,
-                args.deployment_id,
-                objective_args=args.objectives,
-                constraint_args=args.constraints,
-                filter_args=args.filters,
-                format_name=args.format_name,
             )
 
     if args.command == "server":

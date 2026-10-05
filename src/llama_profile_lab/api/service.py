@@ -12,6 +12,10 @@ from llama_profile_lab.analysis import (
     AnalysisFilter,
     AnalysisService,
     CandidateComparison,
+    DeploymentAnalysisFilter,
+    DeploymentAnalysisService,
+    DeploymentMetricConstraint,
+    DeploymentParetoObjective,
     LatencyEstimate,
     MatrixProjection,
     ParetoResult,
@@ -25,6 +29,25 @@ from llama_profile_lab.api.dto import (
     CandidateEvaluationDTO,
     CandidateListResponse,
     CandidateValidationHistoryDTO,
+    DeploymentCandidateItemDTO,
+    DeploymentCandidateListResponse,
+    DeploymentCreateRequest,
+    DeploymentDTO,
+    DeploymentMemberStateDTO,
+    DeploymentOperationDTO,
+    DeploymentParetoResponse,
+    DeploymentPlacementDTO,
+    DeploymentPlacementListResponse,
+    DeploymentPlanCaseDTO,
+    DeploymentPlanRequest,
+    DeploymentPlanResponse,
+    DeploymentProgressDTO,
+    DeploymentResultsResponse,
+    DeploymentRunDTO,
+    DeploymentRunListResponse,
+    DeploymentRunMemberDTO,
+    DeploymentRunRequest,
+    DeploymentWorkloadPhaseDTO,
     ExecutionRequest,
     ExecutionSummaryDTO,
     ExperimentCreateRequest,
@@ -59,6 +82,12 @@ from llama_profile_lab.api.dto import (
     ServerValidationResponse,
     TelemetryResponse,
 )
+from llama_profile_lab.api.deployment_operations import (
+    DeploymentOperationError,
+    DeploymentOperationManager,
+    DeploymentOperationSnapshot,
+    DeploymentOperationSpec,
+)
 from llama_profile_lab.api.operations import (
     ExecutionSpec,
     OperationManager,
@@ -69,7 +98,11 @@ from llama_profile_lab.db import (
     BenchmarkCaseRepository,
     BenchmarkRunRepository,
     CandidateRepository,
+    ConcurrentWorkloadRepository,
     Database,
+    DeploymentCandidateRepository,
+    DeploymentPlacementRepository,
+    DeploymentRunRepository,
     EnvironmentRepository,
     ExperimentRepository,
     MeasurementPolicyRepository,
@@ -82,6 +115,7 @@ from llama_profile_lab.db import (
 )
 from llama_profile_lab.db.records import (
     BinaryRecord,
+    DeploymentRunRecord,
     ExperimentRecord,
     ResolvedPlacementRecord,
 )
@@ -91,10 +125,17 @@ from llama_profile_lab.domain import (
     FixedPlacementPolicy,
 )
 from llama_profile_lab.domain.base import JsonScalar
-from llama_profile_lab.execution import ServerValidationService
+from llama_profile_lab.execution import (
+    DeploymentServerInput,
+    ServerValidationService,
+    StandaloneBaselineInput,
+)
 from llama_profile_lab.llama import BinaryKind, probe_binary
 from llama_profile_lab.planning import (
     DEFAULT_PARAMETER_REGISTRY,
+    DeploymentEstimatorInput,
+    DeploymentPlannerService,
+    DeploymentPlanSummary,
     PlanSummary,
     build_plan,
     plan_experiment,
@@ -119,10 +160,15 @@ class ApiService:
         *,
         profiles: LauncherProfileProvider,
         operations: OperationManager,
+        deployment_operations: DeploymentOperationManager | None = None,
     ) -> None:
         self.database = database
         self.profiles = profiles
         self.operations = operations
+        self.deployment_operations = (
+            deployment_operations
+            or DeploymentOperationManager(database)
+        )
 
     def health(self) -> int:
         with self.database.session() as connection:
@@ -951,6 +997,574 @@ class ApiService:
             measurement_policy=measurement_policy,
         )
 
+    def create_deployment(
+        self,
+        request: DeploymentCreateRequest,
+    ) -> DeploymentDTO:
+        try:
+            with self.database.session() as connection:
+                identifier = DeploymentCandidateRepository(
+                    connection
+                ).put(request.deployment)
+        except sqlite3.IntegrityError as exc:
+            raise ApiConflictError(
+                "deployment references an unknown Candidate, binary, "
+                "or workload suite"
+            ) from exc
+        return self.get_deployment(identifier)
+
+    def get_deployment(self, deployment_id: str) -> DeploymentDTO:
+        operation = self.deployment_operations.snapshot(deployment_id)
+        with self.database.session() as connection:
+            repository = DeploymentCandidateRepository(connection)
+            record = repository.record(deployment_id)
+            definition = repository.get(deployment_id)
+            if record is None or definition is None:
+                raise ApiNotFoundError(
+                    f"deployment not found: {deployment_id}"
+                )
+            counts = connection.execute(
+                """
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM deployment_plan
+                        WHERE base_deployment_candidate_id = ?
+                    ) AS plans,
+                    (
+                        SELECT COUNT(DISTINCT dp.id)
+                        FROM deployment_placement AS dp
+                        WHERE dp.deployment_candidate_id = ?
+                           OR EXISTS (
+                                SELECT 1
+                                FROM deployment_plan AS plan
+                                JOIN deployment_plan_case AS pc
+                                  ON pc.deployment_plan_id = plan.id
+                                WHERE plan.base_deployment_candidate_id = ?
+                                  AND pc.deployment_placement_id = dp.id
+                           )
+                    ) AS placements,
+                    (
+                        SELECT COUNT(*)
+                        FROM deployment_run AS dr
+                        WHERE dr.deployment_candidate_id = ?
+                           OR EXISTS (
+                                SELECT 1
+                                FROM deployment_plan AS plan
+                                JOIN deployment_plan_case AS pc
+                                  ON pc.deployment_plan_id = plan.id
+                                WHERE plan.base_deployment_candidate_id = ?
+                                  AND pc.deployment_candidate_id =
+                                      dr.deployment_candidate_id
+                           )
+                    ) AS runs
+                """,
+                (
+                    deployment_id,
+                    deployment_id,
+                    deployment_id,
+                    deployment_id,
+                    deployment_id,
+                ),
+            ).fetchone()
+            latest_plan = connection.execute(
+                """
+                SELECT id
+                FROM deployment_plan
+                WHERE base_deployment_candidate_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (deployment_id,),
+            ).fetchone()
+            latest_run = connection.execute(
+                """
+                SELECT status
+                FROM deployment_run AS dr
+                WHERE dr.deployment_candidate_id = ?
+                   OR EXISTS (
+                        SELECT 1
+                        FROM deployment_plan AS plan
+                        JOIN deployment_plan_case AS pc
+                          ON pc.deployment_plan_id = plan.id
+                        WHERE plan.base_deployment_candidate_id = ?
+                          AND pc.deployment_candidate_id =
+                              dr.deployment_candidate_id
+                   )
+                ORDER BY dr.created_at DESC, dr.id DESC
+                LIMIT 1
+                """,
+                (deployment_id, deployment_id),
+            ).fetchone()
+        if counts is None:
+            raise RuntimeError("deployment count query returned no row")
+        return DeploymentDTO(
+            id=deployment_id,
+            status=_deployment_status(
+                operation,
+                None if latest_run is None else str(latest_run["status"]),
+                int(counts["plans"]),
+            ),
+            created_at=record.created_at,
+            definition=definition,
+            plan_count=int(counts["plans"]),
+            placement_count=int(counts["placements"]),
+            run_count=int(counts["runs"]),
+            latest_plan_id=(
+                None if latest_plan is None else str(latest_plan["id"])
+            ),
+        )
+
+    def plan_deployment(
+        self,
+        deployment_id: str,
+        request: DeploymentPlanRequest,
+    ) -> DeploymentPlanResponse:
+        self._require_deployment(deployment_id)
+        inputs = tuple(
+            DeploymentEstimatorInput(
+                instance_id=item.instance_id,
+                helper_binary_id=item.helper_binary_id,
+                model_path=Path(item.model_path),
+            )
+            for item in request.instances
+        )
+        try:
+            summary = DeploymentPlannerService(self.database).plan(
+                deployment_id,
+                request.search_space,
+                inputs,
+                timeout_seconds=request.timeout_seconds,
+            )
+        except ValueError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return _deployment_plan_response(summary)
+
+    def list_deployment_candidates(
+        self,
+        deployment_id: str,
+    ) -> DeploymentCandidateListResponse:
+        self._require_deployment(deployment_id)
+        with self.database.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT pc.deployment_candidate_id,
+                       pc.deployment_placement_id,
+                       pc.generation_json
+                FROM deployment_plan AS plan
+                JOIN deployment_plan_case AS pc
+                  ON pc.deployment_plan_id = plan.id
+                WHERE plan.base_deployment_candidate_id = ?
+                ORDER BY plan.created_at DESC, plan.id DESC, pc.ordinal
+                """,
+                (deployment_id,),
+            ).fetchall()
+            grouped: dict[str, dict[str, object]] = {}
+            for row in rows:
+                candidate_id = str(row["deployment_candidate_id"])
+                item = grouped.setdefault(
+                    candidate_id,
+                    {
+                        "generation": _json_object(
+                            str(row["generation_json"])
+                        ),
+                        "placements": [],
+                    },
+                )
+                placements = item["placements"]
+                if not isinstance(placements, list):
+                    raise RuntimeError("deployment placement accumulator is invalid")
+                placement_id = str(row["deployment_placement_id"])
+                if placement_id not in placements:
+                    placements.append(placement_id)
+
+            repository = DeploymentCandidateRepository(connection)
+            items: list[DeploymentCandidateItemDTO] = []
+            for candidate_id, item in grouped.items():
+                definition = repository.get(candidate_id)
+                if definition is None:
+                    raise RuntimeError(
+                        f"plan references missing deployment Candidate "
+                        f"{candidate_id}"
+                    )
+                generation = item["generation"]
+                placements = item["placements"]
+                if (
+                    not isinstance(generation, dict)
+                    or not isinstance(placements, list)
+                ):
+                    raise RuntimeError("deployment candidate aggregate is invalid")
+                items.append(
+                    DeploymentCandidateItemDTO(
+                        id=candidate_id,
+                        definition=definition,
+                        generation={
+                            str(key): value
+                            for key, value in generation.items()
+                        },
+                        rejection_count=len(
+                            repository.rejections(candidate_id)
+                        ),
+                        placement_ids=tuple(
+                            str(value) for value in placements
+                        ),
+                    )
+                )
+        return DeploymentCandidateListResponse(items=tuple(items))
+
+    def list_deployment_placements(
+        self,
+        deployment_id: str,
+    ) -> DeploymentPlacementListResponse:
+        self._require_deployment(deployment_id)
+        with self.database.session() as connection:
+            placement_ids = _deployment_placement_ids(
+                connection,
+                deployment_id,
+            )
+            repository = DeploymentPlacementRepository(connection)
+            records = []
+            for placement_id in placement_ids:
+                record = repository.record(placement_id)
+                placement = repository.get(placement_id)
+                if record is None or placement is None:
+                    raise RuntimeError(
+                        f"deployment placement disappeared: {placement_id}"
+                    )
+                records.append((record, placement))
+        analysis = DeploymentAnalysisService(self.database)
+        return DeploymentPlacementListResponse(
+            items=tuple(
+                DeploymentPlacementDTO(
+                    id=record.id,
+                    deployment_candidate_id=(
+                        record.deployment_candidate_id
+                    ),
+                    host_id=record.host_id,
+                    feasibility=record.feasibility,
+                    placement=placement,
+                    memory=analysis.memory_matrix(record.id),
+                )
+                for record, placement in records
+            )
+        )
+
+    def start_deployment(
+        self,
+        deployment_id: str,
+        request: DeploymentRunRequest | None,
+        *,
+        resume: bool,
+    ) -> DeploymentProgressDTO:
+        self._require_deployment(deployment_id)
+        spec = (
+            None
+            if request is None
+            else _deployment_operation_spec(request)
+        )
+        try:
+            if resume:
+                self.deployment_operations.resume(
+                    deployment_id,
+                    spec,
+                    background=True,
+                )
+            else:
+                if spec is None:
+                    raise ApiConflictError(
+                        "deployment run requires an execution request"
+                    )
+                self.deployment_operations.start(
+                    deployment_id,
+                    spec,
+                    background=True,
+                )
+        except DeploymentOperationError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return self.deployment_progress(deployment_id)
+
+    def pause_deployment(
+        self,
+        deployment_id: str,
+    ) -> DeploymentProgressDTO:
+        self._require_deployment(deployment_id)
+        try:
+            self.deployment_operations.pause(deployment_id)
+        except DeploymentOperationError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return self.deployment_progress(deployment_id)
+
+    def cancel_deployment(
+        self,
+        deployment_id: str,
+    ) -> DeploymentProgressDTO:
+        self._require_deployment(deployment_id)
+        try:
+            self.deployment_operations.cancel(deployment_id)
+        except DeploymentOperationError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return self.deployment_progress(deployment_id)
+
+    def deployment_progress(
+        self,
+        deployment_id: str,
+    ) -> DeploymentProgressDTO:
+        self._require_deployment(deployment_id)
+        operation = self.deployment_operations.snapshot(deployment_id)
+        with self.database.session() as connection:
+            latest_plan = connection.execute(
+                """
+                SELECT id
+                FROM deployment_plan
+                WHERE base_deployment_candidate_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (deployment_id,),
+            ).fetchone()
+            plan_id = None if latest_plan is None else str(latest_plan["id"])
+            planned = 0
+            completed = 0
+            failed = 0
+            if plan_id is not None:
+                row = connection.execute(
+                    """
+                    SELECT
+                        COUNT(DISTINCT pc.deployment_candidate_id) AS planned,
+                        COUNT(DISTINCT CASE
+                            WHEN EXISTS (
+                                SELECT 1
+                                FROM deployment_run AS dr
+                                WHERE dr.deployment_placement_id =
+                                      pc.deployment_placement_id
+                                  AND dr.status = 'completed'
+                            )
+                            THEN pc.deployment_candidate_id
+                        END) AS completed,
+                        COUNT(DISTINCT CASE
+                            WHEN EXISTS (
+                                SELECT 1
+                                FROM deployment_run AS dr
+                                WHERE dr.deployment_placement_id =
+                                      pc.deployment_placement_id
+                                  AND dr.status = 'failed'
+                            )
+                            THEN pc.deployment_candidate_id
+                        END) AS failed
+                    FROM deployment_plan_case AS pc
+                    WHERE pc.deployment_plan_id = ?
+                    """,
+                    (plan_id,),
+                ).fetchone()
+                if row is not None:
+                    planned = int(row["planned"])
+                    completed = int(row["completed"])
+                    failed = int(row["failed"])
+
+            active = connection.execute(
+                """
+                SELECT dr.id
+                FROM deployment_run AS dr
+                WHERE dr.status IN ('starting', 'ready', 'running')
+                  AND (
+                      dr.deployment_candidate_id = ?
+                      OR EXISTS (
+                          SELECT 1
+                          FROM deployment_plan AS plan
+                          JOIN deployment_plan_case AS pc
+                            ON pc.deployment_plan_id = plan.id
+                          WHERE plan.base_deployment_candidate_id = ?
+                            AND pc.deployment_placement_id =
+                                dr.deployment_placement_id
+                      )
+                  )
+                ORDER BY dr.created_at DESC, dr.id DESC
+                LIMIT 1
+                """,
+                (deployment_id, deployment_id),
+            ).fetchone()
+            active_run_id = (
+                None if active is None else str(active["id"])
+            )
+            if (
+                active_run_id is None
+                and operation is not None
+                and operation.status in {
+                    "running",
+                    "pausing",
+                    "cancelling",
+                }
+            ):
+                active_run_id = operation.deployment_run_id
+
+            members: tuple[DeploymentMemberStateDTO, ...] = ()
+            current_phase: str | None = None
+            if active_run_id is not None:
+                run_repository = DeploymentRunRepository(connection)
+                members = tuple(
+                    DeploymentMemberStateDTO(
+                        instance_id=item.instance_id,
+                        status=item.member_status,
+                        endpoint=item.endpoint,
+                        pid=item.pid,
+                        ready_at=item.ready_at,
+                        exit_code=item.exit_code,
+                    )
+                    for item in run_repository.members(active_run_id)
+                )
+                phase_row = connection.execute(
+                    """
+                    SELECT phase
+                    FROM deployment_workload_run
+                    WHERE deployment_run_id = ? AND status = 'running'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (active_run_id,),
+                ).fetchone()
+                current_phase = (
+                    None
+                    if phase_row is None
+                    else str(phase_row["phase"])
+                )
+
+            latest_run = connection.execute(
+                """
+                SELECT dr.status
+                FROM deployment_run AS dr
+                WHERE dr.deployment_candidate_id = ?
+                   OR EXISTS (
+                        SELECT 1
+                        FROM deployment_plan AS plan
+                        JOIN deployment_plan_case AS pc
+                          ON pc.deployment_plan_id = plan.id
+                        WHERE plan.base_deployment_candidate_id = ?
+                          AND pc.deployment_placement_id =
+                              dr.deployment_placement_id
+                   )
+                ORDER BY dr.created_at DESC, dr.id DESC
+                LIMIT 1
+                """,
+                (deployment_id, deployment_id),
+            ).fetchone()
+
+        return DeploymentProgressDTO(
+            deployment_id=deployment_id,
+            deployment_status=_deployment_status(
+                operation,
+                None if latest_run is None else str(latest_run["status"]),
+                0 if plan_id is None else 1,
+            ),
+            planned_candidates=planned,
+            completed_candidates=completed,
+            failed_candidates=failed,
+            active_deployment_run=active_run_id,
+            member_states=members,
+            current_workload_phase=current_phase,
+            operation=_deployment_operation_dto(operation),
+        )
+
+    def list_deployment_runs(
+        self,
+        deployment_id: str,
+    ) -> DeploymentRunListResponse:
+        self._require_deployment(deployment_id)
+        with self.database.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT dr.id
+                FROM deployment_run AS dr
+                WHERE dr.deployment_candidate_id = ?
+                   OR EXISTS (
+                        SELECT 1
+                        FROM deployment_plan AS plan
+                        JOIN deployment_plan_case AS pc
+                          ON pc.deployment_plan_id = plan.id
+                        WHERE plan.base_deployment_candidate_id = ?
+                          AND pc.deployment_placement_id =
+                              dr.deployment_placement_id
+                   )
+                ORDER BY dr.created_at, dr.id
+                """,
+                (deployment_id, deployment_id),
+            ).fetchall()
+            repository = DeploymentRunRepository(connection)
+            items: list[DeploymentRunDTO] = []
+            for row in rows:
+                record = repository.get(str(row["id"]))
+                if record is None:
+                    raise RuntimeError("deployment run disappeared")
+                items.append(
+                    _deployment_run_dto(connection, record)
+                )
+        return DeploymentRunListResponse(items=tuple(items))
+
+    def deployment_results(
+        self,
+        deployment_id: str,
+        *,
+        filters: tuple[DeploymentAnalysisFilter, ...] = (),
+    ) -> DeploymentResultsResponse:
+        self._require_deployment(deployment_id)
+        with self.database.session() as connection:
+            placement_ids = _deployment_placement_ids(
+                connection,
+                deployment_id,
+            )
+        raw = DeploymentAnalysisService(self.database).export(
+            format_name="json",
+            filters=filters,
+            placement_ids=placement_ids,
+        )
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            raise RuntimeError("deployment analysis export is not a list")
+        rows: list[dict[str, object]] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    "deployment analysis export row is not an object"
+                )
+            rows.append({str(key): value for key, value in item.items()})
+        return DeploymentResultsResponse(
+            deployment_id=deployment_id,
+            rows=tuple(rows),
+        )
+
+    def deployment_pareto(
+        self,
+        deployment_id: str,
+        *,
+        objectives: tuple[DeploymentParetoObjective, ...],
+        constraints: tuple[DeploymentMetricConstraint, ...] = (),
+        filters: tuple[DeploymentAnalysisFilter, ...] = (),
+    ) -> DeploymentParetoResponse:
+        self._require_deployment(deployment_id)
+        with self.database.session() as connection:
+            placement_ids = _deployment_placement_ids(
+                connection,
+                deployment_id,
+            )
+        result = DeploymentAnalysisService(self.database).pareto(
+            objectives=objectives,
+            constraints=constraints,
+            filters=filters,
+            placement_ids=placement_ids,
+        )
+        return DeploymentParetoResponse(
+            deployment_id=deployment_id,
+            result=result,
+        )
+
+    def _require_deployment(self, deployment_id: str) -> None:
+        with self.database.session() as connection:
+            if DeploymentCandidateRepository(connection).get(
+                deployment_id
+            ) is None:
+                raise ApiNotFoundError(
+                    f"deployment not found: {deployment_id}"
+                )
+
     def _require_experiment(self, experiment_id: str) -> None:
         with self.database.session() as connection:
             self._require_experiment_connection(connection, experiment_id)
@@ -962,6 +1576,306 @@ class ApiService:
     ) -> None:
         if ExperimentRepository(connection).get(experiment_id) is None:
             raise ApiNotFoundError(f"experiment not found: {experiment_id}")
+
+
+def parse_deployment_filters(
+    values: tuple[str, ...],
+) -> tuple[DeploymentAnalysisFilter, ...]:
+    return tuple(
+        DeploymentAnalysisFilter(
+            path=parsed.path,
+            value=parsed.value,
+        )
+        for parsed in (_parse_filter(value) for value in values)
+    )
+
+
+def parse_deployment_objectives(
+    values: tuple[str, ...],
+) -> tuple[DeploymentParetoObjective, ...]:
+    objectives: list[DeploymentParetoObjective] = []
+    for value in values:
+        main, separator, raw_filters = value.partition("@")
+        parts = main.split(":", 2)
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                "invalid deployment objective; expected "
+                "KEY:DIRECTION:METRIC[@PATH=VALUE;...]"
+            )
+        key, raw_direction, metric = parts
+        direction_map = {
+            "max": "maximize",
+            "maximize": "maximize",
+            "min": "minimize",
+            "minimize": "minimize",
+        }
+        direction = direction_map.get(raw_direction)
+        if direction is None:
+            raise ValueError(
+                "deployment objective direction must be max/min or "
+                "maximize/minimize"
+            )
+        filters = (
+            ()
+            if not separator or not raw_filters
+            else parse_deployment_filters(
+                tuple(
+                    item
+                    for item in raw_filters.split(";")
+                    if item
+                )
+            )
+        )
+        objectives.append(
+            DeploymentParetoObjective(
+                key=key,
+                direction=direction,
+                metric=metric,
+                filters=filters,
+            )
+        )
+    if not objectives:
+        raise ValueError("at least one deployment objective is required")
+    return tuple(objectives)
+
+
+def parse_deployment_constraints(
+    values: tuple[str, ...],
+) -> tuple[DeploymentMetricConstraint, ...]:
+    constraints: list[DeploymentMetricConstraint] = []
+    for value in values:
+        main, separator, raw_filters = value.partition("@")
+        parts = main.split(":", 2)
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                "invalid deployment constraint; expected "
+                "METRIC:OP:VALUE[@PATH=VALUE;...]"
+            )
+        metric, operator, raw_value = parts
+        if operator not in {"ge", "gt", "le", "lt", "eq"}:
+            raise ValueError(
+                "deployment constraint operator must be ge/gt/le/lt/eq"
+            )
+        try:
+            threshold = float(raw_value)
+        except ValueError as exc:
+            raise ValueError(
+                "deployment constraint value must be numeric"
+            ) from exc
+        filters = (
+            ()
+            if not separator or not raw_filters
+            else parse_deployment_filters(
+                tuple(
+                    item
+                    for item in raw_filters.split(";")
+                    if item
+                )
+            )
+        )
+        constraints.append(
+            DeploymentMetricConstraint(
+                metric=metric,
+                operator=operator,
+                value=threshold,
+                filters=filters,
+            )
+        )
+    return tuple(constraints)
+
+
+def _deployment_plan_response(
+    summary: DeploymentPlanSummary,
+) -> DeploymentPlanResponse:
+    return DeploymentPlanResponse(
+        base_deployment_candidate_id=summary.base_deployment_candidate_id,
+        host_id=summary.host_id,
+        raw_combinations=summary.raw_combinations,
+        rejected_by_constraints=summary.rejected_by_constraints,
+        duplicate_candidates=summary.duplicate_candidates,
+        symmetry_reduced=summary.symmetry_reduced,
+        capability_rejected=summary.capability_rejected,
+        estimate_failed=summary.estimate_failed,
+        memory_rejected=summary.memory_rejected,
+        valid_count=summary.valid_count,
+        plan_id=summary.plan_id,
+        cases=tuple(
+            DeploymentPlanCaseDTO(
+                deployment_candidate_id=item.deployment_candidate_id,
+                deployment_placement_id=item.deployment_placement_id,
+                generation={
+                    str(key): value
+                    for key, value in item.generation.items()
+                },
+            )
+            for item in summary.cases
+        ),
+    )
+
+
+def _deployment_operation_spec(
+    request: DeploymentRunRequest,
+) -> DeploymentOperationSpec:
+    instance_ids = [item.instance_id for item in request.instances]
+    if len(instance_ids) != len(set(instance_ids)):
+        raise ApiConflictError(
+            "deployment run instance IDs must be unique"
+        )
+    return DeploymentOperationSpec(
+        deployment_placement_id=request.deployment_placement_id,
+        inputs=tuple(
+            DeploymentServerInput(
+                instance_id=item.instance_id,
+                model_path=Path(item.model_path),
+                draft_model_path=(
+                    None
+                    if item.draft_model_path is None
+                    else Path(item.draft_model_path)
+                ),
+            )
+            for item in request.instances
+        ),
+        standalone_baselines=tuple(
+            StandaloneBaselineInput(
+                instance_id=item.instance_id,
+                mode=item.mode,
+                prompt_tokens=item.prompt_tokens,
+                generate_tokens=item.generate_tokens,
+                depth_tokens=item.depth_tokens,
+                throughput_tps=item.throughput_tps,
+                latency_ms=item.latency_ms,
+            )
+            for item in request.standalone_baselines
+        ),
+        host=request.host,
+        readiness_timeout_seconds=request.readiness_timeout_seconds,
+    )
+
+
+def _deployment_operation_dto(
+    snapshot: DeploymentOperationSnapshot | None,
+) -> DeploymentOperationDTO | None:
+    if snapshot is None:
+        return None
+    return DeploymentOperationDTO(
+        id=snapshot.id,
+        deployment_candidate_id=snapshot.deployment_candidate_id,
+        deployment_placement_id=snapshot.deployment_placement_id,
+        deployment_run_id=snapshot.deployment_run_id,
+        status=snapshot.status,
+        requested_action=snapshot.requested_action,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        error=snapshot.error,
+    )
+
+
+def _deployment_status(
+    operation: DeploymentOperationSnapshot | None,
+    latest_run_status: str | None,
+    plan_count: int,
+) -> str:
+    if operation is not None:
+        if operation.status in {"running", "pausing", "cancelling"}:
+            return operation.status
+        if operation.status in {
+            "completed",
+            "paused",
+            "cancelled",
+            "failed",
+        }:
+            return operation.status
+    if latest_run_status in {"starting", "ready", "running"}:
+        return "running"
+    if latest_run_status in {"completed", "cancelled", "failed"}:
+        return latest_run_status
+    return "planned" if plan_count > 0 else "draft"
+
+
+def _deployment_placement_ids(
+    connection: sqlite3.Connection,
+    deployment_id: str,
+) -> tuple[str, ...]:
+    rows = connection.execute(
+        """
+        SELECT DISTINCT dp.id
+        FROM deployment_placement AS dp
+        WHERE dp.deployment_candidate_id = ?
+           OR EXISTS (
+                SELECT 1
+                FROM deployment_plan AS plan
+                JOIN deployment_plan_case AS pc
+                  ON pc.deployment_plan_id = plan.id
+                WHERE plan.base_deployment_candidate_id = ?
+                  AND pc.deployment_placement_id = dp.id
+           )
+        ORDER BY dp.created_at, dp.id
+        """,
+        (deployment_id, deployment_id),
+    ).fetchall()
+    return tuple(str(row["id"]) for row in rows)
+
+
+def _deployment_run_dto(
+    connection: sqlite3.Connection,
+    record: DeploymentRunRecord,
+) -> DeploymentRunDTO:
+    run_id = str(record.id)
+    members = DeploymentRunRepository(connection).members(run_id)
+    phase_rows = connection.execute(
+        """
+        SELECT id
+        FROM deployment_workload_run
+        WHERE deployment_run_id = ?
+        ORDER BY created_at, id
+        """,
+        (run_id,),
+    ).fetchall()
+    workloads = ConcurrentWorkloadRepository(connection)
+    phases: list[DeploymentWorkloadPhaseDTO] = []
+    for row in phase_rows:
+        phase = workloads.get_run(str(row["id"]))
+        if phase is None:
+            raise RuntimeError("deployment workload run disappeared")
+        phases.append(
+            DeploymentWorkloadPhaseDTO(
+                id=phase.id,
+                phase=phase.phase,
+                status=phase.status,
+                quality=phase.quality,
+                correctness_valid=phase.correctness_valid,
+                combined_prompt_tps=phase.combined_prompt_tps,
+                combined_decode_tps=phase.combined_decode_tps,
+                min_retention=phase.min_retention,
+                failure_kind=phase.failure_kind,
+            )
+        )
+    return DeploymentRunDTO(
+        id=run_id,
+        deployment_candidate_id=str(record.deployment_candidate_id),
+        deployment_placement_id=record.deployment_placement_id,
+        status=str(record.status),
+        quality=record.quality,
+        failure_kind=record.failure_kind,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        duration_ns=record.duration_ns,
+        members=tuple(
+            DeploymentRunMemberDTO(
+                instance_id=item.instance_id,
+                status=item.member_status,
+                endpoint=item.endpoint,
+                pid=item.pid,
+                ready_at=item.ready_at,
+                finished_at=item.finished_at,
+                exit_code=item.exit_code,
+                forced_kill=item.forced_kill,
+                cleanup_error=item.cleanup_error,
+            )
+            for item in members
+        ),
+        phases=tuple(phases),
+    )
 
 
 def parse_filters(values: tuple[str, ...]) -> tuple[AnalysisFilter, ...]:
