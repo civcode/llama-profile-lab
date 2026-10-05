@@ -679,11 +679,13 @@ def test_completed_run_persists_cpu_gpu_telemetry_and_external_load_quality(
         ).fetchall()
         metrics = BenchmarkRunRepository(connection).metrics(run_id)
 
-    assert len(rows) == 3
-    during = rows[1]
-    assert float(during[1]) == 40.0
-    assert float(during[2]) == 80.0
-    assert "0000:01:00.0" in str(during[3])
+    assert rows[0][0] == "before"
+    assert rows[-1][0] == "after"
+    during_rows = [row for row in rows if row[0] == "during"]
+    assert during_rows
+    assert all(float(row[1]) == 40.0 for row in during_rows)
+    assert all(float(row[2]) == 80.0 for row in during_rows)
+    assert all("0000:01:00.0" in str(row[3]) for row in during_rows)
     assert metrics["telemetry.process_cpu_peak_pct_normalized"] == 40.0
     assert metrics["telemetry.gpu_utilization_peak_pct"] == 90.0
     assert metrics["telemetry.process_rss_peak_bytes"] == 2_000_000_000
