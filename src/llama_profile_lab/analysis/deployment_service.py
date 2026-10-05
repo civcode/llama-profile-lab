@@ -97,6 +97,8 @@ class _RuntimeSummary:
     min_free_by_device: Mapping[str, int]
     total_power_avg_w: float | None
     total_power_peak_w: float | None
+    total_power_sum_w: float
+    total_power_sample_count: int
 
 
 class DeploymentAnalysisService:
@@ -117,6 +119,14 @@ class DeploymentAnalysisService:
             "deployment.min_device_runtime_headroom_bytes",
             "deployment.total_power_avg_w",
             "deployment.total_power_peak_w",
+            "deployment.device.<id>.headroom_bytes",
+            "deployment.device.<id>.projected_headroom_bytes",
+            "deployment.device.<id>.runtime_headroom_bytes",
+            "deployment.instance.<id>.pp_tps",
+            "deployment.instance.<id>.tg_tps",
+            "deployment.instance.<id>.retention",
+            "deployment.instance.<id>.latency_ms",
+            "deployment.instance.<id>.latency_increase_pct",
         )
 
     def matrix(
@@ -322,7 +332,7 @@ class DeploymentAnalysisService:
         runtime = (
             _runtime_summary(run_observation)
             if run_observation is not None
-            else _RuntimeSummary({}, {}, None, None)
+            else _RuntimeSummary({}, {}, None, None, 0.0, 0)
         )
         rows.extend(
             (
@@ -1248,6 +1258,8 @@ def _runtime_summary(item: _Observation) -> _RuntimeSummary:
         total_power_peak_w=(
             max(total_power) if total_power else None
         ),
+        total_power_sum_w=sum(total_power),
+        total_power_sample_count=len(total_power),
     )
 
 
@@ -1260,7 +1272,8 @@ def _combined_runtime_summary(
     summaries = [_runtime_summary(item) for item in unique.values()]
     peak: dict[str, int] = {}
     minimum_free: dict[str, int] = {}
-    averages: list[float] = []
+    power_sum = 0.0
+    power_count = 0
     peaks: list[float] = []
     for summary in summaries:
         for device_id, value in summary.peak_used_by_device.items():
@@ -1270,15 +1283,21 @@ def _combined_runtime_summary(
             minimum_free[device_id] = (
                 value if prior is None else min(prior, value)
             )
-        if summary.total_power_avg_w is not None:
-            averages.append(summary.total_power_avg_w)
+        power_sum += summary.total_power_sum_w
+        power_count += summary.total_power_sample_count
         if summary.total_power_peak_w is not None:
             peaks.append(summary.total_power_peak_w)
     return _RuntimeSummary(
         peak_used_by_device=peak,
         min_free_by_device=minimum_free,
-        total_power_avg_w=fmean(averages) if averages else None,
+        total_power_avg_w=(
+            power_sum / power_count
+            if power_count > 0
+            else None
+        ),
         total_power_peak_w=max(peaks) if peaks else None,
+        total_power_sum_w=power_sum,
+        total_power_sample_count=power_count,
     )
 
 
