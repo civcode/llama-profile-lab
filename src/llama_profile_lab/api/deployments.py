@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import Field, NonNegativeInt
 
@@ -215,7 +215,7 @@ class StandaloneBaselineInputDTO(ApiModel):
     """Exact standalone denominator supplied to concurrent execution."""
 
     instance_id: Annotated[str, Field(min_length=1)]
-    mode: str
+    mode: Literal["prefill", "decode"]
     prompt_tokens: NonNegativeInt
     generate_tokens: NonNegativeInt
     depth_tokens: NonNegativeInt
@@ -971,6 +971,38 @@ def register_deployment_routes(
     def deployment_results(deployment_id: str) -> DeploymentResultsResponse:
         return service.results(deployment_id)
 
+    @app.get(
+        "/api/deployments/{deployment_id}/pareto",
+        response_model=DeploymentParetoResult,
+    )
+    def deployment_pareto_get(
+        deployment_id: str,
+        objectives: Annotated[list[str], Query(alias="objective")],
+        constraints: Annotated[
+            list[str] | None,
+            Query(alias="constraint"),
+        ] = None,
+        filters: Annotated[list[str] | None, Query(alias="filter")] = None,
+    ) -> DeploymentParetoResult:
+        try:
+            request = DeploymentParetoRequest(
+                objectives=tuple(
+                    _parse_pareto_objective(value)
+                    for value in objectives
+                ),
+                constraints=tuple(
+                    _parse_metric_constraint(value)
+                    for value in constraints or []
+                ),
+                filters=tuple(
+                    _parse_analysis_filter(value)
+                    for value in filters or []
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return service.pareto(deployment_id, request)
+
     @app.post(
         "/api/deployments/{deployment_id}/pareto",
         response_model=DeploymentParetoResult,
@@ -980,6 +1012,68 @@ def register_deployment_routes(
         request: DeploymentParetoRequest,
     ) -> DeploymentParetoResult:
         return service.pareto(deployment_id, request)
+
+
+def _parse_analysis_filter(value: str) -> DeploymentAnalysisFilter:
+    path, separator, raw = value.partition("=")
+    if not separator or not path:
+        raise ValueError(f"invalid deployment filter {value!r}; expected PATH=VALUE")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = raw
+    if parsed is not None and not isinstance(
+        parsed,
+        (str, int, float, bool),
+    ):
+        raise ValueError("deployment filter values must be JSON scalars")
+    return DeploymentAnalysisFilter(path=path, value=parsed)
+
+
+def _parse_pareto_objective(value: str) -> DeploymentParetoObjective:
+    key, separator, remainder = value.partition(":")
+    direction, second, metric = remainder.partition(":")
+    if (
+        not separator
+        or not second
+        or not key
+        or direction not in {"maximize", "minimize", "max", "min"}
+        or not metric
+    ):
+        raise ValueError(
+            "invalid objective; expected KEY:DIRECTION:METRIC"
+        )
+    normalized = (
+        "maximize" if direction in {"maximize", "max"} else "minimize"
+    )
+    return DeploymentParetoObjective(
+        key=key,
+        direction=normalized,
+        metric=metric,
+    )
+
+
+def _parse_metric_constraint(value: str) -> DeploymentMetricConstraint:
+    metric, separator, remainder = value.partition(":")
+    operator, second, raw_value = remainder.partition(":")
+    if (
+        not separator
+        or not second
+        or not metric
+        or operator not in {"ge", "gt", "le", "lt", "eq"}
+    ):
+        raise ValueError(
+            "invalid constraint; expected METRIC:OPERATOR:VALUE"
+        )
+    try:
+        threshold = float(raw_value)
+    except ValueError as exc:
+        raise ValueError("constraint VALUE must be numeric") from exc
+    return DeploymentMetricConstraint(
+        metric=metric,
+        operator=operator,
+        value=threshold,
+    )
 
 
 async def _deployment_progress_events(
