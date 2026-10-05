@@ -4,6 +4,7 @@ import { EmptyState, ErrorBanner, PageHeader } from "../components";
 import type {
   BinaryRecord,
   CandidateSummary,
+  DeviceInventoryResponse,
   Experiment,
   ModelRecord
 } from "../types";
@@ -68,6 +69,10 @@ export function NewDeploymentPage() {
   const [allowCpuOffload, setAllowCpuOffload] = useState(false);
   const [allowSwap, setAllowSwap] = useState(false);
   const [maximumPower, setMaximumPower] = useState("");
+  const [deviceInventories, setDeviceInventories] = useState<Record<string, DeviceInventoryResponse>>({});
+  const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
+  const [deviceMarginsMiB, setDeviceMarginsMiB] = useState<Record<string, string>>({});
+  const [discoveringDevices, setDiscoveringDevices] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -116,6 +121,45 @@ export function NewDeploymentPage() {
     () => binaries.filter((item) => item.kind === "llama-server"),
     [binaries]
   );
+  const discoveredDevices = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        id: string;
+        label: string;
+        totalMemoryBytes: number | null;
+        freeMemoryBytes: number | null;
+        mappings: {
+          binary_id: string;
+          logical_device_name: string;
+          device_id: string;
+        }[];
+      }
+    >();
+    for (const inventory of Object.values(deviceInventories)) {
+      for (const device of inventory.items) {
+        const stableId = device.physical_device_key ?? device.logical_device_name;
+        const current = grouped.get(stableId) ?? {
+          id: stableId,
+          label:
+            [device.vendor, device.product_name].filter(Boolean).join(" ") ||
+            device.logical_device_name,
+          totalMemoryBytes: device.total_memory_bytes,
+          freeMemoryBytes: device.free_memory_bytes,
+          mappings: []
+        };
+        current.mappings.push({
+          binary_id: inventory.binary_id,
+          logical_device_name: device.logical_device_name,
+          device_id: stableId
+        });
+        grouped.set(stableId, current);
+      }
+    }
+    return [...grouped.values()].sort((left, right) =>
+      left.label.localeCompare(right.label)
+    );
+  }, [deviceInventories]);
   const workloadExperiment = experiments.find(
     (item) => item.id === workloadExperimentId
   );
@@ -167,6 +211,41 @@ export function NewDeploymentPage() {
     ]);
   }
 
+  async function discoverDevices() {
+    const binaryIds = [...new Set(instances.map((item) => item.binaryId).filter(Boolean))];
+    if (binaryIds.length === 0) return;
+    try {
+      setDiscoveringDevices(true);
+      setError(null);
+      const inventories = await Promise.all(
+        binaryIds.map((binaryId) => api.binaryDevices(binaryId))
+      );
+      const next = Object.fromEntries(
+        inventories.map((inventory) => [inventory.binary_id, inventory])
+      );
+      setDeviceInventories(next);
+      const discovered = inventories.flatMap((inventory) =>
+        inventory.items.map(
+          (item) => item.physical_device_key ?? item.logical_device_name
+        )
+      );
+      const unique = [...new Set(discovered)];
+      setSelectedDevices((current) => (current.length > 0 ? current : unique));
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setDiscoveringDevices(false);
+    }
+  }
+
+  function toggleDevice(deviceId: string) {
+    setSelectedDevices((current) =>
+      current.includes(deviceId)
+        ? current.filter((item) => item !== deviceId)
+        : [...current, deviceId]
+    );
+  }
+
   function togglePhase(phase: (typeof ALL_PHASES)[number]) {
     setPhases((current) =>
       current.includes(phase)
@@ -201,12 +280,23 @@ export function NewDeploymentPage() {
             server_identity: item.serverIdentity.trim()
           })),
           resource_policy: {
-            device_memory_margin_bytes: {},
-            logical_device_mappings: [],
+            device_memory_margin_bytes: Object.fromEntries(
+              selectedDevices.map((deviceId) => [
+                deviceId,
+                Math.round(
+                  Math.max(0, Number(deviceMarginsMiB[deviceId] || 0)) *
+                    1024 *
+                    1024
+                )
+              ])
+            ),
+            logical_device_mappings: discoveredDevices
+              .filter((device) => selectedDevices.includes(device.id))
+              .flatMap((device) => device.mappings),
             host_ram_margin_bytes: Math.round(hostRamMarginMiB * 1024 * 1024),
             allow_cpu_offload: allowCpuOffload,
             allow_swap: allowSwap,
-            allowed_devices: [],
+            allowed_devices: selectedDevices,
             allowed_backend_pairs: [],
             maximum_total_power_w:
               maximumPower.trim() === "" ? null : Number(maximumPower)
@@ -403,11 +493,24 @@ export function NewDeploymentPage() {
           <section className="panel">
             <div className="section-number">3</div>
             <div className="section-body">
-              <h2>Host resource policy</h2>
-              <p className="section-copy">
-                These deployment-wide limits are applied before joint placement
-                execution. Device-specific margins are configured during planning.
-              </p>
+              <div className="section-heading-row">
+                <div>
+                  <h2>Host resource policy</h2>
+                  <p className="section-copy">
+                    Discover the exact logical devices exposed by the selected
+                    llama-server binaries, then constrain the deployment to stable
+                    physical GPUs and reserve per-device memory headroom.
+                  </p>
+                </div>
+                <button
+                  className="button"
+                  type="button"
+                  disabled={discoveringDevices || incompleteInstance}
+                  onClick={() => void discoverDevices()}
+                >
+                  {discoveringDevices ? "Discovering…" : "Discover devices"}
+                </button>
+              </div>
               <div className="control-grid three">
                 <label className="field">
                   <span>Host RAM reserve (MiB)</span>
@@ -449,6 +552,84 @@ export function NewDeploymentPage() {
                   </label>
                 </div>
               </div>
+              {discoveredDevices.length > 0 ? (
+                <div className="device-policy-grid">
+                  {discoveredDevices.map((device) => {
+                    const selected = selectedDevices.includes(device.id);
+                    return (
+                      <div className="device-policy-card" key={device.id}>
+                        <label className="phase-option device-select">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleDevice(device.id)}
+                          />
+                          <span>{device.label}</span>
+                        </label>
+                        <div className="muted">
+                          <code>{device.id}</code>
+                        </div>
+                        <div className="device-memory-line">
+                          <span>
+                            Free{" "}
+                            {device.freeMemoryBytes === null
+                              ? "—"
+                              : (
+                                  device.freeMemoryBytes /
+                                  1024 /
+                                  1024 /
+                                  1024
+                                ).toFixed(1) + " GiB"}
+                          </span>
+                          <span>
+                            Total{" "}
+                            {device.totalMemoryBytes === null
+                              ? "—"
+                              : (
+                                  device.totalMemoryBytes /
+                                  1024 /
+                                  1024 /
+                                  1024
+                                ).toFixed(1) + " GiB"}
+                          </span>
+                        </div>
+                        <label className="field">
+                          <span>Reserve margin (MiB)</span>
+                          <input
+                            type="number"
+                            min="0"
+                            disabled={!selected}
+                            value={deviceMarginsMiB[device.id] ?? "0"}
+                            onChange={(event) =>
+                              setDeviceMarginsMiB((current) => ({
+                                ...current,
+                                [device.id]: event.target.value
+                              }))
+                            }
+                          />
+                        </label>
+                        <div className="muted">
+                          {device.mappings
+                            .map(
+                              (mapping) =>
+                                mapping.logical_device_name +
+                                " via " +
+                                binaries.find(
+                                  (binary) => binary.id === mapping.binary_id
+                                )?.path
+                            )
+                            .join(" · ")}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="muted resource-policy-hint">
+                  Device allowlists are optional. Discover devices to bind this
+                  deployment to stable physical GPU identities and reserve VRAM.
+                </div>
+              )}
             </div>
           </section>
 
