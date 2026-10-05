@@ -337,6 +337,66 @@ The planner should eliminate equivalent candidates when two devices or two model
 
 All pruning decisions must record the rule that removed the candidate.
 
+### 9.5 V2-M4 implementation boundary
+
+V2-M4 implements the first deterministic joint planner with instance-addressable paths such as
+`instances.<id>.context.size`, `instances.<id>.requested_placement.devices`, and
+`resource_policy.device_memory_margin_bytes.<device>`. Search expansion is content-addressed,
+constraint-filtered, and de-duplicates equivalent effective placement overrides. Symmetry
+reduction is available only through an explicit hook and is disabled by default.
+
+Joint planning requires an explicit selected device set before estimation; `auto` placement is
+rejected rather than sequentially fitting one instance and giving another the remainder.
+The M2 estimator accepts deployment placement overrides without mutating the V1 Candidate.
+
+For each expanded deployment point, the planner:
+
+1. validates the exact registered server binary's relevant placement capability surface;
+2. resolves logical devices to durable physical identities from M2 inventory or explicit policy mappings;
+3. applies allowed-device/backend policy and tensor/KV compatibility rules;
+4. obtains one structured M2 memory estimate per instance under the requested placement;
+5. aggregates model/context/compute bytes by physical device;
+6. applies per-device margins against the estimator-reported usable/free bytes;
+7. persists normalized rejection reasons or one feasible DeploymentPlacement.
+
+Migration 009 stores deployment-plan count/provenance records and deterministic feasible case
+references. Successful standalone M2 estimates remain canonical; feasible M4 placements
+materialize their selected rows into `placement_device_memory`. Rejected points do not launch
+throughput work.
+
+The CLI accepts a versioned-domain search document inside a small planning request file:
+
+~~~json
+{
+  "base_deployment_candidate_id": "deploy_...",
+  "search_space": {
+    "dimensions": [
+      {
+        "path": "instances.qwen.context.size",
+        "values": [131072, 196608]
+      }
+    ]
+  },
+  "instances": [
+    {
+      "instance_id": "qwen",
+      "helper_binary_id": "bin_...",
+      "model_path": "/models/qwen.gguf"
+    },
+    {
+      "instance_id": "flash",
+      "helper_binary_id": "bin_...",
+      "model_path": "/models/flash.gguf"
+    }
+  ],
+  "timeout_seconds": 300
+}
+~~~
+
+`llprof deployment preview` evaluates stable raw/rejected/valid counts without persisting
+deployment plan cases or rejection history. `llprof deployment plan` persists feasible cases
+and explainable rejection history.
+
 ## 10. Search strategy
 
 An exhaustive Cartesian product becomes expensive quickly. V2 therefore uses staged search.
