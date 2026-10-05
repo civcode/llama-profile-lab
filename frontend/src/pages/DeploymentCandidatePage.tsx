@@ -13,8 +13,7 @@ import type {
   DeploymentCandidateItem,
   DeploymentPlacement,
   DeploymentPromotionResponse,
-  DeploymentRun,
-  Experiment
+  DeploymentRun
 } from "../types";
 
 function numeric(row: Record<string, unknown>, key: string): number | null {
@@ -41,7 +40,6 @@ export function DeploymentCandidatePage({
   const [candidate, setCandidate] = useState<DeploymentCandidateItem | null>(null);
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [placements, setPlacements] = useState<DeploymentPlacement[]>([]);
-  const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [sourceOptions, setSourceOptions] = useState<
     Record<string, { id: string; name: string }[]>
   >({});
@@ -85,7 +83,6 @@ export function DeploymentCandidatePage({
         const selected = candidateValues.find((item) => item.id === candidateId) ?? null;
         setCandidate(selected);
         setDeployment(deploymentValue);
-        setExperiments(experimentValues);
         const candidatePlacements = placementValues.filter(
           (item) => item.deployment_candidate_id === candidateId
         );
