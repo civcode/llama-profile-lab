@@ -398,7 +398,7 @@ export function NewDeploymentPage() {
                     </div>
                     <div className="control-grid two">
                       <label className="field">
-                        <span>Instance name</span>
+                        <span>{"Instance name " + (index + 1)}</span>
                         <input
                           value={instance.instanceId}
                           onChange={(event) =>
@@ -410,7 +410,7 @@ export function NewDeploymentPage() {
                         />
                       </label>
                       <label className="field">
-                        <span>Role</span>
+                        <span>{"Role " + (index + 1)}</span>
                         <input
                           value={instance.role}
                           onChange={(event) =>
@@ -420,7 +420,7 @@ export function NewDeploymentPage() {
                       </label>
                     </div>
                     <label className="field">
-                      <span>Base Candidate</span>
+                      <span>{"Base Candidate " + (index + 1)}</span>
                       <select
                         value={instance.candidateId}
                         onChange={(event) =>
@@ -441,7 +441,7 @@ export function NewDeploymentPage() {
                     </label>
                     <div className="control-grid two">
                       <label className="field">
-                        <span>Model artifact</span>
+                        <span>{"Model artifact " + (index + 1)}</span>
                         <select
                           value={instance.modelId}
                           onChange={(event) =>
@@ -456,7 +456,7 @@ export function NewDeploymentPage() {
                         </select>
                       </label>
                       <label className="field">
-                        <span>llama-server binary</span>
+                        <span>{"llama-server binary " + (index + 1)}</span>
                         <select
                           value={instance.binaryId}
                           onChange={(event) =>
