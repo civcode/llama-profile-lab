@@ -10,9 +10,7 @@ from typing import Callable
 
 from llama_profile_lab.analysis.concurrent import (
     ConcurrentMetricError,
-    MemberOverlap,
     compute_overlap,
-    native_throughput,
     retention_for,
 )
 from llama_profile_lab.db import (
@@ -27,12 +25,13 @@ from llama_profile_lab.db import (
 from llama_profile_lab.domain import (
     ConcurrentMemberResult,
     ConcurrentQuality,
+    ConcurrentWorkloadMode,
+    DeploymentCandidate,
     ConcurrentWorkloadCase,
     ConcurrentWorkloadMemberSpec,
 )
 from llama_profile_lab.execution.concurrent_client import (
     ConcurrentClient,
-    ConcurrentClientError,
     LlamaCompletionConcurrentClient,
     PreparedConcurrentClient,
 )
@@ -78,7 +77,7 @@ class StandaloneBaselineInput:
     """User/import-facing exact standalone denominator."""
 
     instance_id: str
-    mode: str
+    mode: ConcurrentWorkloadMode
     prompt_tokens: int
     generate_tokens: int
     depth_tokens: int
@@ -192,7 +191,7 @@ class ConcurrentDeploymentExecutor:
         deployment_placement_id: str,
     ) -> tuple[
         str,
-        object,
+        DeploymentCandidate,
         tuple[tuple[str, ConcurrentWorkloadCase], ...],
         dict[str, _BaselineIdentity],
     ]:
