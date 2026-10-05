@@ -1585,7 +1585,7 @@ Implementation notes and validation:
 
 ## 14. V2-M10 — Coordinated promotion, hardening, and workstation acceptance
 
-**Status: Planned**
+**Status: Implementation complete; automated clean-checkout and target-workstation acceptance pending**
 
 ### Objective
 
@@ -1779,20 +1779,20 @@ V2 workstation acceptance passes when:
 
 ### Work items
 
-- [ ] Add coordinated promotion model.
-- [ ] Add deployment proposal diff.
-- [ ] Extend experiment export/archive.
-- [ ] Extend archive restore tests.
-- [ ] Add V2 database-check coverage.
-- [ ] Add hardening fixtures.
-- [ ] Add device-change revalidation.
-- [ ] Add runtime projection-delta reporting.
-- [ ] Add correctness probes for finalists.
-- [ ] Write V2 operator docs.
+- [x] Add coordinated promotion model.
+- [x] Add deployment proposal diff.
+- [x] Extend deployment export/archive.
+- [x] Extend archive restore tests.
+- [x] Add V2 database-check coverage.
+- [x] Add hardening fixtures.
+- [x] Add device-change revalidation.
+- [x] Add runtime projection-delta reporting.
+- [x] Add correctness probes for finalists.
+- [x] Write V2 operator docs.
 - [ ] Execute target-workstation acceptance.
 - [ ] Record acceptance artifacts/results.
 - [ ] Update known limitations from measured behavior.
-- [ ] Prepare release notes/checklist.
+- [x] Prepare draft release notes/checklist.
 
 ### Automated acceptance gate
 
@@ -1819,6 +1819,19 @@ on:
 ~~~
 
 unless automatic execution is explicitly requested.
+
+Implementation notes and validation:
+
+- schema 15 persists append-only coordinated deployment promotion proposals with source/proposed launcher snapshots, per-instance source mappings, unified changes, placement identity, and validation evidence;
+- promotion refuses partial source coverage, launcher source drift, missing completed/correctness-valid configured phases, and missing persisted memory-estimator provenance; proposal generation never mutates launcher configuration;
+- complete V2 provenance export is available through `llprof deployment export`, covering immutable deployment/Candidate data, plans/rejections, placements/memory, estimator/device evidence, raw deployment/workload evidence, GPU telemetry, durable operations, environment identities, and promotion proposals;
+- archive restore coverage now proves schema-15 coordinated promotion evidence survives a hashed SQLite archive round trip;
+- `llprof database check` includes representative indexed deployment plan, placement-run, and promotion queries;
+- deployment execution re-discovers exact-binary accelerator inventory before server startup and fails as `device_capability_mismatch` when a planned logical selector disappears or remaps to a different physical GPU;
+- deployment memory analysis reports signed runtime-versus-projection peak-use and free-headroom deltas per physical device;
+- the production concurrent client classifies malformed/non-object SSE, regressing token counters, contradictory final counters, and exact token-count mismatches as correctness-invalid output;
+- V2 operator documentation now includes getting started, architecture, benchmark workflow, troubleshooting, known limitations, release checklist, and draft release notes;
+- GitHub Actions were not dispatched. This environment still cannot obtain a runnable clean checkout, so the locked Python and frontend acceptance gates remain explicitly pending.
 
 ### Final acceptance gate
 
