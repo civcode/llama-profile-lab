@@ -438,3 +438,34 @@ class MemoryEstimateDeviceRecord:
     device_total_bytes: int
     device_free_bytes: int
 
+@dataclass(frozen=True, slots=True)
+class DeploymentPlanRecord:
+    """Persisted counts and provenance for one deployment planner pass."""
+
+    id: str
+    base_deployment_candidate_id: str
+    host_id: str
+    search_hash: str
+    raw_combinations: int
+    rejected_by_constraints: int
+    duplicate_candidates: int
+    symmetry_reduced: int
+    capability_rejected: int
+    estimate_failed: int
+    memory_rejected: int
+    valid_count: int
+    request: Mapping[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentPlanCaseRecord:
+    """One deterministic feasible deployment case in a persisted plan."""
+
+    deployment_plan_id: str
+    ordinal: int
+    case_hash: str
+    deployment_candidate_id: str
+    deployment_placement_id: str
+    generation: Mapping[str, Any]
+
