@@ -499,6 +499,16 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
         return service.get_deployment(deployment_id)
 
     @app.post(
+        "/api/deployments/{deployment_id}/preview",
+        response_model=DeploymentPlanResponse,
+    )
+    def preview_deployment(
+        deployment_id: str,
+        request: DeploymentPlanRequest,
+    ) -> DeploymentPlanResponse:
+        return service.preview_deployment(deployment_id, request)
+
+    @app.post(
         "/api/deployments/{deployment_id}/plan",
         response_model=DeploymentPlanResponse,
     )
