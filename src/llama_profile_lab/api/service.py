@@ -1417,6 +1417,9 @@ class ApiService:
 
             members: tuple[DeploymentMemberStateDTO, ...] = ()
             current_phase: str | None = None
+            current_prompt_tps: float | None = None
+            current_decode_tps: float | None = None
+            current_min_retention: float | None = None
             if active_run_id is not None:
                 run_repository = DeploymentRunRepository(connection)
                 members = tuple(
@@ -1445,6 +1448,34 @@ class ApiService:
                     if phase_row is None
                     else str(phase_row["phase"])
                 )
+                metric_row = connection.execute(
+                    """
+                    SELECT combined_prompt_tps, combined_decode_tps,
+                           min_retention
+                    FROM deployment_workload_run
+                    WHERE deployment_run_id = ?
+                      AND status = 'completed'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (active_run_id,),
+                ).fetchone()
+                if metric_row is not None:
+                    current_prompt_tps = (
+                        None
+                        if metric_row["combined_prompt_tps"] is None
+                        else float(metric_row["combined_prompt_tps"])
+                    )
+                    current_decode_tps = (
+                        None
+                        if metric_row["combined_decode_tps"] is None
+                        else float(metric_row["combined_decode_tps"])
+                    )
+                    current_min_retention = (
+                        None
+                        if metric_row["min_retention"] is None
+                        else float(metric_row["min_retention"])
+                    )
 
             latest_run = connection.execute(
                 """
@@ -1479,6 +1510,9 @@ class ApiService:
             active_deployment_run=active_run_id,
             member_states=members,
             current_workload_phase=current_phase,
+            current_combined_prompt_tps=current_prompt_tps,
+            current_combined_decode_tps=current_decode_tps,
+            current_min_retention=current_min_retention,
             operation=_deployment_operation_dto(operation),
         )
 
