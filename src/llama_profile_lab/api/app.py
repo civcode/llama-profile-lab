@@ -474,6 +474,13 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
             qualities=tuple(qualities or ()),
         )
 
+    @app.get(
+        "/api/deployments",
+        response_model=DeploymentListResponse,
+    )
+    def deployments() -> DeploymentListResponse:
+        return service.list_deployments()
+
     @app.post(
         "/api/deployments",
         response_model=DeploymentDTO,
