@@ -16,6 +16,7 @@ from llama_profile_lab.domain import (
     HostResourcePolicy,
     ModelInstanceCandidate,
 )
+from llama_profile_lab.domain.base import sha256_json
 from llama_profile_lab.domain.deployment_search import DeploymentSearchValue
 from llama_profile_lab.planning.constraints import (
     ConstraintError,
@@ -244,7 +245,7 @@ def expand_deployment_search(
             continue
 
         point = _build_point(base, state)
-        digest = point.deployment.content_hash()
+        digest = _point_semantic_hash(point)
         if digest in seen_hashes:
             duplicates += 1
             continue
@@ -361,3 +362,65 @@ def _build_point(
         assignments=tuple(state.assignments),
         skipped_dimensions=tuple(state.skipped_dimensions),
     )
+
+def _point_semantic_hash(point: DeploymentPoint) -> str:
+    """Deduplicate effective behavior, including redundant placement overrides."""
+    instances = []
+    candidates = dict(point.candidates)
+    for instance in point.deployment.instances:
+        candidate = candidates[instance.instance_id]
+        base = candidate.placement.constraints
+        request = instance.requested_placement
+        effective = base.model_copy(
+            update={
+                "devices": (
+                    request.devices
+                    if request.devices is not None
+                    else base.devices
+                ),
+                "n_gpu_layers": (
+                    request.n_gpu_layers
+                    if request.n_gpu_layers is not None
+                    else base.n_gpu_layers
+                ),
+                "split_mode": request.split_mode or base.split_mode,
+                "main_gpu": (
+                    request.main_gpu
+                    if request.main_gpu is not None
+                    else base.main_gpu
+                ),
+                "tensor_split": (
+                    request.tensor_split
+                    if request.tensor_split is not None
+                    else base.tensor_split
+                ),
+                "override_tensor": (
+                    request.override_tensor
+                    if request.override_tensor
+                    else base.override_tensor
+                ),
+            }
+        )
+        instances.append(
+            {
+                "instance_id": instance.instance_id,
+                "candidate_hash": candidate.content_hash(),
+                "role": instance.role,
+                "model_artifact_id": instance.model_artifact_id,
+                "binary_id": instance.binary_id,
+                "effective_placement": effective.model_dump(mode="json"),
+                "server_identity": instance.server_identity,
+            }
+        )
+    return sha256_json(
+        {
+            "instances": instances,
+            "resource_policy": point.deployment.resource_policy.model_dump(
+                mode="json"
+            ),
+            "workload_mix": point.deployment.workload_mix.model_dump(
+                mode="json"
+            ),
+        }
+    )
+
