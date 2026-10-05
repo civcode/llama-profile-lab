@@ -56,6 +56,7 @@ class MemoryEstimatorAdapter:
         binary_path: Path,
         capabilities: CapabilitySet,
         helper_sha256: str,
+        host_id: str,
         model_path: Path,
         candidate: Candidate,
         selected_devices: tuple[str, ...] | None = None,
@@ -99,6 +100,7 @@ class MemoryEstimatorAdapter:
 
         n_gpu_layers = constraints.n_gpu_layers
         identity = MemoryEstimateIdentity(
+            host_id=host_id,
             candidate_hash=candidate.content_hash(),
             model_artifact_id=candidate.model.target_model_id,
             helper_sha256=helper_sha256,
