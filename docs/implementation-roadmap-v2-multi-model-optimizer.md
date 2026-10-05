@@ -1257,7 +1257,7 @@ The container still cannot resolve GitHub, so the full repository Ruff, mypy, co
 
 ## 12. V2-M8 — CLI, HTTP API, and SSE
 
-**Status: Planned**
+**Status: Implemented (full local acceptance suite pending)**
 
 ### Objective
 
@@ -1339,17 +1339,17 @@ Human-readable CLI should clearly distinguish:
 
 ### Work items
 
-- [ ] Add application service methods.
-- [ ] Add API DTOs.
-- [ ] Add API routes.
-- [ ] Add error mapping.
-- [ ] Add SSE deployment snapshots.
-- [ ] Add CLI parser tree.
-- [ ] Add CLI rendering.
-- [ ] Add JSON-friendly output where existing CLI convention supports it.
-- [ ] Reuse V1 result/analysis services where semantics match.
-- [ ] Add API/CLI tests.
-- [ ] Verify V1 routes unchanged.
+- [x] Add application service methods.
+- [x] Add API DTOs.
+- [x] Add API routes.
+- [x] Add error mapping.
+- [x] Add SSE deployment snapshots.
+- [x] Add CLI parser tree.
+- [x] Add CLI rendering.
+- [x] Add JSON-friendly output where existing CLI convention supports it.
+- [x] Reuse V1 result/analysis services where semantics match.
+- [x] Add API/CLI tests.
+- [x] Verify V1 routes unchanged.
 
 ### Tests
 
@@ -1378,6 +1378,17 @@ CLI:
 The complete V2 workflow through M7 can be driven without importing internal Python modules, using only CLI or HTTP APIs.
 
 All V1 CLI/API tests remain green.
+
+Implementation notes and validation:
+
+- deployment operations are durable in SQLite, so pause/cancel requests can be issued by a separate API or CLI process and resume can reconstruct the persisted execution request;
+- HTTP and CLI share the same deployment planning, execution, memory, results, and Pareto services instead of duplicating M4-M7 semantics;
+- deployment progress/SSE snapshots retain active and terminal member state, current Candidate/placement identity, the latest workload phase, aggregate PP/TG throughput, runtime/projected memory evidence, and failure details where available;
+- progress avoids reusing prior-run runtime metrics while a newly started operation has not yet created its own deployment run;
+- API acceptance coverage exercises create/plan/get, invalid references, plan summaries, run/pause/resume/cancel, placement memory, results, Pareto, SSE changes, failed member propagation, and preservation of the V1 route surface;
+- CLI acceptance coverage exercises help, create/show/placement, preview/plan, results, Pareto, durable control dispatch, and nonzero failure behavior;
+- schema 14 persists durable deployment operation state and request payloads used for cross-process control/resume;
+- GitHub Actions were not dispatched. The current environment cannot clone/resolve GitHub for a full local Ruff, mypy, pytest, and frontend run, so the repository-wide acceptance suite remains explicitly unverified here.
 
 ### Suggested checkpoint commits
 
