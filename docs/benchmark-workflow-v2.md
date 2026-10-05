@@ -136,7 +136,24 @@ Use the finalist Candidate page to select source experiment provenance for every
 
 Review the unified patch and evidence. Proposal generation never changes launcher configuration.
 
-## 12. Export acceptance evidence
+## 12. Generate the machine-checkable acceptance report
+
+After the baseline, split topology, canonical phases, repetitions, telemetry, and coordinated promotion are persisted, evaluate the evidence already in SQLite:
+
+```bash
+llprof deployment acceptance-report DEPLOYMENT_ID \
+  --minimum-devices 2 \
+  --minimum-phase-repetitions 3 \
+  --format json \
+  --output workstation-acceptance.json \
+  --database data/benchmarks.db
+```
+
+The command is read-only. It checks stable mapped device identity, heterogeneous inventory, simultaneous multi-device telemetry, exact server/helper/model provenance, projected/runtime memory evidence, memory-overcommit pruning, correctness-valid DD/PP/PD/DP repetitions, retention, completed baseline and split topologies, no-swap/no-CPU-offload policy, and coordinated promotion coverage.
+
+The report deliberately leaves three items `pending`: explicit Pareto finalist selection, confirmation that the recorded devices/models are the intended target workstation/artifacts, and the clean-checkout backend/frontend gates. It therefore cannot by itself declare a release ready. A nonzero exit status means one or more machine-checkable persisted-evidence requirements failed.
+
+## 13. Export acceptance evidence
 
 Create both:
 
@@ -150,4 +167,4 @@ llprof archive \
   --database data/benchmarks.db
 ```
 
-Keep the deployment export, archive, exact binary hashes, hardware inventory, and operator notes together as release acceptance artifacts.
+Keep the acceptance report, deployment export, archive, exact binary hashes, hardware inventory, Pareto selection notes, and operator notes together as release acceptance artifacts.
