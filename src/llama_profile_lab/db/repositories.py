@@ -2643,6 +2643,13 @@ class AcceleratorDeviceRepository:
     ) -> tuple[str, ...]:
         identifiers: list[str] = []
         with transaction(self.connection, immediate=True):
+            self.connection.execute(
+                """
+                DELETE FROM accelerator_device
+                WHERE host_id = ? AND binary_id = ?
+                """,
+                (host_id, binary_id),
+            )
             for device in devices:
                 identifier = _content_id(
                     "accel",
