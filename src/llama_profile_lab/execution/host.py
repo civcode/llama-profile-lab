@@ -84,7 +84,6 @@ def _total_ram_bytes() -> int:
     return max(0, pages * page_size)
 
 
-
 def _linux_gpu_inventory() -> list[dict[str, object]]:
     """Capture stable DRM/PCI GPU identity without vendor tooling."""
     drm = Path("/sys/class/drm")
