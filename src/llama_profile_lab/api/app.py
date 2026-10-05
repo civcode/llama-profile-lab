@@ -14,8 +14,8 @@ from fastapi.staticfiles import StaticFiles
 
 from llama_profile_lab.analysis import (
     AnalysisError,
-    DeploymentAnalysisError,
     CandidateComparison,
+    DeploymentAnalysisError,
     LatencyEstimate,
     MatrixProjection,
     ParetoResult,
