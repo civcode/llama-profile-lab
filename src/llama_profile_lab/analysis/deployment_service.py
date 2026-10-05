@@ -6,8 +6,9 @@ import csv
 import io
 import json
 import math
+import sqlite3
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import fmean
 from typing import Any
@@ -733,7 +734,7 @@ class DeploymentAnalysisService:
 
 
 def _load_placement_context(
-    connection,
+    connection: sqlite3.Connection,
     placement_id: str,
 ) -> _PlacementContext:
     placements = DeploymentPlacementRepository(connection)
@@ -1398,7 +1399,7 @@ def _fieldnames(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     return result
 
 
-def _mean(values) -> float | None:
+def _mean(values: Iterable[int | float | None]) -> float | None:
     finite = [
         float(value)
         for value in values
