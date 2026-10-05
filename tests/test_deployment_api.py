@@ -20,9 +20,11 @@ from llama_profile_lab.db import (
     DeploymentRunRepository,
 )
 from llama_profile_lab.domain import (
+    AcceleratorDevice,
     DeploymentSearchDimension,
     DeploymentSearchSpace,
 )
+from llama_profile_lab.execution import DeviceInventoryResult
 from llama_profile_lab.planning import DeploymentPlanSummary
 from tests.test_api import api_request
 from tests.test_deployment_analysis import _seed
@@ -75,6 +77,41 @@ class FakePlanner:
         assert len(inputs) == 2
         assert timeout_seconds == 30.0
         return self._summary(deployment_id, plan_id="deployplan_api")
+
+
+class FakeDeviceInventory:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def inspect(
+        self,
+        binary_id: str,
+        *,
+        timeout_seconds: float | None = 30.0,
+        cancel_event=None,
+    ) -> DeviceInventoryResult:
+        del cancel_event
+        assert binary_id == "server-ui"
+        assert timeout_seconds == 12.0
+        return DeviceInventoryResult(
+            host_id="host-ui",
+            binary_id=binary_id,
+            devices=(
+                AcceleratorDevice(
+                    logical_device_name="CUDA0",
+                    backend="CUDA",
+                    mapping_status="mapped",
+                    physical_device_key="uuid:gpu-0",
+                    uuid="gpu-0",
+                    vendor="NVIDIA",
+                    product_name="RTX Test",
+                    total_memory_bytes=24 * 1024**3,
+                    free_memory_bytes=20 * 1024**3,
+                ),
+            ),
+            stdout="",
+            stderr="",
+        )
 
 
 class SequencedDeploymentOperations:
@@ -245,6 +282,32 @@ def test_deployment_routes_preserve_v1_api_surface(tmp_path: Path) -> None:
     assert "/api/deployments/{deployment_id}/events" in paths
 
 
+def test_binary_device_inventory_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api_service_module,
+        "DeviceInventoryService",
+        FakeDeviceInventory,
+    )
+    app = create_app(tmp_path / "api.db")
+
+    response = api_request(
+        app,
+        "POST",
+        "/api/binaries/server-ui/devices",
+        query=[("timeout_seconds", "12")],
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["host_id"] == "host-ui"
+    assert payload["items"][0]["logical_device_name"] == "CUDA0"
+    assert payload["items"][0]["physical_device_key"] == "uuid:gpu-0"
+    assert payload["items"][0]["free_memory_bytes"] == 20 * 1024**3
+
+
+def test_deployment_list_returns_persisted_definitions(tmp_path: Path) -> None:
 def test_deployment_list_returns_persisted_definitions(tmp_path: Path) -> None:
     database, subjects = _seed(tmp_path)
     app = create_app(
