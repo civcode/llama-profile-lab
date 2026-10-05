@@ -450,3 +450,79 @@ def test_coordinated_deployment_promotion_requires_complete_sources_and_persists
     assert saved is not None
     assert saved.deployment_placement_id == placement_id
     assert len(saved.sources) == 2
+
+    with Database(database_path).session() as connection:
+        connection.execute(
+            """
+            UPDATE deployment_workload_run
+            SET correctness_valid = 0,
+                status = 'invalid',
+                quality = 'correctness_invalid',
+                failure_kind = 'output_validation_failed'
+            WHERE deployment_run_id = ?
+              AND phase = 'dp'
+            """,
+            (proposal["evidence"]["deployment_run_id"],),
+        )
+    invalid = api_request(
+        app,
+        "POST",
+        f"/api/deployments/{deployment_id}/promote",
+        body={
+            "deployment_placement_id": placement_id,
+            "sources": [
+                {
+                    "instance_id": "qwen",
+                    "experiment_id": qwen_exp,
+                    "source_profile_id": "qwen",
+                },
+                {
+                    "instance_id": "flash",
+                    "experiment_id": flash_exp,
+                    "source_profile_id": "flash",
+                },
+            ],
+        },
+    )
+    assert invalid.status_code == 409
+    assert "correctness-valid completed" in invalid.json()["detail"]
+    assert "dp" in invalid.json()["detail"]
+
+    with Database(database_path).session() as connection:
+        connection.execute(
+            """
+            UPDATE deployment_workload_run
+            SET correctness_valid = 1,
+                status = 'completed',
+                quality = 'clean',
+                failure_kind = NULL
+            WHERE deployment_run_id = ?
+              AND phase = 'dp'
+            """,
+            (proposal["evidence"]["deployment_run_id"],),
+        )
+    drifted_payload = json.loads(json.dumps(source_payload))
+    drifted_payload["models"]["qwen"]["args"]["--ctx-size"] = 16384
+    launcher.write_text(json.dumps(drifted_payload), encoding="utf-8")
+    drifted = api_request(
+        app,
+        "POST",
+        f"/api/deployments/{deployment_id}/promote",
+        body={
+            "deployment_placement_id": placement_id,
+            "sources": [
+                {
+                    "instance_id": "qwen",
+                    "experiment_id": qwen_exp,
+                    "source_profile_id": "qwen",
+                },
+                {
+                    "instance_id": "flash",
+                    "experiment_id": flash_exp,
+                    "source_profile_id": "flash",
+                },
+            ],
+        },
+    )
+    assert drifted.status_code == 409
+    assert "changed since source experiment" in drifted.json()["detail"]
