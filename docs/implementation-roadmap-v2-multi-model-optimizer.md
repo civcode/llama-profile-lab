@@ -735,11 +735,12 @@ Implementation validation completed locally without GitHub Actions:
 - deployment dimensions address instance Candidate fields, requested placement fields, device subsets, tensor splits, KV types, contexts, batch/ubatch, and per-device margins;
 - explicit logical-to-physical mappings are available when strong hardware identity cannot be discovered, and unresolved mappings fail closed rather than guessing;
 - explicit deployment placement constraints are passed into the M2 estimator without mutating the V1 Candidate;
+- helper-resolved device order, split mode, main GPU, explicit tensor split, tensor overrides, and explicit numeric GPU-layer requests are validated against the joint planner request before a result can be persisted;
 - capability pruning rejects unsupported devices, backend pairs, split modes, tensor/KV combinations, and missing exact-binary options before throughput work;
 - memory feasibility aggregates model/context/compute bytes across every instance on each physical device and applies per-device margins against usable memory;
 - feasible cases materialize estimator evidence into DeploymentPlacement/placement_device_memory while rejected cases persist normalized reasons and required-versus-available byte details;
 - one-model-per-GPU, both-models-split-both-GPUs, exact-fit, GPU0 overflow, GPU1 overflow, backend-pair rejection, invalid split, lower-precision-KV rescue, all-placement high-context rejection, duplicate elimination, and estimator failure fixtures are covered;
-- 99 locally executable pytest tests pass across the reconstructed V1/V2-M1/M2/M3/M4 core workspace;
+- 100 locally executable pytest tests pass across the reconstructed V1/V2-M1/M2/M3/M4 core workspace;
 - Python compile checks pass;
 - the branch also contains CLI preview/plan parser and dispatch tests; they are not included in the 99-test local count because the reconstructed workspace does not contain the full V1 CLI/API/analysis module tree.
 
