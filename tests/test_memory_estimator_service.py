@@ -257,6 +257,25 @@ def test_helper_hash_drift_is_rejected_before_cache_use(tmp_path: Path) -> None:
             selected_devices=("CUDA0", "Vulkan0"),
         )
 
+    with database.session() as connection:
+        row = connection.execute(
+            """
+            SELECT id
+            FROM memory_estimate_attempt
+            WHERE status = 'binary_changed'
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        assert row is not None
+        attempt = MemoryEstimateRepository(connection).attempt(str(row["id"]))
+        assert attempt is not None
+        assert attempt.status == "binary_changed"
+        assert attempt.failure_details is not None
+        assert attempt.failure_details["expected_sha256"] != (
+            attempt.failure_details["actual_sha256"]
+        )
+
 
 @pytest.mark.parametrize(
     ("model_name", "status", "error"),
