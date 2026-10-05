@@ -368,7 +368,8 @@ def test_deployment_create_plan_get_and_invalid_reference(
     )
     assert created.status_code == 201
     assert created.json()["id"] == base_id
-    assert created.json()["status"] == "draft"
+    assert created.json()["status"] == "completed"
+    assert created.json()["run_count"] >= 1
 
     fetched = api_request(
         app,
