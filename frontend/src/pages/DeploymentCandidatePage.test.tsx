@@ -1,11 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   deploymentCandidates: vi.fn(),
   deploymentPlacements: vi.fn(),
   deploymentRuns: vi.fn(),
-  deploymentResults: vi.fn()
+  deploymentResults: vi.fn(),
+  deployment: vi.fn(),
+  experiments: vi.fn(),
+  candidates: vi.fn(),
+  promoteDeployment: vi.fn()
 }));
 
 vi.mock("../api", () => ({
@@ -13,7 +17,11 @@ vi.mock("../api", () => ({
     deploymentCandidates: mocks.deploymentCandidates,
     deploymentPlacements: mocks.deploymentPlacements,
     deploymentRuns: mocks.deploymentRuns,
-    deploymentResults: mocks.deploymentResults
+    deploymentResults: mocks.deploymentResults,
+    deployment: mocks.deployment,
+    experiments: mocks.experiments,
+    candidates: mocks.candidates,
+    promoteDeployment: mocks.promoteDeployment
   }
 }));
 
@@ -131,6 +139,125 @@ describe("DeploymentCandidatePage", () => {
         phases: []
       }
     ]);
+    mocks.deployment.mockResolvedValue({
+      id: "deploy-root",
+      status: "completed",
+      created_at: "2026-10-05T00:00:00Z",
+      plan_count: 1,
+      placement_count: 1,
+      run_count: 1,
+      latest_plan_id: "plan-1",
+      definition: {
+        schema: "llama-profile-deployment-candidate",
+        version: 1,
+        instances: [
+          {
+            instance_id: "qwen",
+            candidate_id: "cand-qwen",
+            role: "primary",
+            model_artifact_id: "model-qwen",
+            binary_id: "server-qwen",
+            requested_placement: {
+              devices: null,
+              n_gpu_layers: null,
+              split_mode: null,
+              main_gpu: null,
+              tensor_split: null,
+              override_tensor: []
+            },
+            server_identity: "qwen"
+          },
+          {
+            instance_id: "flash",
+            candidate_id: "cand-flash",
+            role: "secondary",
+            model_artifact_id: "model-flash",
+            binary_id: "server-flash",
+            requested_placement: {
+              devices: null,
+              n_gpu_layers: null,
+              split_mode: null,
+              main_gpu: null,
+              tensor_split: null,
+              override_tensor: []
+            },
+            server_identity: "flash"
+          }
+        ],
+        resource_policy: {
+          device_memory_margin_bytes: {},
+          logical_device_mappings: [],
+          host_ram_margin_bytes: 0,
+          allow_cpu_offload: false,
+          allow_swap: false,
+          allowed_devices: [],
+          allowed_backend_pairs: [],
+          maximum_total_power_w: null
+        },
+        workload_mix: {
+          workload_suite_id: "suite",
+          phases: ["dd", "pp"]
+        }
+      }
+    });
+    mocks.experiments.mockResolvedValue([
+      { id: "exp-qwen", name: "Qwen source" },
+      { id: "exp-flash", name: "Flash source" }
+    ]);
+    mocks.candidates.mockImplementation((experimentId: string) =>
+      Promise.resolve([
+        {
+          id: experimentId === "exp-qwen" ? "cand-qwen" : "cand-flash"
+        }
+      ])
+    );
+    mocks.promoteDeployment.mockResolvedValue({
+      id: "deploypromo-1",
+      base_deployment_candidate_id: "deploy-root",
+      deployment_candidate_id: "deploy-candidate",
+      deployment_placement_id: "place-1",
+      sources: [
+        {
+          instance_id: "qwen",
+          experiment_id: "exp-qwen",
+          source_candidate_id: "cand-qwen",
+          candidate_id: "cand-qwen-final",
+          source_profile_id: "qwen"
+        },
+        {
+          instance_id: "flash",
+          experiment_id: "exp-flash",
+          source_candidate_id: "cand-flash",
+          candidate_id: "cand-flash-final",
+          source_profile_id: "flash"
+        }
+      ],
+      changes: [
+        {
+          instance_id: "qwen",
+          candidate_id: "cand-qwen-final",
+          source_profile_id: "qwen",
+          changes: [
+            {
+              path: "placement.resolved.devices",
+              argument: "--device",
+              before: "auto",
+              after: "CUDA0,Vulkan0"
+            }
+          ]
+        },
+        {
+          instance_id: "flash",
+          candidate_id: "cand-flash-final",
+          source_profile_id: "flash",
+          changes: []
+        }
+      ],
+      patch: "--- a/launcher-config.json\n+++ b/launcher-config.json\n+ CUDA0,Vulkan0",
+      source_snapshot: {},
+      proposed_snapshot: {},
+      evidence: { deployment_run_id: "run-1" }
+    });
     mocks.deploymentResults.mockResolvedValue([
       {
         deployment_candidate_id: "deploy-candidate",
@@ -158,6 +285,34 @@ describe("DeploymentCandidatePage", () => {
         "instance.flash.latency_increase_pct": 5
       }
     ]);
+  });
+
+  it("generates one coordinated proposal for all source profiles", async () => {
+    render(
+      <DeploymentCandidatePage
+        deploymentId="deploy-root"
+        candidateId="deploy-candidate"
+      />
+    );
+
+    const button = await screen.findByRole("button", {
+      name: "Generate coordinated proposal"
+    });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(mocks.promoteDeployment).toHaveBeenCalledWith("deploy-root", {
+        deployment_placement_id: "place-1",
+        sources: [
+          { instance_id: "qwen", experiment_id: "exp-qwen" },
+          { instance_id: "flash", experiment_id: "exp-flash" }
+        ]
+      })
+    );
+    expect(await screen.findByText("Unified launcher patch")).toBeInTheDocument();
+    expect(screen.getByText(/CUDA0,Vulkan0/)).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
   });
 
   it("shows rejection explanations and per-instance interference evidence", async () => {
