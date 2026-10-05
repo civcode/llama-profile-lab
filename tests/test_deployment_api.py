@@ -32,6 +32,36 @@ class FakePlanner:
     def __init__(self, database: Database) -> None:
         self.database = database
 
+    @staticmethod
+    def _summary(deployment_id: str, *, plan_id: str | None) -> DeploymentPlanSummary:
+        return DeploymentPlanSummary(
+            base_deployment_candidate_id=deployment_id,
+            host_id="host_api",
+            raw_combinations=2,
+            rejected_by_constraints=0,
+            duplicate_candidates=0,
+            symmetry_reduced=0,
+            capability_rejected=0,
+            estimate_failed=0,
+            memory_rejected=1,
+            valid_count=1,
+            plan_id=plan_id,
+        )
+
+    def preview(
+        self,
+        deployment_id,
+        search_space,
+        inputs,
+        *,
+        timeout_seconds,
+    ) -> DeploymentPlanSummary:
+        assert deployment_id
+        assert len(search_space.dimensions) == 1
+        assert len(inputs) == 2
+        assert timeout_seconds == 30.0
+        return self._summary(deployment_id, plan_id=None)
+
     def plan(
         self,
         deployment_id,
@@ -44,19 +74,7 @@ class FakePlanner:
         assert len(search_space.dimensions) == 1
         assert len(inputs) == 2
         assert timeout_seconds == 30.0
-        return DeploymentPlanSummary(
-            base_deployment_candidate_id=deployment_id,
-            host_id="host_api",
-            raw_combinations=2,
-            rejected_by_constraints=0,
-            duplicate_candidates=0,
-            symmetry_reduced=0,
-            capability_rejected=0,
-            estimate_failed=0,
-            memory_rejected=1,
-            valid_count=1,
-            plan_id="deployplan_api",
-        )
+        return self._summary(deployment_id, plan_id="deployplan_api")
 
 
 class SequencedDeploymentOperations:
@@ -295,33 +313,46 @@ def test_deployment_create_plan_get_and_invalid_reference(
         "DeploymentPlannerService",
         FakePlanner,
     )
+    plan_body = {
+        "search_space": {
+            "dimensions": [
+                {
+                    "path": "instances.qwen.context.size",
+                    "values": [6000],
+                }
+            ]
+        },
+        "instances": [
+            {
+                "instance_id": "qwen",
+                "helper_binary_id": "helper_qwen",
+                "model_path": "/models/qwen.gguf",
+            },
+            {
+                "instance_id": "flash",
+                "helper_binary_id": "helper_flash",
+                "model_path": "/models/flash.gguf",
+            },
+        ],
+        "timeout_seconds": 30,
+    }
+    previewed = api_request(
+        app,
+        "POST",
+        f"/api/deployments/{base_id}/preview",
+        body=plan_body,
+    )
+    assert previewed.status_code == 200
+    assert previewed.json()["plan_id"] is None
+    assert previewed.json()["raw_combinations"] == 2
+    assert previewed.json()["memory_rejected"] == 1
+    assert previewed.json()["valid_count"] == 1
+
     planned = api_request(
         app,
         "POST",
         f"/api/deployments/{base_id}/plan",
-        body={
-            "search_space": {
-                "dimensions": [
-                    {
-                        "path": "instances.qwen.context.size",
-                        "values": [6000],
-                    }
-                ]
-            },
-            "instances": [
-                {
-                    "instance_id": "qwen",
-                    "helper_binary_id": "helper_qwen",
-                    "model_path": "/models/qwen.gguf",
-                },
-                {
-                    "instance_id": "flash",
-                    "helper_binary_id": "helper_flash",
-                    "model_path": "/models/flash.gguf",
-                },
-            ],
-            "timeout_seconds": 30,
-        },
+        body=plan_body,
     )
     assert planned.status_code == 200
     assert planned.json()["raw_combinations"] == 2
