@@ -104,13 +104,15 @@ class SequencedDeploymentOperations:
         if self.current is None:
             raise AssertionError("resume expected prior operation")
         self.current = DeploymentOperationSnapshot(
-            **{
-                **self.current.__dict__,
-                "id": "deployop_resume",
-                "status": "running",
-                "requested_action": None,
-                "finished_at": None,
-            }
+            id="deployop_resume",
+            deployment_candidate_id=deployment_id,
+            deployment_placement_id=self.current.deployment_placement_id,
+            deployment_run_id=self.current.deployment_run_id,
+            status="running",
+            requested_action=None,
+            started_at=self.current.started_at,
+            finished_at=None,
+            error=None,
         )
         return self.current
 
