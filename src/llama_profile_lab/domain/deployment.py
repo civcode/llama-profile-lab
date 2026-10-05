@@ -53,6 +53,14 @@ class DeviceMemoryMargin(FrozenModel):
     margin_bytes: NonNegativeInt = 0
 
 
+class LogicalDeviceMapping(FrozenModel):
+    """Explicit logical-to-physical mapping for one exact registered binary."""
+
+    binary_id: NonEmptyString
+    logical_device_name: NonEmptyString
+    device_id: NonEmptyString
+
+
 class BackendPair(FrozenModel):
     """One explicitly permitted unordered pair of accelerator backends."""
 
@@ -64,6 +72,7 @@ class HostResourcePolicy(FrozenModel):
     """Deployment-wide host resource constraints."""
 
     device_memory_margin_bytes: tuple[DeviceMemoryMargin, ...] = ()
+    logical_device_mappings: tuple[LogicalDeviceMapping, ...] = ()
     host_ram_margin_bytes: NonNegativeInt = 0
     allow_cpu_offload: bool = False
     allow_swap: bool = False
@@ -98,6 +107,24 @@ class HostResourcePolicy(FrozenModel):
         value: tuple[DeviceMemoryMargin, ...],
     ) -> dict[str, int]:
         return {item.device_id: item.margin_bytes for item in value}
+
+    @field_validator("logical_device_mappings")
+    @classmethod
+    def normalize_device_mappings(
+        cls,
+        value: tuple[LogicalDeviceMapping, ...],
+    ) -> tuple[LogicalDeviceMapping, ...]:
+        keys = [(item.binary_id, item.logical_device_name) for item in value]
+        if len(keys) != len(set(keys)):
+            raise ValueError(
+                "logical device mappings must be unique per binary/logical device"
+            )
+        return tuple(
+            sorted(
+                value,
+                key=lambda item: (item.binary_id, item.logical_device_name),
+            )
+        )
 
     @field_validator("allowed_devices")
     @classmethod
