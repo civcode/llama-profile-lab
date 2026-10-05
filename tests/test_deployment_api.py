@@ -603,7 +603,7 @@ def test_deployment_progress_does_not_double_count_recovered_candidate(
             failed_run_id,
             status="failed",
             duration_ns=1,
-            failure_kind="synthetic_failure",
+            failure_kind="server_start_failed",
             failure_details={"error": "recovered later"},
         )
 
