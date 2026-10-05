@@ -20,6 +20,7 @@ from llama_profile_lab.db import (
     DeploymentRunRepository,
     EnvironmentRepository,
     PlacementRepository,
+    transaction,
 )
 from llama_profile_lab.db.records import (
     BinaryRecord,
@@ -680,21 +681,22 @@ class DeploymentExecutor:
                 )
 
             runs = DeploymentRunRepository(connection)
-            for plan in result:
-                instance = instances[plan.instance_id]
-                runs.add_member(
-                    run_id,
-                    instance_id=plan.instance_id,
-                    endpoint=plan.endpoint,
-                    argv=plan.argv,
-                    target_model_path=str(plan.model_path),
-                    draft_model_path=(
-                        None
-                        if plan.draft_model_path is None
-                        else str(plan.draft_model_path)
-                    ),
-                    result={"server_identity": instance.server_identity},
-                )
+            with transaction(connection, immediate=True):
+                for plan in result:
+                    instance = instances[plan.instance_id]
+                    runs.add_member(
+                        run_id,
+                        instance_id=plan.instance_id,
+                        endpoint=plan.endpoint,
+                        argv=plan.argv,
+                        target_model_path=str(plan.model_path),
+                        draft_model_path=(
+                            None
+                            if plan.draft_model_path is None
+                            else str(plan.draft_model_path)
+                        ),
+                        result={"server_identity": instance.server_identity},
+                    )
             return tuple(result)
 
     def _wait_ready_barrier(
