@@ -849,6 +849,30 @@ def test_missing_runtime_gpu_telemetry_fails_closed(
     assert runtime["missing_devices"] == ["pci:0000:02:00.0"]
 
 
+def test_runtime_projection_overrun_is_persisted_without_margin_failure(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs, _, _ = _seed(tmp_path)
+
+    summary = _executor(
+        database,
+        provider=_provider(free0=350, free1=500),
+    ).execute(
+        placement_id,
+        inputs,
+        residency_hold_seconds=0.01,
+    )
+
+    assert summary.status == "completed"
+    overruns = summary.runtime_memory["projection_overruns"]
+    assert len(overruns) == 1
+    assert overruns[0]["device_id"] == "pci:0000:01:00.0"
+    assert overruns[0]["projected_bytes"] == 600
+    assert overruns[0]["observed_used_bytes"] == 650
+    assert overruns[0]["used_delta_bytes"] == 50
+    assert summary.runtime_memory["violations"] == []
+
+
 def test_runtime_margin_violation_is_persisted(tmp_path: Path) -> None:
     database, placement_id, inputs, _, _ = _seed(
         tmp_path,
