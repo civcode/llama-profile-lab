@@ -11,6 +11,11 @@ describe("hash routing", () => {
       kind: "deployment",
       deploymentId: "deploy-1"
     });
+    expect(parseRoute("#/deployments/deploy-1/candidates/cand-2")).toEqual({
+      kind: "deploymentCandidate",
+      deploymentId: "deploy-1",
+      candidateId: "cand-2"
+    });
     expect(parseRoute("#/experiments/exp-1")).toEqual({
       kind: "experiment",
       experimentId: "exp-1"
