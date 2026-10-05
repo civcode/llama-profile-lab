@@ -173,6 +173,7 @@ def test_deployment_cli_help_lists_m8_commands(
         "cancel",
         "show",
         "results",
+        "acceptance-report",
         "pareto",
     ):
         assert command in output
