@@ -526,6 +526,7 @@ class ConcurrentDeploymentExecutor:
             item.instance_id: item for item in member_overlap
         }
         retentions = {}
+        baselines = {}
         missing = False
         ambiguous = False
         with self.database.session() as connection:
@@ -552,6 +553,7 @@ class ConcurrentDeploymentExecutor:
                 if len(matches) > 1:
                     ambiguous = True
                     continue
+                baselines[result.instance_id] = matches[0]
                 retentions[result.instance_id] = retention_for(
                     result,
                     baseline_id=matches[0].id,
@@ -576,6 +578,7 @@ class ConcurrentDeploymentExecutor:
             ):
                 normalized = overlap_by_instance[result.instance_id]
                 retention = retentions.get(result.instance_id)
+                baseline = baselines.get(result.instance_id)
                 repository.add_member(
                     run_id,
                     ordinal=ordinal,
@@ -600,16 +603,16 @@ class ConcurrentDeploymentExecutor:
                     ),
                     baseline_latency_ms=(
                         None
-                        if retention is None
-                        else matches[0].latency_ms
+                        if baseline is None
+                        else baseline.latency_ms
                     ),
                     latency_increase_pct=(
-                        _latency_increase_pct(
+                        None
+                        if baseline is None
+                        else _latency_increase_pct(
                             result.latency_ms,
-                            matches[0].latency_ms,
+                            baseline.latency_ms,
                         )
-                        if retention is not None
-                        else None
                     ),
                     failure_details=(
                         None
