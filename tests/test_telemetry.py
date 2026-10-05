@@ -136,6 +136,7 @@ def test_missing_process_cpu_marks_telemetry_incomplete() -> None:
     assert assessment.quality == "telemetry_incomplete"
     assert not assessment.telemetry_complete
 
+
 def test_high_during_gpu_load_is_not_external_gpu_contamination() -> None:
     assessment = classify_run_quality(
         (
