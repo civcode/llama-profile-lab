@@ -36,6 +36,10 @@ from llama_profile_lab.diagnostics import inspect_database
 from llama_profile_lab.domain import DeploymentSearchSpace
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
+    DeploymentExecutionError,
+    DeploymentExecutionSummary,
+    DeploymentExecutor,
+    DeploymentServerInput,
     DeviceInventoryError,
     DeviceInventoryService,
     ExecutionError,
@@ -381,6 +385,17 @@ def _add_deployment_parser(
         help="JSON deployment planning specification.",
     )
     _add_database_argument(plan)
+
+    execute = deployment_commands.add_parser(
+        "execute",
+        help="Launch every server in one persisted deployment placement.",
+    )
+    execute.add_argument(
+        "spec",
+        type=Path,
+        help="JSON deployment execution specification.",
+    )
+    _add_database_argument(execute)
 
 
 def _add_results_parser(
@@ -1331,6 +1346,148 @@ def _ui_command(
     return 0
 
 
+def _deployment_execute_command(
+    database_path: Path,
+    spec_path: Path,
+) -> int:
+    try:
+        (
+            placement_id,
+            inputs,
+            host,
+            readiness_timeout_seconds,
+            residency_hold_seconds,
+        ) = _load_deployment_execution_spec(spec_path)
+        summary = DeploymentExecutor(Database(database_path)).execute(
+            placement_id,
+            inputs,
+            host=host,
+            readiness_timeout_seconds=readiness_timeout_seconds,
+            residency_hold_seconds=residency_hold_seconds,
+        )
+    except (
+        DeploymentExecutionError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(_render_deployment_execution_summary(summary))
+    return 0
+
+
+def _load_deployment_execution_spec(
+    path: Path,
+) -> tuple[
+    str,
+    tuple[DeploymentServerInput, ...],
+    str,
+    float,
+    float,
+]:
+    resolved = path.expanduser().resolve()
+    raw = json.loads(resolved.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("deployment execution spec must be a JSON object")
+
+    placement_id = raw.get("deployment_placement_id")
+    if not isinstance(placement_id, str) or not placement_id:
+        raise ValueError(
+            "deployment execution spec requires deployment_placement_id"
+        )
+
+    instance_rows = raw.get("instances")
+    if not isinstance(instance_rows, list) or not instance_rows:
+        raise ValueError(
+            "deployment execution spec requires non-empty instances list"
+        )
+    inputs: list[DeploymentServerInput] = []
+    for row in instance_rows:
+        if not isinstance(row, dict):
+            raise ValueError("deployment execution instance must be object")
+        instance_id = row.get("instance_id")
+        model_path = row.get("model_path")
+        draft_model_path = row.get("draft_model_path")
+        if (
+            not isinstance(instance_id, str)
+            or not instance_id
+            or not isinstance(model_path, str)
+            or not model_path
+            or (
+                draft_model_path is not None
+                and (
+                    not isinstance(draft_model_path, str)
+                    or not draft_model_path
+                )
+            )
+        ):
+            raise ValueError(
+                "each deployment execution instance requires instance_id "
+                "and model_path; draft_model_path must be a non-empty "
+                "string when present"
+            )
+        inputs.append(
+            DeploymentServerInput(
+                instance_id=instance_id,
+                model_path=Path(model_path),
+                draft_model_path=(
+                    None
+                    if draft_model_path is None
+                    else Path(draft_model_path)
+                ),
+            )
+        )
+
+    host = raw.get("host", "127.0.0.1")
+    if not isinstance(host, str) or not host:
+        raise ValueError("deployment execution host must be a non-empty string")
+
+    readiness = raw.get("readiness_timeout_seconds", 300.0)
+    if (
+        isinstance(readiness, bool)
+        or not isinstance(readiness, (int, float))
+        or readiness <= 0
+    ):
+        raise ValueError(
+            "readiness_timeout_seconds must be a positive number"
+        )
+
+    hold = raw.get("residency_hold_seconds", 0.0)
+    if (
+        isinstance(hold, bool)
+        or not isinstance(hold, (int, float))
+        or hold < 0
+    ):
+        raise ValueError(
+            "residency_hold_seconds must be a non-negative number"
+        )
+    return (
+        placement_id,
+        tuple(inputs),
+        host,
+        float(readiness),
+        float(hold),
+    )
+
+
+def _render_deployment_execution_summary(
+    summary: DeploymentExecutionSummary,
+) -> str:
+    lines = [
+        f"Deployment run: {summary.run_id}",
+        f"Placement: {summary.deployment_placement_id}",
+        f"Status: {summary.status}",
+    ]
+    for member in summary.members:
+        lines.append(
+            f"{member.instance_id}: {member.endpoint} "
+            f"pid={member.pid or '-'} ready={member.ready_at or '-'}"
+        )
+    return "\n".join(lines)
+
+
 def _deployment_plan_command(
     database_path: Path,
     spec_path: Path,
@@ -1820,6 +1977,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.database,
                 args.spec,
                 persist=True,
+            )
+        if args.deployment_command == "execute":
+            return _deployment_execute_command(
+                args.database,
+                args.spec,
             )
 
     if args.command == "server":
