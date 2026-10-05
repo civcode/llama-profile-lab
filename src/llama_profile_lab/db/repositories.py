@@ -2273,7 +2273,10 @@ class DeploymentPlacementRepository:
                 )
             else:
                 existing = self.get(identifier)
-                if existing != placement:
+                if (
+                    existing is None
+                    or existing.identity_payload() != placement.identity_payload()
+                ):
                     raise RuntimeError(
                         "deployment placement hash collision or persisted mismatch"
                     )
