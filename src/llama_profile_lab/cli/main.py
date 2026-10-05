@@ -7,6 +7,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from threading import Event, Thread
 from typing import Literal, cast
 
 from llama_profile_lab import __version__
@@ -466,6 +467,20 @@ def _add_deployment_parser(
     )
     resume.add_argument("spec", type=Path)
     _add_database_argument(resume)
+
+    pause = deployment_commands.add_parser(
+        "pause",
+        help="Request cooperative teardown of a running CLI deployment.",
+    )
+    pause.add_argument("deployment_id")
+    _add_database_argument(pause)
+
+    cancel = deployment_commands.add_parser(
+        "cancel",
+        help="Cancel a running CLI deployment cooperatively.",
+    )
+    cancel.add_argument("deployment_id")
+    _add_database_argument(cancel)
 
     deployment_results = deployment_commands.add_parser(
         "results",
