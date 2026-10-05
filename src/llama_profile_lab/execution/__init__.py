@@ -1,5 +1,13 @@
 """Benchmark scheduling, process execution, locking, and host identity."""
 
+from llama_profile_lab.execution.deployment_executor import (
+    DeploymentExecutionError,
+    DeploymentExecutionMember,
+    DeploymentExecutionSummary,
+    DeploymentExecutor,
+    DeploymentProcessRegistry,
+    DeploymentServerInput,
+)
 from llama_profile_lab.execution.engine import (
     ExecutionError,
     ExecutionSummary,
@@ -50,6 +58,12 @@ __all__ = [
     "BasicHostInfo",
     "ExecutionError",
     "ExecutionSummary",
+    "DeploymentExecutionError",
+    "DeploymentExecutionMember",
+    "DeploymentExecutionSummary",
+    "DeploymentExecutor",
+    "DeploymentProcessRegistry",
+    "DeploymentServerInput",
     "DeviceInventoryError",
     "DeviceInventoryResult",
     "DeviceInventoryService",
