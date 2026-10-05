@@ -478,13 +478,17 @@ class ConcurrentDeploymentExecutor:
                 quality=quality,
                 failure_kind=failure_kind,
             )
+            deployment_failure_kind = (
+                failure_kind
+                if failure_kind in {
+                    "member_timeout",
+                    "output_validation_failed",
+                }
+                else "concurrent_workload_failed"
+            )
             raise DeploymentResidentActionError(
                 f"concurrent {workload.phase} phase failed",
-                failure_kind=(
-                    "member_timeout"
-                    if failure_kind == "member_timeout"
-                    else "concurrent_workload_failed"
-                ),
+                failure_kind=deployment_failure_kind,
                 cancelled=cancelled,
             )
 
@@ -669,7 +673,9 @@ class ConcurrentDeploymentExecutor:
                     else "failed"
                 ),
                 quality=quality,
-                correctness_valid=quality != "correctness_invalid",
+                correctness_valid=all(
+                    item.correctness_valid for item in results
+                ),
                 barrier_release_ns=barrier_release_ns,
                 overlap_start_ns=None,
                 overlap_end_ns=None,
