@@ -7,6 +7,7 @@ from pathlib import Path
 from llama_profile_lab.execution import telemetry as telemetry_module
 from llama_profile_lab.execution.telemetry import (
     LinuxTelemetryProvider,
+    NvidiaSmiGpuTelemetryProvider,
     SysfsGpuTelemetryProvider,
 )
 
@@ -106,3 +107,46 @@ def test_sysfs_gpu_provider_reads_generic_drm_metrics(tmp_path: Path) -> None:
     assert samples[0].vram_total_bytes == 4096
     assert samples[0].temperature_c == 71
     assert samples[0].power_w == 125
+    assert samples[0].sources == ("sysfs",)
+
+def test_nvidia_provider_normalizes_pci_identity_and_source(
+    monkeypatch,
+) -> None:
+    xml = """<?xml version="1.0"?>
+<nvidia_smi_log>
+  <gpu>
+    <product_name>NVIDIA Test GPU</product_name>
+    <uuid>GPU-ABC</uuid>
+    <pci><pci_bus_id>00000000:01:00.0</pci_bus_id></pci>
+    <utilization><gpu_util>87 %</gpu_util></utilization>
+    <fb_memory_usage><used>1024 MiB</used><total>16384 MiB</total></fb_memory_usage>
+    <temperature><gpu_temp>68 C</gpu_temp></temperature>
+    <gpu_power_readings><power_draw>175 W</power_draw></gpu_power_readings>
+    <clocks><graphics_clock>2500 MHz</graphics_clock><mem_clock>10500 MHz</mem_clock></clocks>
+  </gpu>
+</nvidia_smi_log>
+"""
+
+    class Completed:
+        returncode = 0
+        stdout = xml
+        stderr = ""
+
+    monkeypatch.setattr(
+        telemetry_module.subprocess,
+        "run",
+        lambda *args, **kwargs: Completed(),
+    )
+
+    samples = NvidiaSmiGpuTelemetryProvider().sample()
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample.device == "0000:01:00.0"
+    assert sample.pci_bus_id == "0000:01:00.0"
+    assert sample.stable_device_key == "pci:0000:01:00.0"
+    assert sample.sources == ("nvidia-smi",)
+    assert sample.uuid == "GPU-ABC"
+    assert sample.utilization_pct == 87
+    assert sample.vram_total_bytes == 16384 * 1024 * 1024
+
