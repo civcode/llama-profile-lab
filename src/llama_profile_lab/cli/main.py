@@ -36,6 +36,9 @@ from llama_profile_lab.diagnostics import inspect_database
 from llama_profile_lab.domain import DeploymentSearchSpace
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
+    ConcurrentDeploymentError,
+    ConcurrentDeploymentExecutor,
+    ConcurrentDeploymentSummary,
     DeploymentExecutionError,
     DeploymentExecutionSummary,
     DeploymentExecutor,
@@ -50,6 +53,7 @@ from llama_profile_lab.execution import (
     MemoryEstimatorService,
     ServerValidationError,
     ServerValidationService,
+    StandaloneBaselineInput,
 )
 from llama_profile_lab.llama import (
     BinaryDiscoveryError,
@@ -396,6 +400,17 @@ def _add_deployment_parser(
         help="JSON deployment execution specification.",
     )
     _add_database_argument(execute)
+
+    benchmark = deployment_commands.add_parser(
+        "benchmark",
+        help="Run synchronized DD/PP/PD/DP workloads while servers remain resident.",
+    )
+    benchmark.add_argument(
+        "spec",
+        type=Path,
+        help="JSON concurrent deployment benchmark specification.",
+    )
+    _add_database_argument(benchmark)
 
 
 def _add_results_parser(
@@ -1346,6 +1361,170 @@ def _ui_command(
     return 0
 
 
+def _deployment_benchmark_command(
+    database_path: Path,
+    spec_path: Path,
+) -> int:
+    try:
+        (
+            placement_id,
+            inputs,
+            baselines,
+            host,
+            readiness_timeout_seconds,
+        ) = _load_concurrent_deployment_spec(spec_path)
+        summary = ConcurrentDeploymentExecutor(
+            Database(database_path)
+        ).execute(
+            placement_id,
+            inputs,
+            standalone_baselines=baselines,
+            host=host,
+            readiness_timeout_seconds=readiness_timeout_seconds,
+        )
+    except (
+        ConcurrentDeploymentError,
+        DeploymentExecutionError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(_render_concurrent_deployment_summary(summary))
+    return 0
+
+
+def _load_concurrent_deployment_spec(
+    path: Path,
+) -> tuple[
+    str,
+    tuple[DeploymentServerInput, ...],
+    tuple[StandaloneBaselineInput, ...],
+    str,
+    float,
+]:
+    (
+        placement_id,
+        inputs,
+        host,
+        readiness_timeout_seconds,
+        _,
+    ) = _load_deployment_execution_spec(path)
+    resolved = path.expanduser().resolve()
+    raw = json.loads(resolved.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("concurrent deployment spec must be a JSON object")
+    baseline_rows = raw.get("standalone_baselines", [])
+    if not isinstance(baseline_rows, list):
+        raise ValueError("standalone_baselines must be a JSON array")
+
+    baselines: list[StandaloneBaselineInput] = []
+    for row in baseline_rows:
+        if not isinstance(row, dict):
+            raise ValueError("standalone baseline entry must be an object")
+        required = (
+            "instance_id",
+            "mode",
+            "prompt_tokens",
+            "generate_tokens",
+            "depth_tokens",
+            "throughput_tps",
+        )
+        if any(name not in row for name in required):
+            raise ValueError(
+                "standalone baseline requires instance_id, mode, "
+                "prompt_tokens, generate_tokens, depth_tokens, and "
+                "throughput_tps"
+            )
+        instance_id = row["instance_id"]
+        mode = row["mode"]
+        prompt_tokens = row["prompt_tokens"]
+        generate_tokens = row["generate_tokens"]
+        depth_tokens = row["depth_tokens"]
+        throughput_tps = row["throughput_tps"]
+        latency_ms = row.get("latency_ms")
+        if not isinstance(instance_id, str) or not instance_id:
+            raise ValueError("baseline instance_id must be non-empty")
+        if mode not in {"prefill", "decode"}:
+            raise ValueError("baseline mode must be prefill or decode")
+        for name, value in (
+            ("prompt_tokens", prompt_tokens),
+            ("generate_tokens", generate_tokens),
+            ("depth_tokens", depth_tokens),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"baseline {name} must be non-negative integer")
+        if (
+            isinstance(throughput_tps, bool)
+            or not isinstance(throughput_tps, (int, float))
+            or throughput_tps <= 0
+        ):
+            raise ValueError("baseline throughput_tps must be positive")
+        if (
+            latency_ms is not None
+            and (
+                isinstance(latency_ms, bool)
+                or not isinstance(latency_ms, (int, float))
+                or latency_ms < 0
+            )
+        ):
+            raise ValueError("baseline latency_ms must be non-negative")
+        baselines.append(
+            StandaloneBaselineInput(
+                instance_id=instance_id,
+                mode=mode,
+                prompt_tokens=prompt_tokens,
+                generate_tokens=generate_tokens,
+                depth_tokens=depth_tokens,
+                throughput_tps=float(throughput_tps),
+                latency_ms=(
+                    None if latency_ms is None else float(latency_ms)
+                ),
+            )
+        )
+    return (
+        placement_id,
+        inputs,
+        tuple(baselines),
+        host,
+        readiness_timeout_seconds,
+    )
+
+
+def _render_concurrent_deployment_summary(
+    summary: ConcurrentDeploymentSummary,
+) -> str:
+    lines = [
+        f"Deployment run: {summary.deployment_run_id}",
+        f"Placement: {summary.deployment_placement_id}",
+        f"Concurrent phases: {len(summary.phases)}",
+    ]
+    for phase in summary.phases:
+        prompt = (
+            "-"
+            if phase.combined_prompt_tps is None
+            else f"{phase.combined_prompt_tps:.3f}"
+        )
+        decode = (
+            "-"
+            if phase.combined_decode_tps is None
+            else f"{phase.combined_decode_tps:.3f}"
+        )
+        retention = (
+            "-"
+            if phase.min_retention is None
+            else f"{phase.min_retention:.3f}"
+        )
+        lines.append(
+            f"{phase.phase.upper()}: quality={phase.quality} "
+            f"pp_tps={prompt} tg_tps={decode} "
+            f"min_retention={retention}"
+        )
+    return "\n".join(lines)
+
+
 def _deployment_execute_command(
     database_path: Path,
     spec_path: Path,
@@ -1980,6 +2159,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.deployment_command == "execute":
             return _deployment_execute_command(
+                args.database,
+                args.spec,
+            )
+        if args.deployment_command == "benchmark":
+            return _deployment_benchmark_command(
                 args.database,
                 args.spec,
             )
