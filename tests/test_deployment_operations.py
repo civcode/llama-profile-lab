@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from llama_profile_lab.api.deployment_operations import (
+    DeploymentOperationError,
     DeploymentOperationManager,
     DeploymentOperationSpec,
 )
@@ -196,7 +197,7 @@ def test_resume_with_replacement_spec_still_requires_paused_state(
             ),
             background=False,
         )
-    except Exception as exc:
+    except DeploymentOperationError as exc:
         assert "no paused operation" in str(exc)
     else:
         raise AssertionError("resume unexpectedly started without paused state")
