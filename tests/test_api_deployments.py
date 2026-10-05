@@ -14,6 +14,12 @@ def test_deployment_routes_are_registered_without_removing_v1(tmp_path) -> None:
     assert "/api/deployments" in paths
     assert "/api/deployments/{deployment_id}" in paths
     assert "/api/deployments/{deployment_id}/plan" in paths
+    assert "/api/deployments/{deployment_id}/run" in paths
+    assert "/api/deployments/{deployment_id}/pause" in paths
+    assert "/api/deployments/{deployment_id}/resume" in paths
+    assert "/api/deployments/{deployment_id}/cancel" in paths
+    assert "/api/deployments/{deployment_id}/progress" in paths
+    assert "/api/deployments/{deployment_id}/events" in paths
     assert "/api/deployments/{deployment_id}/candidates" in paths
     assert "/api/deployments/{deployment_id}/placements" in paths
     assert "/api/deployments/{deployment_id}/runs" in paths
