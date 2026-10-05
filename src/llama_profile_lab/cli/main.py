@@ -15,6 +15,11 @@ from llama_profile_lab.analysis import (
     AnalysisError,
     AnalysisFilter,
     AnalysisService,
+    DeploymentAnalysisError,
+    DeploymentAnalysisFilter,
+    DeploymentAnalysisService,
+    DeploymentMetricConstraint,
+    DeploymentParetoObjective,
     ParetoObjective,
     serialize_export,
 )
@@ -27,13 +32,15 @@ from llama_profile_lab.archive import (
 from llama_profile_lab.db import (
     BenchmarkRunRepository,
     Database,
+    DeploymentCandidateRepository,
+    DeploymentPlacementRepository,
     EnvironmentRepository,
     PlacementRepository,
     TelemetryRepository,
 )
 from llama_profile_lab.db.records import BinaryRecord
 from llama_profile_lab.diagnostics import inspect_database
-from llama_profile_lab.domain import DeploymentSearchSpace
+from llama_profile_lab.domain import DeploymentCandidate, DeploymentSearchSpace
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     ConcurrentDeploymentError,
@@ -411,6 +418,109 @@ def _add_deployment_parser(
         help="JSON concurrent deployment benchmark specification.",
     )
     _add_database_argument(benchmark)
+
+    create = deployment_commands.add_parser(
+        "create",
+        help="Persist one immutable deployment Candidate from JSON.",
+    )
+    create.add_argument("spec", type=Path)
+    _add_database_argument(create)
+
+    show = deployment_commands.add_parser(
+        "show",
+        help="Show one deployment workflow and its derived plan scope.",
+    )
+    show.add_argument("deployment_id")
+    show.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(show)
+
+    placement = deployment_commands.add_parser(
+        "placement",
+        help="Inspect one persisted deployment placement and memory evidence.",
+    )
+    placement.add_argument("placement_id")
+    placement.add_argument("--run", dest="deployment_run_id", default=None)
+    placement.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(placement)
+
+    run = deployment_commands.add_parser(
+        "run",
+        help="Run synchronized deployment workloads from an execution spec.",
+    )
+    run.add_argument("spec", type=Path)
+    _add_database_argument(run)
+
+    resume = deployment_commands.add_parser(
+        "resume",
+        help="Replay a deployment execution spec after a stopped run.",
+    )
+    resume.add_argument("spec", type=Path)
+    _add_database_argument(resume)
+
+    deployment_results = deployment_commands.add_parser(
+        "results",
+        help="Export observations for a base deployment and its planned Candidates.",
+    )
+    deployment_results.add_argument("deployment_id")
+    deployment_results.add_argument(
+        "--format",
+        choices=("csv", "json"),
+        default="json",
+        dest="format_name",
+    )
+    deployment_results.add_argument("--output", type=Path, default=None)
+    deployment_results.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        dest="filters",
+        help="Exact deployment filter PATH=VALUE; may be repeated.",
+    )
+    _add_database_argument(deployment_results)
+
+    deployment_pareto = deployment_commands.add_parser(
+        "pareto",
+        help="Return Pareto-optimal placements for one deployment plan scope.",
+    )
+    deployment_pareto.add_argument("deployment_id")
+    deployment_pareto.add_argument(
+        "--objective",
+        action="append",
+        required=True,
+        dest="objectives",
+        help="KEY:DIRECTION:METRIC[@PATH=VALUE;...]",
+    )
+    deployment_pareto.add_argument(
+        "--constraint",
+        action="append",
+        default=[],
+        dest="constraints",
+        help="METRIC:OPERATOR:VALUE[@PATH=VALUE;...]",
+    )
+    deployment_pareto.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        dest="filters",
+        help="Exact deployment filter PATH=VALUE; may be repeated.",
+    )
+    deployment_pareto.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    _add_database_argument(deployment_pareto)
 
 
 def _add_results_parser(
