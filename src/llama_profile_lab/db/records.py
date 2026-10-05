@@ -80,6 +80,15 @@ MemoryEstimateAttemptStatus = Literal[
     "binary_changed",
 ]
 
+DeploymentMemberStatus = Literal[
+    "planned",
+    "starting",
+    "ready",
+    "stopped",
+    "failed",
+    "cancelled",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class ExperimentRecord:
@@ -361,6 +370,20 @@ class DeploymentRunMemberRecord:
     instance_id: str
     server_run_id: str | None
     client_run_id: str | None
+    endpoint: str | None
+    member_status: DeploymentMemberStatus
+    pid: int | None
+    argv: tuple[str, ...]
+    target_model_path: str | None
+    draft_model_path: str | None
+    started_at: str | None
+    ready_at: str | None
+    finished_at: str | None
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    forced_kill: bool
+    cleanup_error: str | None
     result: Mapping[str, Any]
 
 @dataclass(frozen=True, slots=True)
