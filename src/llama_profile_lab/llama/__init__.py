@@ -15,6 +15,13 @@ from llama_profile_lab.llama.capabilities import (
     compare_capabilities,
     parse_help_options,
 )
+from llama_profile_lab.llama.devices import (
+    LlamaDeviceInventory,
+    LlamaDeviceListAdapter,
+    LlamaDeviceListError,
+    correlate_physical_devices,
+    parse_device_list,
+)
 from llama_profile_lab.llama.discovery import (
     BinaryDiscoveryError,
     BinaryProbe,
@@ -30,6 +37,12 @@ from llama_profile_lab.llama.fit_params import (
     LlamaFitParamsConfigurationError,
     LlamaFitParamsParseError,
     LlamaFitParamsResult,
+)
+from llama_profile_lab.llama.memory_estimator import (
+    MemoryEstimatorAdapter,
+    MemoryEstimatorConfigurationError,
+    MemoryEstimatorInvocation,
+    MemoryEstimatorParseError,
 )
 from llama_profile_lab.llama.server import (
     LlamaServerAdapter,
@@ -50,12 +63,19 @@ __all__ = [
     "LlamaBenchParseError",
     "LlamaBenchResult",
     "LlamaBenchSample",
+    "LlamaDeviceInventory",
+    "LlamaDeviceListAdapter",
+    "LlamaDeviceListError",
     "LlamaFitParamsAdapter",
     "LlamaFitParamsConfigurationError",
     "LlamaFitParamsParseError",
     "LlamaFitParamsResult",
     "LlamaServerAdapter",
     "LlamaServerConfigurationError",
+    "MemoryEstimatorAdapter",
+    "MemoryEstimatorConfigurationError",
+    "MemoryEstimatorInvocation",
+    "MemoryEstimatorParseError",
     "SpeedBenchAdapter",
     "SpeedBenchConfigurationError",
     "SpeedBenchParseError",
@@ -68,9 +88,11 @@ __all__ = [
     "CapabilitySet",
     "CommandCapture",
     "compare_capabilities",
+    "correlate_physical_devices",
     "discover_binary_paths",
     "infer_binary_kind",
     "parse_build_metadata",
+    "parse_device_list",
     "parse_help_options",
     "parse_llama_bench_json",
     "parse_speed_bench_json",
