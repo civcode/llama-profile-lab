@@ -760,3 +760,33 @@ export interface DeploymentParetoResult {
     excluded: Record<string, string>;
   };
 }
+
+
+export interface DeploymentPromotionResponse {
+  id: string;
+  base_deployment_candidate_id: string;
+  deployment_candidate_id: string;
+  deployment_placement_id: string;
+  sources: {
+    instance_id: string;
+    experiment_id: string;
+    source_candidate_id: string;
+    candidate_id: string;
+    source_profile_id: string;
+  }[];
+  changes: {
+    instance_id: string;
+    candidate_id: string;
+    source_profile_id: string;
+    changes: {
+      path: string;
+      argument: string;
+      before: JsonScalar;
+      after: JsonScalar;
+    }[];
+  }[];
+  patch: string;
+  source_snapshot: Record<string, unknown>;
+  proposed_snapshot: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+}
