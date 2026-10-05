@@ -38,6 +38,39 @@ Available devices:
     assert all(item.mapping_status == "unresolved" for item in devices)
 
 
+
+@pytest.mark.parametrize(
+    ("text", "names", "backends"),
+    (
+        (
+            """
+Available devices:
+  CUDA0: NVIDIA Test GPU (16384 MiB, 15000 MiB free)
+""",
+            ["CUDA0"],
+            ["CUDA"],
+        ),
+        (
+            """
+Available devices:
+  CUDA0: NVIDIA Test GPU A (16384 MiB, 15000 MiB free)
+  CUDA1: NVIDIA Test GPU B (16384 MiB, 14900 MiB free)
+""",
+            ["CUDA0", "CUDA1"],
+            ["CUDA", "CUDA"],
+        ),
+    ),
+)
+def test_parse_device_list_handles_single_and_homogeneous_devices(
+    text: str,
+    names: list[str],
+    backends: list[str],
+) -> None:
+    devices = parse_device_list(text)
+
+    assert [item.logical_device_name for item in devices] == names
+    assert [item.backend for item in devices] == backends
+
 def test_device_list_adapter_requires_advertised_option(tmp_path) -> None:
     adapter = LlamaDeviceListAdapter()
 
