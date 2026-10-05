@@ -33,6 +33,8 @@ from llama_profile_lab.api.dto import (
     DeploymentPlanRequest,
     DeploymentPlanResponse,
     DeploymentProgressDTO,
+    DeploymentPromotionRequest,
+    DeploymentPromotionResponse,
     DeploymentResultsResponse,
     DeploymentRunListResponse,
     DeploymentRunRequest,
@@ -693,6 +695,17 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
             constraints=parsed_constraints,
             filters=parsed_filters,
         )
+
+    @app.post(
+        "/api/deployments/{deployment_id}/promote",
+        response_model=DeploymentPromotionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def promote_deployment(
+        deployment_id: str,
+        request: DeploymentPromotionRequest,
+    ) -> DeploymentPromotionResponse:
+        return service.promote_deployment(deployment_id, request)
 
     @app.get("/api/placements", response_model=PlacementListResponse)
     def placements() -> PlacementListResponse:
