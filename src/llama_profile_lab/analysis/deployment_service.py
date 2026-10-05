@@ -64,6 +64,7 @@ class _PlacementContext:
     deployment: DeploymentCandidate
     candidates: Mapping[str, Candidate]
     resolved: Mapping[str, ResolvedPlacementRecord]
+    backends: Mapping[str, tuple[str, ...]]
     memory: tuple[PlacementDeviceMemoryRecord, ...]
     allocations: tuple[DeploymentDeviceAllocationRecord, ...]
 
@@ -754,6 +755,7 @@ def _load_placement_context(
     resolved_repo = PlacementRepository(connection)
     candidates: dict[str, Candidate] = {}
     resolved: dict[str, ResolvedPlacementRecord] = {}
+    backends: dict[str, tuple[str, ...]] = {}
     resolved_ids = {
         item.instance_id: item.resolved_placement_id
         for item in placement.instance_placements
@@ -775,12 +777,37 @@ def _load_placement_context(
             )
         candidates[instance.instance_id] = candidate
         resolved[instance.instance_id] = placement_record
+        backend_rows = connection.execute(
+            """
+            SELECT logical_device_name, backend
+            FROM accelerator_device
+            WHERE host_id = ? AND binary_id = ?
+            ORDER BY logical_device_name
+            """,
+            (placement.host_id, instance.binary_id),
+        ).fetchall()
+        backend_by_device = {
+            str(row["logical_device_name"]): str(row["backend"])
+            for row in backend_rows
+        }
+        if placement_record.devices == "auto":
+            backends[instance.instance_id] = tuple(
+                backend_by_device[name]
+                for name in sorted(backend_by_device)
+            )
+        else:
+            backends[instance.instance_id] = tuple(
+                backend_by_device[name]
+                for name in placement_record.devices
+                if name in backend_by_device
+            )
     return _PlacementContext(
         placement_id=placement_id,
         deployment_candidate_id=placement.deployment_candidate_id,
         deployment=deployment,
         candidates=candidates,
         resolved=resolved,
+        backends=backends,
         memory=placements.memory(placement_id),
         allocations=placements.allocations(placement_id),
     )
@@ -881,6 +908,7 @@ def _resolve_path(item: _Observation, path: str | None) -> JsonScalar:
                 "tensor_split": item.context.resolved[
                     instance_id
                 ].tensor_split,
+                "backends": item.context.backends.get(instance_id, ()),
             }
             return _nested_scalar(payload, parts[3:], path)
         if root == "binary_id" and len(parts) == 3:
