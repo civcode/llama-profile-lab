@@ -21,6 +21,7 @@ from llama_profile_lab.db.records import (
     DeploymentDeviceAllocationRecord,
     DeploymentInstanceRecord,
     DeploymentPlacementRecord,
+    DeploymentRejectionRecord,
     DeploymentRunMemberRecord,
     DeploymentRunRecord,
     ExperimentRecord,
@@ -1912,7 +1913,6 @@ class ServerValidationRepository:
         )
 
 
-
 class DeploymentCandidateRepository:
     """Persistence for immutable multi-model deployment Candidates."""
 
@@ -2039,6 +2039,59 @@ class DeploymentCandidateRepository:
                 ),
                 server_identity=str(row["server_identity"]),
                 ordinal=int(row["ordinal"]),
+            )
+            for row in rows
+        )
+
+    def add_rejection(
+        self,
+        deployment_candidate_id: str,
+        *,
+        stage: str,
+        reason: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Persist one explainable rejection for a deployment Candidate."""
+        identifier = _event_id("deployreject")
+        self.connection.execute(
+            """
+            INSERT INTO deployment_rejection(
+                id, deployment_candidate_id, stage, reason, details_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                identifier,
+                deployment_candidate_id,
+                stage,
+                reason,
+                canonical_json(dict(details or {})),
+            ),
+        )
+        return identifier
+
+    def rejections(
+        self,
+        deployment_candidate_id: str,
+    ) -> tuple[DeploymentRejectionRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT id, deployment_candidate_id, stage, reason,
+                   details_json, created_at
+            FROM deployment_rejection
+            WHERE deployment_candidate_id = ?
+            ORDER BY created_at, id
+            """,
+            (deployment_candidate_id,),
+        ).fetchall()
+        return tuple(
+            DeploymentRejectionRecord(
+                id=str(row["id"]),
+                deployment_candidate_id=str(row["deployment_candidate_id"]),
+                stage=str(row["stage"]),
+                reason=str(row["reason"]),
+                details=_loads_object(str(row["details_json"])),
+                created_at=str(row["created_at"]),
             )
             for row in rows
         )
