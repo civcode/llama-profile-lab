@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   candidates: vi.fn(),
   models: vi.fn(),
   binaries: vi.fn(),
+  binaryDevices: vi.fn(),
   createDeployment: vi.fn()
 }));
 
@@ -15,6 +16,7 @@ vi.mock("../api", () => ({
     candidates: mocks.candidates,
     models: mocks.models,
     binaries: mocks.binaries,
+    binaryDevices: mocks.binaryDevices,
     createDeployment: mocks.createDeployment
   }
 }));
@@ -187,6 +189,26 @@ describe("NewDeploymentPage", () => {
         created_at: "2026-10-05T00:00:00Z"
       }
     ]);
+    mocks.binaryDevices.mockResolvedValue({
+      host_id: "host-ui",
+      binary_id: "server-a",
+      items: [
+        {
+          logical_device_name: "CUDA0",
+          backend: "CUDA",
+          mapping_status: "mapped",
+          physical_device_key: "uuid:gpu-0",
+          pci_bus_id: null,
+          uuid: "gpu-0",
+          vendor: "NVIDIA",
+          product_name: "RTX Test",
+          total_memory_bytes: 24 * 1024 ** 3,
+          free_memory_bytes: 20 * 1024 ** 3,
+          driver: "test",
+          runtime_metadata: {}
+        }
+      ]
+    });
     mocks.createDeployment.mockResolvedValue({ id: "deploy-created" });
     window.location.hash = "#/deployments/new";
   });
@@ -220,6 +242,35 @@ describe("NewDeploymentPage", () => {
     await waitFor(() =>
       expect(window.location.hash).toBe("#/deployments/deploy-created")
     );
+  });
+
+  it("discovers physical devices and persists explicit resource policy mappings", async () => {
+    render(<NewDeploymentPage />);
+
+    const discover = await screen.findByRole("button", { name: "Discover devices" });
+    fireEvent.click(discover);
+
+    expect(await screen.findByText("NVIDIA RTX Test")).toBeInTheDocument();
+    expect(mocks.binaryDevices).toHaveBeenCalledWith("server-a");
+
+    fireEvent.change(screen.getByLabelText("Reserve margin (MiB)"), {
+      target: { value: "1024" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create deployment" }));
+
+    await waitFor(() => expect(mocks.createDeployment).toHaveBeenCalledTimes(1));
+    const policy = mocks.createDeployment.mock.calls[0][0].deployment.resource_policy;
+    expect(policy.allowed_devices).toEqual(["uuid:gpu-0"]);
+    expect(policy.device_memory_margin_bytes).toEqual({
+      "uuid:gpu-0": 1024 * 1024 * 1024
+    });
+    expect(policy.logical_device_mappings).toEqual([
+      {
+        binary_id: "server-a",
+        logical_device_name: "CUDA0",
+        device_id: "uuid:gpu-0"
+      }
+    ]);
   });
 
   it("rejects a non-positive total power limit before submission", async () => {
