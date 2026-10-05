@@ -97,6 +97,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body)
     }),
+  previewDeployment: (id: string, body: DeploymentPlanRequest) =>
+    request<DeploymentPlanResponse>(
+      "/api/deployments/" + encodeURIComponent(id) + "/preview",
+      { method: "POST", body: JSON.stringify(body) }
+    ),
   planDeployment: (id: string, body: DeploymentPlanRequest) =>
     request<DeploymentPlanResponse>(
       "/api/deployments/" + encodeURIComponent(id) + "/plan",
