@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 from llama_profile_lab.db.connection import transaction
 from llama_profile_lab.db.records import (
     BenchmarkCaseRecord,
+    AcceleratorDeviceRecord,
     BenchmarkRunRecord,
     BinaryRecord,
     CandidateEvaluationRecord,
@@ -26,6 +27,10 @@ from llama_profile_lab.db.records import (
     DeploymentRunRecord,
     ExperimentRecord,
     ExperimentStatus,
+    MemoryEstimateAttemptRecord,
+    MemoryEstimateAttemptStatus,
+    MemoryEstimateDeviceRecord,
+    MemoryEstimateRecord,
     PlacementAttemptRecord,
     PlacementAttemptStatus,
     PlacementDeviceMemoryRecord,
@@ -37,6 +42,7 @@ from llama_profile_lab.db.records import (
     ServerRunStatus,
 )
 from llama_profile_lab.domain import (
+    AcceleratorDevice,
     Candidate,
     DeploymentCandidate,
     DeploymentFailureKind,
@@ -44,6 +50,8 @@ from llama_profile_lab.domain import (
     DeploymentRunStatus,
     ExperimentDefinition,
     MeasurementPolicy,
+    MemoryEstimateIdentity,
+    MemoryEstimateOutput,
     ResolvedPlacement,
     SearchSpace,
     TelemetrySample,
@@ -2616,5 +2624,448 @@ class DeploymentRunRepository:
                 result=_loads_object(str(row["result_json"])),
             )
             for row in rows
+        )
+
+
+class AcceleratorDeviceRepository:
+    """Current logical-device inventory for exact host/binary pairs."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def put_inventory(
+        self,
+        *,
+        host_id: str,
+        binary_id: str,
+        devices: Sequence[AcceleratorDevice],
+        raw_output: str,
+    ) -> tuple[str, ...]:
+        identifiers: list[str] = []
+        with transaction(self.connection, immediate=True):
+            for device in devices:
+                identifier = _content_id(
+                    "accel",
+                    sha256_json(
+                        {
+                            "host_id": host_id,
+                            "binary_id": binary_id,
+                            "logical_device_name": device.logical_device_name,
+                        }
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    INSERT INTO accelerator_device(
+                        id, host_id, binary_id, logical_device_name, backend,
+                        mapping_status, physical_device_key, pci_bus_id, uuid,
+                        vendor, product_name, total_memory_bytes,
+                        free_memory_bytes, driver, runtime_metadata_json,
+                        raw_output
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(host_id, binary_id, logical_device_name)
+                    DO UPDATE SET
+                        backend = excluded.backend,
+                        mapping_status = excluded.mapping_status,
+                        physical_device_key = excluded.physical_device_key,
+                        pci_bus_id = excluded.pci_bus_id,
+                        uuid = excluded.uuid,
+                        vendor = excluded.vendor,
+                        product_name = excluded.product_name,
+                        total_memory_bytes = excluded.total_memory_bytes,
+                        free_memory_bytes = excluded.free_memory_bytes,
+                        driver = excluded.driver,
+                        runtime_metadata_json = excluded.runtime_metadata_json,
+                        raw_output = excluded.raw_output,
+                        observed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    """,
+                    (
+                        identifier,
+                        host_id,
+                        binary_id,
+                        device.logical_device_name,
+                        device.backend,
+                        device.mapping_status,
+                        device.physical_device_key,
+                        device.pci_bus_id,
+                        device.uuid,
+                        device.vendor,
+                        device.product_name,
+                        device.total_memory_bytes,
+                        device.free_memory_bytes,
+                        device.driver,
+                        canonical_json(dict(device.runtime_metadata)),
+                        raw_output,
+                    ),
+                )
+                identifiers.append(identifier)
+        return tuple(identifiers)
+
+    def list_for_binary(
+        self,
+        *,
+        host_id: str,
+        binary_id: str,
+    ) -> tuple[AcceleratorDeviceRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT id, host_id, binary_id, logical_device_name, backend,
+                   mapping_status, physical_device_key, pci_bus_id, uuid,
+                   vendor, product_name, total_memory_bytes,
+                   free_memory_bytes, driver, runtime_metadata_json,
+                   raw_output, observed_at
+            FROM accelerator_device
+            WHERE host_id = ? AND binary_id = ?
+            ORDER BY logical_device_name
+            """,
+            (host_id, binary_id),
+        ).fetchall()
+        return tuple(
+            AcceleratorDeviceRecord(
+                id=str(row["id"]),
+                host_id=str(row["host_id"]),
+                binary_id=str(row["binary_id"]),
+                logical_device_name=str(row["logical_device_name"]),
+                backend=str(row["backend"]),
+                mapping_status=str(row["mapping_status"]),
+                physical_device_key=row["physical_device_key"],
+                pci_bus_id=row["pci_bus_id"],
+                uuid=row["uuid"],
+                vendor=row["vendor"],
+                product_name=row["product_name"],
+                total_memory_bytes=row["total_memory_bytes"],
+                free_memory_bytes=row["free_memory_bytes"],
+                driver=row["driver"],
+                runtime_metadata=_loads_object(
+                    str(row["runtime_metadata_json"])
+                ),
+                raw_output=str(row["raw_output"]),
+                observed_at=str(row["observed_at"]),
+            )
+            for row in rows
+        )
+
+
+class MemoryEstimateRepository:
+    """Append-only estimator attempts plus immutable successful cache entries."""
+
+    _TERMINAL = frozenset(
+        {
+            "completed",
+            "failed",
+            "parser_failed",
+            "timeout",
+            "interrupted",
+            "cancelled",
+            "binary_changed",
+        }
+    )
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create_attempt(
+        self,
+        *,
+        identity: MemoryEstimateIdentity,
+        candidate_id: str,
+        host_id: str,
+        helper_binary_id: str,
+        model_artifact_id: str,
+        argv: tuple[str, ...],
+        started_at: str | None = None,
+    ) -> str:
+        identifier = _event_id("memattempt")
+        self.connection.execute(
+            """
+            INSERT INTO memory_estimate_attempt(
+                id, cache_hash, candidate_id, host_id, helper_binary_id,
+                model_artifact_id, request_json, argv_json, status, started_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+            """,
+            (
+                identifier,
+                identity.content_hash(),
+                candidate_id,
+                host_id,
+                helper_binary_id,
+                model_artifact_id,
+                canonical_json(identity),
+                canonical_json(list(argv)),
+                started_at or _utc_now(),
+            ),
+        )
+        return identifier
+
+    def finish_attempt(
+        self,
+        identifier: str,
+        *,
+        status: MemoryEstimateAttemptStatus,
+        duration_ns: int,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        failure_details: Mapping[str, Any] | None = None,
+        finished_at: str | None = None,
+    ) -> None:
+        if status not in self._TERMINAL:
+            raise ValueError("finished memory estimate attempt must be terminal")
+        cursor = self.connection.execute(
+            """
+            UPDATE memory_estimate_attempt
+            SET status = ?, finished_at = ?, duration_ns = ?, exit_code = ?,
+                stdout = ?, stderr = ?, failure_details_json = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (
+                status,
+                finished_at or _utc_now(),
+                duration_ns,
+                exit_code,
+                stdout,
+                stderr,
+                (
+                    canonical_json(dict(failure_details))
+                    if failure_details is not None
+                    else None
+                ),
+                identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "memory estimate attempt does not exist or is already terminal"
+            )
+
+    def put_success(
+        self,
+        *,
+        attempt_id: str,
+        identity: MemoryEstimateIdentity,
+        result: MemoryEstimateOutput,
+        candidate_id: str,
+        host_id: str,
+        helper_binary_id: str,
+        model_artifact_id: str,
+    ) -> str:
+        cache_hash = identity.content_hash()
+        attempt = self.connection.execute(
+            """
+            SELECT cache_hash, candidate_id, host_id, helper_binary_id,
+                   model_artifact_id, status
+            FROM memory_estimate_attempt
+            WHERE id = ?
+            """,
+            (attempt_id,),
+        ).fetchone()
+        if attempt is None:
+            raise ValueError(f"memory estimate attempt not found: {attempt_id}")
+        expected = (
+            cache_hash,
+            candidate_id,
+            host_id,
+            helper_binary_id,
+            model_artifact_id,
+        )
+        actual = (
+            str(attempt["cache_hash"]),
+            str(attempt["candidate_id"]),
+            str(attempt["host_id"]),
+            str(attempt["helper_binary_id"]),
+            str(attempt["model_artifact_id"]),
+        )
+        if actual != expected:
+            raise ValueError("memory estimate attempt identity mismatch")
+
+        identifier = _content_id("memest", cache_hash)
+        rows_by_name = {
+            item.logical_device_name: item
+            for item in result.devices
+        }
+        with transaction(self.connection, immediate=True):
+            cursor = self.connection.execute(
+                """
+                INSERT INTO memory_estimate(
+                    id, cache_hash, attempt_id, candidate_id, host_id,
+                    helper_binary_id, model_artifact_id, identity_json,
+                    result_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(cache_hash) DO NOTHING
+                """,
+                (
+                    identifier,
+                    cache_hash,
+                    attempt_id,
+                    candidate_id,
+                    host_id,
+                    helper_binary_id,
+                    model_artifact_id,
+                    canonical_json(identity),
+                    canonical_json(result),
+                ),
+            )
+            if cursor.rowcount == 1:
+                self.connection.executemany(
+                    """
+                    INSERT INTO memory_estimate_device(
+                        memory_estimate_id, ordinal, logical_device_name,
+                        model_bytes, context_bytes, compute_bytes, total_bytes,
+                        device_total_bytes, device_free_bytes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            identifier,
+                            ordinal,
+                            logical_name,
+                            rows_by_name[logical_name].model_bytes,
+                            rows_by_name[logical_name].context_bytes,
+                            rows_by_name[logical_name].compute_bytes,
+                            rows_by_name[logical_name].total_bytes,
+                            rows_by_name[logical_name].device_total_bytes,
+                            rows_by_name[logical_name].device_free_bytes,
+                        )
+                        for ordinal, logical_name in enumerate(
+                            result.resolved.devices
+                        )
+                    ),
+                )
+            else:
+                existing = self.find_by_cache_hash(cache_hash)
+                if existing is None or existing.identity != identity.model_dump(
+                    mode="json",
+                    by_alias=True,
+                ):
+                    raise RuntimeError(
+                        "memory estimate cache hash collision or identity mismatch"
+                    )
+        return identifier
+
+    def find_by_cache_hash(
+        self,
+        cache_hash: str,
+    ) -> MemoryEstimateRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, cache_hash, attempt_id, candidate_id, host_id,
+                   helper_binary_id, model_artifact_id, identity_json,
+                   result_json, created_at
+            FROM memory_estimate
+            WHERE cache_hash = ?
+            """,
+            (cache_hash,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def get(self, identifier: str) -> MemoryEstimateRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, cache_hash, attempt_id, candidate_id, host_id,
+                   helper_binary_id, model_artifact_id, identity_json,
+                   result_json, created_at
+            FROM memory_estimate
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def get_result(self, identifier: str) -> MemoryEstimateOutput | None:
+        row = self.connection.execute(
+            "SELECT result_json FROM memory_estimate WHERE id = ?",
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return MemoryEstimateOutput.model_validate_json(str(row["result_json"]))
+
+    def devices(
+        self,
+        identifier: str,
+    ) -> tuple[MemoryEstimateDeviceRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT memory_estimate_id, ordinal, logical_device_name,
+                   model_bytes, context_bytes, compute_bytes, total_bytes,
+                   device_total_bytes, device_free_bytes
+            FROM memory_estimate_device
+            WHERE memory_estimate_id = ?
+            ORDER BY ordinal
+            """,
+            (identifier,),
+        ).fetchall()
+        return tuple(
+            MemoryEstimateDeviceRecord(
+                memory_estimate_id=str(row["memory_estimate_id"]),
+                ordinal=int(row["ordinal"]),
+                logical_device_name=str(row["logical_device_name"]),
+                model_bytes=int(row["model_bytes"]),
+                context_bytes=int(row["context_bytes"]),
+                compute_bytes=int(row["compute_bytes"]),
+                total_bytes=int(row["total_bytes"]),
+                device_total_bytes=int(row["device_total_bytes"]),
+                device_free_bytes=int(row["device_free_bytes"]),
+            )
+            for row in rows
+        )
+
+    def attempt(self, identifier: str) -> MemoryEstimateAttemptRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, cache_hash, candidate_id, host_id, helper_binary_id,
+                   model_artifact_id, request_json, argv_json, status,
+                   started_at, finished_at, duration_ns, exit_code,
+                   stdout, stderr, failure_details_json
+            FROM memory_estimate_attempt
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        raw_argv = json.loads(str(row["argv_json"]))
+        if not isinstance(raw_argv, list):
+            raise ValueError("persisted memory estimate argv must be a list")
+        return MemoryEstimateAttemptRecord(
+            id=str(row["id"]),
+            cache_hash=str(row["cache_hash"]),
+            candidate_id=str(row["candidate_id"]),
+            host_id=str(row["host_id"]),
+            helper_binary_id=str(row["helper_binary_id"]),
+            model_artifact_id=str(row["model_artifact_id"]),
+            request=_loads_object(str(row["request_json"])),
+            argv=tuple(str(item) for item in raw_argv),
+            status=row["status"],
+            started_at=str(row["started_at"]),
+            finished_at=row["finished_at"],
+            duration_ns=row["duration_ns"],
+            exit_code=row["exit_code"],
+            stdout=str(row["stdout"]),
+            stderr=str(row["stderr"]),
+            failure_details=(
+                None
+                if row["failure_details_json"] is None
+                else _loads_object(str(row["failure_details_json"]))
+            ),
+        )
+
+    @staticmethod
+    def _record(row: sqlite3.Row) -> MemoryEstimateRecord:
+        return MemoryEstimateRecord(
+            id=str(row["id"]),
+            cache_hash=str(row["cache_hash"]),
+            attempt_id=str(row["attempt_id"]),
+            candidate_id=str(row["candidate_id"]),
+            host_id=str(row["host_id"]),
+            helper_binary_id=str(row["helper_binary_id"]),
+            model_artifact_id=str(row["model_artifact_id"]),
+            identity=_loads_object(str(row["identity_json"])),
+            result=_loads_object(str(row["result_json"])),
+            created_at=str(row["created_at"]),
         )
 
