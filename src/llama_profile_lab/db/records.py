@@ -239,6 +239,8 @@ class CandidateEvaluationRecord:
     metrics: Mapping[str, Any]
     created_at: str
 
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentCandidateRecord:
     """Persisted metadata for one immutable deployment Candidate."""
