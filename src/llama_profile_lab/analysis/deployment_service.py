@@ -497,6 +497,7 @@ class DeploymentAnalysisService:
         objectives: Sequence[DeploymentParetoObjective],
         constraints: Sequence[DeploymentMetricConstraint] = (),
         filters: Sequence[DeploymentAnalysisFilter] = (),
+        placement_ids: Sequence[str] | None = None,
     ) -> DeploymentParetoResult:
         """Return non-dominated valid placements after metric constraints."""
         if not objectives:
@@ -510,17 +511,28 @@ class DeploymentAnalysisService:
             )
 
         observations = self._load()
-        placement_ids = sorted(
+        allowed_placements = (
+            None if placement_ids is None else set(placement_ids)
+        )
+        candidate_placement_ids = sorted(
             {
                 item.context.placement_id
                 for item in observations
-                if _matches_filters(item, filters, missing_is_false=True)
+                if (
+                    allowed_placements is None
+                    or item.context.placement_id in allowed_placements
+                )
+                and _matches_filters(
+                    item,
+                    filters,
+                    missing_is_false=True,
+                )
             }
         )
         vectors: list[DeploymentParetoPoint] = []
         excluded: dict[str, str] = {}
 
-        for placement_id in placement_ids:
+        for placement_id in candidate_placement_ids:
             subject = [
                 item
                 for item in observations
@@ -600,12 +612,20 @@ class DeploymentAnalysisService:
         *,
         format_name: str,
         filters: Sequence[DeploymentAnalysisFilter] = (),
+        placement_ids: Sequence[str] | None = None,
     ) -> str:
         """Export raw successful and failed deployment observations."""
+        allowed_placements = (
+            None if placement_ids is None else set(placement_ids)
+        )
         rows = [
             _export_row(item)
             for item in self._load()
-            if _matches_filters(
+            if (
+                allowed_placements is None
+                or item.context.placement_id in allowed_placements
+            )
+            and _matches_filters(
                 item,
                 filters,
                 missing_is_false=True,
