@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import stat
 import threading
 import time
@@ -47,6 +46,7 @@ from llama_profile_lab.execution import (
     DeploymentExecutor,
     DeploymentServerInput,
     HostLock,
+    ManagedServerProcess,
 )
 from llama_profile_lab.llama import sha256_file
 
@@ -111,6 +111,9 @@ model = value("--model")
 if "fail" in os.path.basename(model):
     print("synthetic startup failure", file=sys.stderr, flush=True)
     raise SystemExit(7)
+if "oom" in os.path.basename(model):
+    print("out of memory", file=sys.stderr, flush=True)
+    raise SystemExit(9)
 
 child = subprocess.Popen(
     [sys.executable, "-c", "import time; time.sleep(60)"]
@@ -461,6 +464,144 @@ def test_later_server_failure_tears_down_ready_member(tmp_path: Path) -> None:
     assert qwen.pid is not None
     _assert_process_terminates(qwen.pid)
     _assert_process_terminates(_child_pid(qwen_path))
+
+
+def test_first_server_failure_tears_down_deployment(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs, _, flash_path = _seed(
+        tmp_path,
+        qwen_name="qwen-fail.gguf",
+    )
+
+    with pytest.raises(DeploymentExecutionError) as captured:
+        _executor(database).execute(
+            placement_id,
+            inputs,
+            readiness_timeout_seconds=1.0,
+        )
+
+    assert captured.value.failure_kind == "server_start_failed"
+    with database.session() as connection:
+        members = DeploymentRunRepository(connection).members(
+            captured.value.run_id or ""
+        )
+    assert all(item.member_status == "failed" for item in members)
+    flash = next(item for item in members if item.instance_id == "flash")
+    if flash.pid is not None:
+        _assert_process_terminates(flash.pid)
+    child_file = Path(str(flash_path) + ".childpid")
+    if child_file.exists():
+        _assert_process_terminates(_child_pid(flash_path))
+
+
+def test_binary_drift_fails_before_server_start(tmp_path: Path) -> None:
+    database, placement_id, inputs, _, _ = _seed(tmp_path)
+    with database.session() as connection:
+        placement = DeploymentPlacementRepository(connection).get(placement_id)
+        assert placement is not None
+        deployment = DeploymentCandidateRepository(connection).get(
+            placement.deployment_candidate_id
+        )
+        assert deployment is not None
+        binary_id = deployment.instances[0].binary_id
+        binary = EnvironmentRepository(connection).get_binary(binary_id)
+        assert binary is not None
+        binary_path = Path(binary.path)
+
+    with binary_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n# drift\n")
+
+    with pytest.raises(DeploymentExecutionError, match="changed on disk") as captured:
+        _executor(database).execute(placement_id, inputs)
+
+    assert captured.value.run_id is not None
+    with database.session() as connection:
+        run = DeploymentRunRepository(connection).get(captured.value.run_id)
+        members = DeploymentRunRepository(connection).members(
+            captured.value.run_id
+        )
+    assert run is not None and run.status == "failed"
+    assert members == ()
+
+
+def test_missing_model_fails_before_server_start(tmp_path: Path) -> None:
+    database, placement_id, inputs, qwen_path, _ = _seed(tmp_path)
+    qwen_path.unlink()
+
+    with pytest.raises(
+        DeploymentExecutionError,
+        match="model path does not exist",
+    ) as captured:
+        _executor(database).execute(placement_id, inputs)
+
+    assert captured.value.run_id is not None
+    with database.session() as connection:
+        run = DeploymentRunRepository(connection).get(captured.value.run_id)
+    assert run is not None and run.status == "failed"
+
+
+def test_runtime_oom_is_classified_from_member_logs(tmp_path: Path) -> None:
+    database, placement_id, inputs, _, _ = _seed(
+        tmp_path,
+        qwen_name="qwen-oom.gguf",
+    )
+
+    with pytest.raises(DeploymentExecutionError) as captured:
+        _executor(database).execute(
+            placement_id,
+            inputs,
+            readiness_timeout_seconds=1.0,
+        )
+
+    assert captured.value.failure_kind == "server_oom"
+    with database.session() as connection:
+        run = DeploymentRunRepository(connection).get(
+            captured.value.run_id or ""
+        )
+    assert run is not None and run.failure_kind == "server_oom"
+
+
+class CleanupFailingServer(ManagedServerProcess):
+    def close(self) -> None:
+        super().close()
+        raise RuntimeError("synthetic cleanup failure")
+
+
+def test_cleanup_failure_is_persisted_after_process_stop(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs, _, _ = _seed(tmp_path)
+    executor = DeploymentExecutor(
+        database,
+        host_detector=lambda: HOST,
+        gpu_provider=_provider(),
+        server_process_factory=CleanupFailingServer,
+    )
+
+    with pytest.raises(DeploymentExecutionError) as captured:
+        executor.execute(
+            placement_id,
+            inputs,
+            readiness_timeout_seconds=2.0,
+        )
+
+    assert captured.value.failure_kind == "member_crash"
+    with database.session() as connection:
+        run = DeploymentRunRepository(connection).get(
+            captured.value.run_id or ""
+        )
+        members = DeploymentRunRepository(connection).members(
+            captured.value.run_id or ""
+        )
+    assert run is not None and run.status == "failed"
+    assert all(
+        "synthetic cleanup failure" in (item.cleanup_error or "")
+        for item in members
+    )
+    for item in members:
+        if item.pid is not None:
+            _assert_process_terminates(item.pid)
 
 
 def test_readiness_timeout_tears_down_all_started_members(
