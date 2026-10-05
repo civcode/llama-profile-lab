@@ -942,6 +942,149 @@ select:disabled {
   font-size: 12px;
 }
 
+.deployment-instance-list,
+.planner-dimension-list,
+.planner-estimators {
+  display: grid;
+  gap: 12px;
+}
+
+.deployment-instance-card,
+.planner-estimator-card {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.deployment-instance-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.phase-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.phase-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.phase-option input {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+}
+
+.deployment-policy-toggles {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.memory-source {
+  display: inline-flex;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.memory-source-projected {
+  color: #1d4ed8;
+  background: #eaf2ff;
+}
+
+.memory-source-runtime {
+  color: #7c3aed;
+  background: #f2edff;
+}
+
+.memory-matrix td:not(:first-child),
+.memory-matrix th:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.planner-estimators {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-bottom: 18px;
+}
+
+.planner-estimator-card > strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.planner-estimator-card .field {
+  margin-top: 12px;
+}
+
+.planner-dimension-list {
+  margin: 18px 0;
+}
+
+.planner-dimension-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(250px, 1fr) minmax(220px, 0.9fr) 40px;
+  align-items: end;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fbfcfe;
+}
+
+.planner-remove {
+  align-self: end;
+}
+
+textarea.planner-textarea {
+  min-height: 86px;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  outline: none;
+  color: var(--text);
+  background: white;
+  padding: 10px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+textarea.planner-textarea:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.11);
+}
+
+.planner-actions {
+  margin-top: 16px;
+}
+
+.deployment-plan-preview {
+  margin-bottom: 0;
+}
+
 .app-footer {
   padding: 22px 20px 34px;
   color: #94a3b8;
@@ -951,6 +1094,10 @@ select:disabled {
 
 @media (max-width: 980px) {
   .workload-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .planner-dimension-row {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -1010,6 +1157,7 @@ select:disabled {
   }
 
   .workload-row,
+  .planner-dimension-row,
   .split-fields,
   .run-form,
   .control-grid,
