@@ -130,12 +130,16 @@ export function NewDeploymentPage() {
       !item.binaryId ||
       !item.serverIdentity.trim()
   );
+  const validMaximumPower =
+    maximumPower.trim() === "" ||
+    (Number.isFinite(Number(maximumPower)) && Number(maximumPower) > 0);
   const canSave =
     instances.length >= 2 &&
     !duplicateInstanceId &&
     !incompleteInstance &&
     Boolean(workloadExperiment) &&
     phases.length > 0 &&
+    validMaximumPower &&
     !saving;
 
   function updateInstance(index: number, patch: Partial<InstanceDraft>) {
@@ -420,7 +424,7 @@ export function NewDeploymentPage() {
                   <span>Maximum total power (W)</span>
                   <input
                     type="number"
-                    min="0"
+                    min="1"
                     value={maximumPower}
                     placeholder="No limit"
                     onChange={(event) => setMaximumPower(event.target.value)}
