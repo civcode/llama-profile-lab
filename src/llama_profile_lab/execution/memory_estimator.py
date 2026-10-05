@@ -16,7 +16,11 @@ from llama_profile_lab.db import (
 )
 from llama_profile_lab.db.connection import transaction
 from llama_profile_lab.db.records import BinaryRecord, MemoryEstimateAttemptStatus
-from llama_profile_lab.domain import AcceleratorDevice, MemoryEstimateOutput
+from llama_profile_lab.domain import (
+    AcceleratorDevice,
+    MemoryEstimateOutput,
+    PlacementConstraints,
+)
 from llama_profile_lab.execution.host import BasicHostInfo, detect_basic_host
 from llama_profile_lab.execution.process import (
     ProcessResult,
@@ -168,6 +172,7 @@ class MemoryEstimatorService:
         helper_binary_id: str,
         model_path: Path,
         selected_devices: tuple[str, ...] | None = None,
+        placement_constraints: PlacementConstraints | None = None,
         timeout_seconds: float | None = 300.0,
         cancel_event: Event | None = None,
     ) -> MemoryEstimateObservation:
@@ -201,6 +206,7 @@ class MemoryEstimatorService:
                     host_id=host_id,
                     model_path=model_path,
                     candidate=candidate,
+                    placement_constraints=placement_constraints,
                     selected_devices=selected_devices,
                 )
             except MemoryEstimatorConfigurationError as exc:
