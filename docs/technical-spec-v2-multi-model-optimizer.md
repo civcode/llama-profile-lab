@@ -543,6 +543,30 @@ min_retention = min(instance_retention)
 
 Additional fairness functions may be added later, but raw per-instance values remain canonical.
 
+V2-M7 implements deployment analysis over persisted placements and concurrent runs. Rate and latency metrics reject hidden workload-coordinate ambiguity rather than averaging across depths or phase variants. The stable metric namespace includes:
+
+~~~text
+deployment.combined_tg_tps
+deployment.combined_pp_tps
+deployment.min_retention
+deployment.total_validated_context_tokens
+deployment.min_device_headroom_bytes
+deployment.min_device_projected_headroom_bytes
+deployment.min_device_runtime_headroom_bytes
+deployment.total_power_avg_w
+deployment.total_power_peak_w
+deployment.device.<id>.headroom_bytes
+deployment.device.<id>.projected_headroom_bytes
+deployment.device.<id>.runtime_headroom_bytes
+deployment.instance.<id>.pp_tps
+deployment.instance.<id>.tg_tps
+deployment.instance.<id>.retention
+deployment.instance.<id>.latency_ms
+deployment.instance.<id>.latency_increase_pct
+~~~
+
+Unqualified headroom is runtime-only and is unavailable unless every planned device has runtime evidence. Projected headroom remains explicitly separate so analysis never compares projected and runtime values under the same scalar name.
+
 ### 12.5 Capacity metrics
 
 Persist:
@@ -776,6 +800,8 @@ V2-M6 migrations 011 and 012 add:
 
 Raw member JSON always includes serialized cumulative token events so the overlap calculation remains auditable even for non-production client implementations.
 
+V2-M7 migration 013 adds `deployment_gpu_sample`, keyed by deployment run and monotonic timestamp. The M5 residency executor samples the composite GPU provider throughout the resident interval and persists the per-device snapshots. M7 uses those samples for runtime peak VRAM, minimum free VRAM, and sample-weighted total power average/peak calculations. Missing power on any planned device makes that total-power sample unavailable rather than silently summing a partial device set.
+
 Existing generic metric and telemetry storage should be reused where practical.
 
 ## 18. Placement cache identity
@@ -838,6 +864,21 @@ Flash compute        0.1 GiB     0.4 GiB
 Reserved             0.8 GiB     0.8 GiB
 Projected free       ...
 ~~~
+
+### 19.1 M7 read-only deployment analysis service
+
+Before M8 exposes these capabilities through new CLI/API routes, M7 provides a read-only Python service over canonical SQLite state.
+
+Implemented operations include:
+
+- exact-filter/facet deployment matrix projection;
+- projected/runtime device memory matrix;
+- DD/PP/PD/DP interference view with per-instance retention and latency;
+- signed deployment-placement baseline comparison;
+- constrained multi-objective Pareto frontier;
+- CSV/JSON raw export preserving failed and correctness-invalid rows.
+
+Analysis coordinates support Candidate context/KV/batch fields, resolved GPU layers/split/tensor ratios, exact binary IDs, persisted accelerator backends, workload phase/member depth, and device allocation fields. Failed or correctness-invalid evidence remains queryable/exportable but is not valid Pareto evidence.
 
 ## 20. API
 
