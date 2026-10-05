@@ -9,10 +9,13 @@ import {
   StatusBadge
 } from "../components";
 import type {
+  BinaryRecord,
   Deployment,
   DeploymentCandidateItem,
   DeploymentMemoryMatrix,
   DeploymentPlacement,
+  DeploymentPlanRequest,
+  DeploymentPlanResponse,
   DeploymentProgress,
   DeploymentRun,
   ModelRecord
@@ -23,6 +26,60 @@ function bytes(value: number | null): string {
   const gib = value / 1024 / 1024 / 1024;
   if (gib >= 1) return gib.toFixed(2) + " GiB";
   return (value / 1024 / 1024).toFixed(0) + " MiB";
+}
+
+interface PlannerDimensionDraft {
+  key: string;
+  path: string;
+  values: string;
+  condition: string;
+}
+
+const INSTANCE_DIMENSION_SUFFIXES = [
+  "context.size",
+  "context.cache_type_k",
+  "context.cache_type_v",
+  "compute.batch_size",
+  "compute.ubatch_size",
+  "compute.flash_attn",
+  "placement.constraints.n_gpu_layers",
+  "placement.constraints.split_mode",
+  "placement.constraints.main_gpu",
+  "placement.constraints.tensor_split",
+  "requested_placement.devices",
+  "requested_placement.n_gpu_layers",
+  "requested_placement.split_mode",
+  "requested_placement.main_gpu",
+  "requested_placement.tensor_split",
+  "requested_placement.override_tensor"
+] as const;
+
+function parseDimensionValues(raw: string): Array<string | number | boolean | null | Array<string | number | boolean | null>> {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("Dimension values must be a non-empty JSON array.");
+  }
+  for (const value of parsed) {
+    if (
+      value !== null &&
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean" &&
+      !(
+        Array.isArray(value) &&
+        value.every(
+          (item) =>
+            item === null ||
+            typeof item === "string" ||
+            typeof item === "number" ||
+            typeof item === "boolean"
+        )
+      )
+    ) {
+      throw new Error("Dimension values may contain only JSON scalars or scalar arrays.");
+    }
+  }
+  return parsed as Array<string | number | boolean | null | Array<string | number | boolean | null>>;
 }
 
 function MemoryMatrix({ matrix }: { matrix: DeploymentMemoryMatrix }) {
@@ -65,7 +122,14 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
   const [placements, setPlacements] = useState<DeploymentPlacement[]>([]);
   const [runs, setRuns] = useState<DeploymentRun[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
+  const [binaries, setBinaries] = useState<BinaryRecord[]>([]);
   const [selectedPlacementId, setSelectedPlacementId] = useState("");
+  const [plannerDimensions, setPlannerDimensions] = useState<PlannerDimensionDraft[]>([]);
+  const [plannerConstraints, setPlannerConstraints] = useState("");
+  const [helperByInstance, setHelperByInstance] = useState<Record<string, string>>({});
+  const [planPreview, setPlanPreview] = useState<DeploymentPlanResponse | null>(null);
+  const [plannerError, setPlannerError] = useState<unknown>(null);
+  const [planning, setPlanning] = useState<"preview" | "plan" | null>(null);
   const [readinessTimeout, setReadinessTimeout] = useState(300);
   const [error, setError] = useState<unknown>(null);
 
@@ -77,14 +141,16 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
         candidateValues,
         placementValues,
         runValues,
-        modelValues
+        modelValues,
+        binaryValues
       ] = await Promise.all([
         api.deployment(deploymentId),
         api.deploymentProgress(deploymentId),
         api.deploymentCandidates(deploymentId),
         api.deploymentPlacements(deploymentId),
         api.deploymentRuns(deploymentId),
-        api.models()
+        api.models(),
+        api.binaries()
       ]);
       setDeployment(deploymentValue);
       setProgress(progressValue);
@@ -92,6 +158,34 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
       setPlacements(placementValues);
       setRuns(runValues);
       setModels(modelValues);
+      setBinaries(binaryValues);
+      const helpers = binaryValues.filter(
+        (item) => item.kind === "llama-memory-estimator"
+      );
+      setHelperByInstance((current) => {
+        const next = { ...current };
+        for (const [index, instance] of deploymentValue.definition.instances.entries()) {
+          if (!next[instance.instance_id] && helpers.length > 0) {
+            next[instance.instance_id] = helpers[index]?.id ?? helpers[0].id;
+          }
+        }
+        return next;
+      });
+      setPlannerDimensions((current) =>
+        current.length > 0 || deploymentValue.definition.instances.length === 0
+          ? current
+          : [
+              {
+                key: "dimension-1",
+                path:
+                  "instances." +
+                  deploymentValue.definition.instances[0].instance_id +
+                  ".context.size",
+                values: "[8192, 16384]",
+                condition: ""
+              }
+            ]
+      );
       setSelectedPlacementId((current) =>
         current || progressValue.current_placement_id || placementValues[0]?.id || ""
       );
@@ -155,11 +249,124 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
       model_path: modelById.get(instance.model_artifact_id)?.files[0]?.path ?? ""
     }));
   }, [deployment, modelById]);
+  const estimatorInputs = useMemo(() => {
+    if (!deployment) return [];
+    return deployment.definition.instances.map((instance) => ({
+      instance_id: instance.instance_id,
+      helper_binary_id: helperByInstance[instance.instance_id] ?? "",
+      model_path: modelById.get(instance.model_artifact_id)?.files[0]?.path ?? ""
+    }));
+  }, [deployment, helperByInstance, modelById]);
+  const memoryEstimatorBinaries = useMemo(
+    () => binaries.filter((item) => item.kind === "llama-memory-estimator"),
+    [binaries]
+  );
   const missingModelPath = runInputs.some((item) => !item.model_path);
+  const plannerUnavailable = estimatorInputs.some(
+    (item) => !item.helper_binary_id || !item.model_path
+  );
   const isActive =
     progress?.operation &&
     ["running", "pausing", "cancelling"].includes(progress.operation.status);
   const canResume = progress?.operation?.status === "paused";
+
+  function updateDimension(index: number, patch: Partial<PlannerDimensionDraft>) {
+    setPlannerDimensions((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...patch } : item
+      )
+    );
+  }
+
+  function addDimension() {
+    const firstInstance = deployment?.definition.instances[0]?.instance_id ?? "model";
+    setPlannerDimensions((current) => [
+      ...current,
+      {
+        key: "dimension-" + Date.now(),
+        path: "instances." + firstInstance + ".context.size",
+        values: "[8192, 16384]",
+        condition: ""
+      }
+    ]);
+  }
+
+  function buildPlanRequest(): DeploymentPlanRequest {
+    if (plannerDimensions.length === 0) {
+      throw new Error("Add at least one search dimension.");
+    }
+    if (plannerUnavailable) {
+      throw new Error(
+        "Each instance needs a registered model path and llama-memory-estimator binary."
+      );
+    }
+    const constraints = plannerConstraints
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((expression) => ({ expression }));
+    return {
+      search_space: {
+        schema: "llama-deployment-search-space",
+        version: 1,
+        dimensions: plannerDimensions.map((item) => ({
+          path: item.path.trim(),
+          values: parseDimensionValues(item.values),
+          condition: item.condition.trim() || null
+        })),
+        constraints,
+        strategy: { type: "grid" }
+      },
+      instances: estimatorInputs,
+      timeout_seconds: 300
+    };
+  }
+
+  async function previewPlan() {
+    try {
+      setPlannerError(null);
+      setPlanning("preview");
+      setPlanPreview(await api.previewDeployment(deploymentId, buildPlanRequest()));
+    } catch (reason) {
+      setPlanPreview(null);
+      setPlannerError(reason);
+    } finally {
+      setPlanning(null);
+    }
+  }
+
+  async function persistPlan() {
+    try {
+      setPlannerError(null);
+      setPlanning("plan");
+      const summary = await api.planDeployment(deploymentId, buildPlanRequest());
+      setPlanPreview(summary);
+      const [
+        deploymentValue,
+        progressValue,
+        candidateValues,
+        placementValues
+      ] = await Promise.all([
+        api.deployment(deploymentId),
+        api.deploymentProgress(deploymentId),
+        api.deploymentCandidates(deploymentId),
+        api.deploymentPlacements(deploymentId)
+      ]);
+      setDeployment(deploymentValue);
+      setProgress(progressValue);
+      setCandidates(candidateValues);
+      setPlacements(placementValues);
+      if (summary.cases[0]?.deployment_placement_id) {
+        setSelectedPlacementId(summary.cases[0].deployment_placement_id);
+      } else if (placementValues[0]?.id) {
+        setSelectedPlacementId(placementValues[0].id);
+      }
+    } catch (reason) {
+      setPlannerError(reason);
+    } finally {
+      setPlanning(null);
+    }
+  }
 
   async function execute(resume: boolean) {
     if (!selectedPlacementId || missingModelPath) return;
@@ -256,6 +463,181 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
           value={deployment.run_count}
           note={progress.active_deployment_run ?? "No active run"}
         />
+      </section>
+
+      <section className="panel">
+        <div className="section-body">
+          <div className="section-heading-row">
+            <div>
+              <div className="eyebrow">Planning</div>
+              <h2>Search joint placement space</h2>
+              <p className="section-copy">
+                Vary Candidate, placement, and memory-margin coordinates. Preview runs
+                capability and memory feasibility without persisting plan cases; Plan
+                stores the feasible placements and rejection history.
+              </p>
+            </div>
+            <button className="button" type="button" onClick={addDimension}>
+              Add dimension
+            </button>
+          </div>
+
+          <div className="planner-estimators">
+            {deployment.definition.instances.map((instance) => {
+              const model = modelById.get(instance.model_artifact_id);
+              return (
+                <div className="planner-estimator-card" key={instance.instance_id}>
+                  <strong>{instance.instance_id}</strong>
+                  <div className="muted">{model?.files[0]?.path ?? "Model path unavailable"}</div>
+                  <label className="field">
+                    <span>Memory estimator</span>
+                    <select
+                      value={helperByInstance[instance.instance_id] ?? ""}
+                      onChange={(event) =>
+                        setHelperByInstance((current) => ({
+                          ...current,
+                          [instance.instance_id]: event.target.value
+                        }))
+                      }
+                    >
+                      <option value="">Choose…</option>
+                      {memoryEstimatorBinaries.map((binary) => (
+                        <option key={binary.id} value={binary.id}>
+                          {binary.path}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="planner-dimension-list">
+            {plannerDimensions.map((dimension, index) => (
+              <div className="planner-dimension-row" key={dimension.key}>
+                <label className="field">
+                  <span>Search path</span>
+                  <input
+                    list={"deployment-paths-" + index}
+                    value={dimension.path}
+                    onChange={(event) =>
+                      updateDimension(index, { path: event.target.value })
+                    }
+                  />
+                  <datalist id={"deployment-paths-" + index}>
+                    {deployment.definition.instances.flatMap((instance) =>
+                      INSTANCE_DIMENSION_SUFFIXES.map((suffix) => (
+                        <option
+                          key={instance.instance_id + ":" + suffix}
+                          value={"instances." + instance.instance_id + "." + suffix}
+                        />
+                      ))
+                    )}
+                    <option value="resource_policy.host_ram_margin_bytes" />
+                  </datalist>
+                </label>
+                <label className="field">
+                  <span>Values · JSON array</span>
+                  <input
+                    value={dimension.values}
+                    onChange={(event) =>
+                      updateDimension(index, { values: event.target.value })
+                    }
+                    placeholder='[8192, 16384] or [["CUDA0"], ["CUDA0","Vulkan0"]]'
+                  />
+                </label>
+                <label className="field">
+                  <span>Condition · optional</span>
+                  <input
+                    value={dimension.condition}
+                    onChange={(event) =>
+                      updateDimension(index, { condition: event.target.value })
+                    }
+                    placeholder="instances.model_a.compute.flash_attn == 'on'"
+                  />
+                </label>
+                <button
+                  className="icon-button planner-remove"
+                  aria-label={"Remove search dimension " + (index + 1)}
+                  type="button"
+                  onClick={() =>
+                    setPlannerDimensions((current) =>
+                      current.filter((_, itemIndex) => itemIndex !== index)
+                    )
+                  }
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <label className="field">
+            <span>Constraints · one expression per line</span>
+            <textarea
+              className="planner-textarea"
+              value={plannerConstraints}
+              onChange={(event) => setPlannerConstraints(event.target.value)}
+              placeholder="instances.model_a.context.size >= instances.model_b.context.size"
+            />
+          </label>
+
+          <ErrorBanner error={plannerError} />
+          {plannerUnavailable ? (
+            <div className="banner banner-error">
+              Planning requires a registered model file and llama-memory-estimator
+              binary for every instance.
+            </div>
+          ) : null}
+
+          <div className="button-row planner-actions">
+            <button
+              className="button"
+              disabled={Boolean(planning) || plannerUnavailable}
+              onClick={() => void previewPlan()}
+            >
+              {planning === "preview" ? "Previewing…" : "Preview plan"}
+            </button>
+            <button
+              className="button button-primary"
+              disabled={Boolean(planning) || plannerUnavailable}
+              onClick={() => void persistPlan()}
+            >
+              {planning === "plan" ? "Planning…" : "Persist plan"}
+            </button>
+          </div>
+
+          {planPreview ? (
+            <div className="plan-preview deployment-plan-preview">
+              <div>
+                <div className="eyebrow">
+                  {planPreview.plan_id ? "Persisted plan" : "Preview"}
+                </div>
+                <h2>{planPreview.valid_count} feasible placements</h2>
+                <p>
+                  {planPreview.raw_combinations} raw combinations ·{" "}
+                  {planPreview.rejected_by_constraints} constraint-rejected ·{" "}
+                  {planPreview.duplicate_candidates} duplicate
+                </p>
+              </div>
+              <div className="plan-numbers">
+                <div>
+                  <strong>{planPreview.capability_rejected}</strong>
+                  <span>capability rejected</span>
+                </div>
+                <div>
+                  <strong>{planPreview.estimate_failed}</strong>
+                  <span>estimate failed</span>
+                </div>
+                <div>
+                  <strong>{planPreview.memory_rejected}</strong>
+                  <span>memory rejected</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </section>
 
       <section className="panel live-panel">
@@ -405,7 +787,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
           </div>
           {candidates.length === 0 ? (
             <EmptyState title="No planned Candidates yet.">
-              The next editor checkpoint will expose deployment search dimensions here.
+              Configure search dimensions above, preview pruning, then persist the plan.
             </EmptyState>
           ) : (
             <div className="candidate-table-wrap">
