@@ -12,6 +12,7 @@ from llama_profile_lab.analysis import (
     AnalysisFilter,
     AnalysisService,
     CandidateComparison,
+    DeploymentAnalysisError,
     DeploymentAnalysisFilter,
     DeploymentAnalysisService,
     DeploymentMetricConstraint,
@@ -116,6 +117,7 @@ from llama_profile_lab.db import (
 from llama_profile_lab.db.records import (
     BinaryRecord,
     DeploymentRunRecord,
+    DeploymentWorkloadRunRecord,
     ExperimentRecord,
     ResolvedPlacementRecord,
 )
@@ -1311,6 +1313,11 @@ class ApiService:
     ) -> DeploymentProgressDTO:
         self._require_deployment(deployment_id)
         operation = self.deployment_operations.snapshot(deployment_id)
+        evidence_run: DeploymentRunRecord | None = None
+        phase: DeploymentWorkloadRunRecord | None = None
+        current_candidate_id: str | None = None
+        current_placement_id: str | None = None
+
         with self.database.session() as connection:
             latest_plan = connection.execute(
                 """
@@ -1397,40 +1404,9 @@ class ApiService:
             ):
                 active_run_id = operation.deployment_run_id
 
-            members: tuple[DeploymentMemberStateDTO, ...] = ()
-            current_phase: str | None = None
-            if active_run_id is not None:
-                run_repository = DeploymentRunRepository(connection)
-                members = tuple(
-                    DeploymentMemberStateDTO(
-                        instance_id=item.instance_id,
-                        status=item.member_status,
-                        endpoint=item.endpoint,
-                        pid=item.pid,
-                        ready_at=item.ready_at,
-                        exit_code=item.exit_code,
-                    )
-                    for item in run_repository.members(active_run_id)
-                )
-                phase_row = connection.execute(
-                    """
-                    SELECT phase
-                    FROM deployment_workload_run
-                    WHERE deployment_run_id = ? AND status = 'running'
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                    """,
-                    (active_run_id,),
-                ).fetchone()
-                current_phase = (
-                    None
-                    if phase_row is None
-                    else str(phase_row["phase"])
-                )
-
-            latest_run = connection.execute(
+            latest_run_row = connection.execute(
                 """
-                SELECT dr.status
+                SELECT dr.id
                 FROM deployment_run AS dr
                 WHERE dr.deployment_candidate_id = ?
                    OR EXISTS (
@@ -1447,20 +1423,140 @@ class ApiService:
                 """,
                 (deployment_id, deployment_id),
             ).fetchone()
+            latest_run_id = (
+                None
+                if latest_run_row is None
+                else str(latest_run_row["id"])
+            )
+            evidence_run_id = (
+                active_run_id
+                or latest_run_id
+                or (
+                    None
+                    if operation is None
+                    else operation.deployment_run_id
+                )
+            )
+
+            members: tuple[DeploymentMemberStateDTO, ...] = ()
+            run_repository = DeploymentRunRepository(connection)
+            if evidence_run_id is not None:
+                evidence_run = run_repository.get(evidence_run_id)
+                if evidence_run is not None:
+                    members = tuple(
+                        DeploymentMemberStateDTO(
+                            instance_id=item.instance_id,
+                            status=item.member_status,
+                            endpoint=item.endpoint,
+                            pid=item.pid,
+                            ready_at=item.ready_at,
+                            exit_code=item.exit_code,
+                        )
+                        for item in run_repository.members(evidence_run_id)
+                    )
+                    current_candidate_id = str(
+                        evidence_run.deployment_candidate_id
+                    )
+                    current_placement_id = (
+                        evidence_run.deployment_placement_id
+                    )
+                    phase_row = connection.execute(
+                        """
+                        SELECT id
+                        FROM deployment_workload_run
+                        WHERE deployment_run_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (evidence_run_id,),
+                    ).fetchone()
+                    if phase_row is not None:
+                        phase = ConcurrentWorkloadRepository(
+                            connection
+                        ).get_run(str(phase_row["id"]))
+
+            if (
+                current_placement_id is None
+                and operation is not None
+            ):
+                current_placement_id = operation.deployment_placement_id
+            if (
+                current_candidate_id is None
+                and current_placement_id is not None
+            ):
+                placement = DeploymentPlacementRepository(
+                    connection
+                ).record(current_placement_id)
+                if placement is not None:
+                    current_candidate_id = (
+                        placement.deployment_candidate_id
+                    )
+
+            latest_run_status = (
+                None
+                if evidence_run is None
+                else str(evidence_run.status)
+            )
+
+        memory = None
+        if current_placement_id is not None:
+            try:
+                memory = DeploymentAnalysisService(
+                    self.database
+                ).memory_matrix(
+                    current_placement_id,
+                    deployment_run_id=(
+                        None
+                        if evidence_run is None
+                        else evidence_run.id
+                    ),
+                )
+            except DeploymentAnalysisError:
+                memory = None
+
+        failure_kind = None
+        failure_details = None
+        if phase is not None and phase.failure_kind is not None:
+            failure_kind = phase.failure_kind
+            failure_details = (
+                None
+                if phase.failure_details is None
+                else dict(phase.failure_details)
+            )
+        elif evidence_run is not None and evidence_run.failure_kind is not None:
+            failure_kind = evidence_run.failure_kind
+            failure_details = (
+                None
+                if evidence_run.failure_details is None
+                else dict(evidence_run.failure_details)
+            )
 
         return DeploymentProgressDTO(
             deployment_id=deployment_id,
             deployment_status=_deployment_status(
                 operation,
-                None if latest_run is None else str(latest_run["status"]),
+                latest_run_status,
                 0 if plan_id is None else 1,
             ),
             planned_candidates=planned,
             completed_candidates=completed,
             failed_candidates=failed,
             active_deployment_run=active_run_id,
+            current_deployment_candidate_id=current_candidate_id,
+            current_placement_id=current_placement_id,
             member_states=members,
-            current_workload_phase=current_phase,
+            current_workload_phase=(
+                None if phase is None else phase.phase
+            ),
+            combined_prompt_tps=(
+                None if phase is None else phase.combined_prompt_tps
+            ),
+            combined_decode_tps=(
+                None if phase is None else phase.combined_decode_tps
+            ),
+            memory=memory,
+            failure_kind=failure_kind,
+            failure_details=failure_details,
             operation=_deployment_operation_dto(operation),
         )
 
