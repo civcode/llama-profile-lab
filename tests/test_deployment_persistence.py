@@ -161,7 +161,6 @@ def test_deployment_candidate_round_trips_across_reopen(tmp_path: Path) -> None:
         }
 
 
-
 @pytest.mark.parametrize(
     ("field", "missing_value"),
     (
