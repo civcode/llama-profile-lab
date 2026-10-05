@@ -36,8 +36,14 @@ function resultText(row: Record<string, unknown>, key: string): string | null {
 function bytes(value: number | null): string {
   if (value === null) return "—";
   const gib = value / 1024 / 1024 / 1024;
-  if (gib >= 1) return gib.toFixed(2) + " GiB";
+  if (Math.abs(gib) >= 1) return gib.toFixed(2) + " GiB";
   return (value / 1024 / 1024).toFixed(0) + " MiB";
+}
+
+function signedBytes(value: number | null): string {
+  if (value === null) return "—";
+  const rendered = bytes(value);
+  return value > 0 ? "+" + rendered : rendered;
 }
 
 interface PlannerDimensionDraft {
@@ -123,6 +129,35 @@ function MemoryMatrix({ matrix }: { matrix: DeploymentMemoryMatrix }) {
           ))}
         </tbody>
       </table>
+      {(matrix.deltas ?? []).length > 0 ? (
+        <div className="memory-delta-grid">
+          {(matrix.deltas ?? []).map((delta) => (
+            <div className="memory-delta-card" key={delta.device_id}>
+              <strong>{delta.device_id}</strong>
+              <div>
+                <span>Peak-use delta</span>
+                <b className={
+                  delta.used_delta_bytes !== null && delta.used_delta_bytes > 0
+                    ? "delta-worse"
+                    : "delta-better"
+                }>
+                  {signedBytes(delta.used_delta_bytes)}
+                </b>
+              </div>
+              <div>
+                <span>Free-headroom delta</span>
+                <b className={
+                  delta.free_delta_bytes !== null && delta.free_delta_bytes < 0
+                    ? "delta-worse"
+                    : "delta-better"
+                }>
+                  {signedBytes(delta.free_delta_bytes)}
+                </b>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
