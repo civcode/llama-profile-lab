@@ -3792,7 +3792,8 @@ class ConcurrentWorkloadRepository:
                 baseline_latency_ms,
                 latency_increase_pct,
                 int(result.correctness_valid),
-                canonical_json(raw_payload),                (
+                canonical_json(raw_payload),
+                (
                     None
                     if failure_details is None
                     else canonical_json(dict(failure_details))
