@@ -810,6 +810,9 @@ def test_export_round_trip_keeps_failed_rows(tmp_path: Path) -> None:
     )
     assert any(
         row["instance.qwen.retention"] == pytest.approx(0.80)
+        and row["instance.qwen.standalone_tps"] is not None
+        and row["instance.qwen.overlap_tps"] is not None
+        and row["instance.qwen.throughput_loss_pct"] == pytest.approx(20.0)
         for row in json_rows
         if row.get("instance.qwen.retention") is not None
     )
