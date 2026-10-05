@@ -17,7 +17,7 @@ Schema changes must therefore be forward migrations rather than ad-hoc `CREATE T
 
 ## Migration policy
 
-The V1 schema is migrations 001 through 005. V2-M1 adds migration 006 for multi-model deployment persistence and migration 007 for explainable deployment rejection history. The current schema version is therefore 7. The test suite creates databases at every historical schema prefix and verifies that each one upgrades through the current migration set with SQLite integrity and foreign-key checks passing.
+The V1 schema is migrations 001 through 005. V2-M1 adds migration 006 for multi-model deployment persistence and migration 007 for explainable deployment rejection history. V2-M2 adds migration 008 for exact-binary accelerator inventory and structured memory-estimator attempts/cache records. The current schema version is therefore 8. The test suite creates databases at every historical schema prefix and verifies that each one upgrades through the current migration set with SQLite integrity and foreign-key checks passing.
 
 Operational rules:
 
