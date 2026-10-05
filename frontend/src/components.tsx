@@ -1,5 +1,10 @@
 import type { ReactNode } from "react";
-import type { JsonScalar, MatrixProjection, ParetoResult } from "./types";
+import type {
+  DeploymentParetoResult,
+  JsonScalar,
+  MatrixProjection,
+  ParetoResult
+} from "./types";
 
 export function StatusBadge({ status }: { status: string }) {
   const normalized = status.replaceAll("_", " ");
@@ -192,6 +197,75 @@ export function ParetoPlot({ result }: { result: ParetoResult }) {
       </svg>
       <div className="plot-caption">
         Non-dominated configurations only. Axes use the objectives exactly as selected.
+      </div>
+    </div>
+  );
+}
+
+export function DeploymentParetoPlot({
+  result
+}: {
+  result: DeploymentParetoResult["result"];
+}) {
+  if (result.objectives.length < 2 || result.frontier.length === 0) {
+    return <EmptyState title="Deployment Pareto plot needs two populated objectives." />;
+  }
+  const [xObjective, yObjective] = result.objectives;
+  const xs = result.frontier.map((item) => item.values[xObjective.key]);
+  const ys = result.frontier.map((item) => item.values[yObjective.key]);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const scale = (
+    value: number,
+    min: number,
+    max: number,
+    start: number,
+    end: number
+  ) =>
+    max === min
+      ? (start + end) / 2
+      : start + ((value - min) / (max - min)) * (end - start);
+
+  return (
+    <div className="pareto-plot">
+      <svg
+        viewBox="0 0 520 300"
+        role="img"
+        aria-label="Deployment Pareto frontier scatter plot"
+      >
+        <line x1="52" y1="252" x2="492" y2="252" className="axis" />
+        <line x1="52" y1="24" x2="52" y2="252" className="axis" />
+        <text x="272" y="288" textAnchor="middle" className="axis-label">
+          {xObjective.key}
+        </text>
+        <text
+          x="18"
+          y="140"
+          textAnchor="middle"
+          className="axis-label"
+          transform="rotate(-90 18 140)"
+        >
+          {yObjective.key}
+        </text>
+        {result.frontier.map((item) => {
+          const x = scale(item.values[xObjective.key], minX, maxX, 70, 475);
+          const y = scale(item.values[yObjective.key], minY, maxY, 235, 40);
+          const label = item.deployment_placement_id.slice(-6);
+          return (
+            <g key={item.deployment_placement_id}>
+              <circle cx={x} cy={y} r="7" className="pareto-point" />
+              <text x={x + 10} y={y - 8} className="point-label">
+                {label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="plot-caption">
+        Non-dominated deployment placements only. Labels use the final six
+        characters of each placement ID.
       </div>
     </div>
   );

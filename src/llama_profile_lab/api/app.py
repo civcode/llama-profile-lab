@@ -33,6 +33,8 @@ from llama_profile_lab.api.dto import (
     DeploymentPlanRequest,
     DeploymentPlanResponse,
     DeploymentProgressDTO,
+    DeploymentPromotionRequest,
+    DeploymentPromotionResponse,
     DeploymentResultsResponse,
     DeploymentRunListResponse,
     DeploymentRunRequest,
@@ -233,6 +235,19 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
     )
     def inspect_binaries(request: BinaryInspectRequest) -> BinaryListResponse:
         return service.inspect_binaries(request)
+
+    @app.post(
+        "/api/binaries/{binary_id}/devices",
+        response_model=DeviceInventoryResponse,
+    )
+    def inspect_binary_devices(
+        binary_id: str,
+        timeout_seconds: Annotated[float, Query(gt=0)] = 30.0,
+    ) -> DeviceInventoryResponse:
+        return service.inspect_binary_devices(
+            binary_id,
+            timeout_seconds=timeout_seconds,
+        )
 
     @app.get("/api/models", response_model=ModelListResponse)
     def models() -> ModelListResponse:
@@ -474,6 +489,13 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
             qualities=tuple(qualities or ()),
         )
 
+    @app.get(
+        "/api/deployments",
+        response_model=DeploymentListResponse,
+    )
+    def deployments() -> DeploymentListResponse:
+        return service.list_deployments()
+
     @app.post(
         "/api/deployments",
         response_model=DeploymentDTO,
@@ -490,6 +512,16 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
     )
     def deployment(deployment_id: str) -> DeploymentDTO:
         return service.get_deployment(deployment_id)
+
+    @app.post(
+        "/api/deployments/{deployment_id}/preview",
+        response_model=DeploymentPlanResponse,
+    )
+    def preview_deployment(
+        deployment_id: str,
+        request: DeploymentPlanRequest,
+    ) -> DeploymentPlanResponse:
+        return service.preview_deployment(deployment_id, request)
 
     @app.post(
         "/api/deployments/{deployment_id}/plan",
@@ -663,6 +695,17 @@ def _register_routes(app: FastAPI, service: ApiService) -> None:
             constraints=parsed_constraints,
             filters=parsed_filters,
         )
+
+    @app.post(
+        "/api/deployments/{deployment_id}/promote",
+        response_model=DeploymentPromotionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def promote_deployment(
+        deployment_id: str,
+        request: DeploymentPromotionRequest,
+    ) -> DeploymentPromotionResponse:
+        return service.promote_deployment(deployment_id, request)
 
     @app.get("/api/placements", response_model=PlacementListResponse)
     def placements() -> PlacementListResponse:

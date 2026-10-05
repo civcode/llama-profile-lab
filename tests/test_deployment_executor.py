@@ -21,6 +21,7 @@ from llama_profile_lab.db import (
 )
 from llama_profile_lab.domain import (
     AbsoluteDepth,
+    AcceleratorDevice,
     Candidate,
     ComputeConfig,
     ContextConfig,
@@ -44,6 +45,7 @@ from llama_profile_lab.execution import (
     BasicHostInfo,
     DeploymentExecutionError,
     DeploymentExecutor,
+    DeviceInventoryResult,
     DeploymentServerInput,
     HostLock,
     ManagedServerProcess,
@@ -67,6 +69,58 @@ class StaticGpuProvider:
 
     def sample(self) -> tuple[GpuTelemetrySample, ...]:
         return self.samples
+
+
+class StaticDeviceInventory:
+    def __init__(self, *devices: AcceleratorDevice) -> None:
+        self.devices = tuple(devices)
+
+    def inspect(
+        self,
+        binary_id: str,
+        *,
+        timeout_seconds: float | None = 30.0,
+        cancel_event=None,
+    ) -> DeviceInventoryResult:
+        del timeout_seconds, cancel_event
+        return DeviceInventoryResult(
+            host_id="executor-host",
+            binary_id=binary_id,
+            devices=self.devices,
+            stdout="",
+            stderr="",
+        )
+
+
+def _inventory(
+    *,
+    include_vulkan: bool = True,
+    vulkan_key: str = "pci:0000:02:00.0",
+) -> StaticDeviceInventory:
+    devices = [
+        AcceleratorDevice(
+            logical_device_name="CUDA0",
+            backend="cuda",
+            mapping_status="mapped",
+            physical_device_key="pci:0000:01:00.0",
+            pci_bus_id="0000:01:00.0",
+        )
+    ]
+    if include_vulkan:
+        devices.append(
+            AcceleratorDevice(
+                logical_device_name="Vulkan0",
+                backend="vulkan",
+                mapping_status="mapped",
+                physical_device_key=vulkan_key,
+                pci_bus_id=(
+                    "0000:02:00.0"
+                    if vulkan_key == "pci:0000:02:00.0"
+                    else None
+                ),
+            )
+        )
+    return StaticDeviceInventory(*devices)
 
 
 def _candidate(model_id: str) -> Candidate:
@@ -376,11 +430,13 @@ def _executor(
     database: Database,
     *,
     provider: StaticGpuProvider | None = None,
+    device_inventory: StaticDeviceInventory | None = None,
 ) -> DeploymentExecutor:
     return DeploymentExecutor(
         database,
         host_detector=lambda: HOST,
         gpu_provider=provider or _provider(),
+        device_inventory=device_inventory or _inventory(),
     )
 
 
@@ -601,6 +657,7 @@ def test_cleanup_failure_is_persisted_after_process_stop(
         database,
         host_detector=lambda: HOST,
         gpu_provider=_provider(),
+        device_inventory=_inventory(),
         server_process_factory=CleanupFailingServer,
     )
 
@@ -709,6 +766,58 @@ def test_host_lock_excludes_deployment_execution(tmp_path: Path) -> None:
             _executor(database).execute(placement_id, inputs)
 
 
+def test_device_inventory_change_fails_before_server_start(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs, qwen_path, flash_path = _seed(tmp_path)
+
+    with pytest.raises(DeploymentExecutionError) as captured:
+        _executor(
+            database,
+            device_inventory=_inventory(include_vulkan=False),
+        ).execute(
+            placement_id,
+            inputs,
+            readiness_timeout_seconds=1.0,
+        )
+
+    assert captured.value.failure_kind == "device_capability_mismatch"
+    assert "Vulkan0" in str(captured.value)
+    assert not Path(str(qwen_path) + ".childpid").exists()
+    assert not Path(str(flash_path) + ".childpid").exists()
+    with database.session() as connection:
+        run = DeploymentRunRepository(connection).get(
+            captured.value.run_id or ""
+        )
+        members = DeploymentRunRepository(connection).members(
+            captured.value.run_id or ""
+        )
+    assert run is not None and run.status == "failed"
+    assert run.failure_kind == "device_capability_mismatch"
+    assert members == ()
+
+
+def test_device_mapping_change_fails_closed(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs, _, _ = _seed(tmp_path)
+
+    with pytest.raises(DeploymentExecutionError) as captured:
+        _executor(
+            database,
+            device_inventory=_inventory(
+                vulkan_key="pci:0000:03:00.0"
+            ),
+        ).execute(
+            placement_id,
+            inputs,
+            readiness_timeout_seconds=1.0,
+        )
+
+    assert captured.value.failure_kind == "device_capability_mismatch"
+    assert "changed after planning" in str(captured.value)
+
+
 def test_missing_runtime_gpu_telemetry_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -738,6 +847,30 @@ def test_missing_runtime_gpu_telemetry_fails_closed(
     assert run.failure_details is not None
     runtime = run.failure_details["runtime_memory"]
     assert runtime["missing_devices"] == ["pci:0000:02:00.0"]
+
+
+def test_runtime_projection_overrun_is_persisted_without_margin_failure(
+    tmp_path: Path,
+) -> None:
+    database, placement_id, inputs, _, _ = _seed(tmp_path)
+
+    summary = _executor(
+        database,
+        provider=_provider(free0=350, free1=500),
+    ).execute(
+        placement_id,
+        inputs,
+        residency_hold_seconds=0.01,
+    )
+
+    assert summary.status == "completed"
+    overruns = summary.runtime_memory["projection_overruns"]
+    assert len(overruns) == 1
+    assert overruns[0]["device_id"] == "pci:0000:01:00.0"
+    assert overruns[0]["projected_bytes"] == 600
+    assert overruns[0]["observed_used_bytes"] == 650
+    assert overruns[0]["used_delta_bytes"] == 50
+    assert summary.runtime_memory["violations"] == []
 
 
 def test_runtime_margin_violation_is_persisted(tmp_path: Path) -> None:

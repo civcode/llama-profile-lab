@@ -802,10 +802,6 @@ Raw member JSON always includes serialized cumulative token events so the overla
 
 V2-M7 migration 013 adds `deployment_gpu_sample`, keyed by deployment run and monotonic timestamp. The M5 residency executor samples the composite GPU provider throughout the resident interval and persists the per-device snapshots. M7 uses those samples for runtime peak VRAM, minimum free VRAM, and sample-weighted total power average/peak calculations. Missing power on any planned device makes that total-power sample unavailable rather than silently summing a partial device set.
 
-V2-M8 migration 014 adds `deployment_operation`. It persists the exact placement/model/baseline request plus run/pause/resume/cancel state so deployment control is not confined to one in-memory API manager. A running CLI process can therefore be paused or cancelled by a second CLI/API process through SQLite, and a terminal paused operation can be resumed later from its persisted request. The underlying `deployment_run` remains an execution-attempt record: a cooperative pause ends that attempt as cancelled, while `deployment_operation` records the higher-level paused state and a later resume creates a fresh run.
-
-Abrupt process death while an operation is still marked active does not yet have heartbeat-based stale-operation recovery. M8 does not claim crash-resilient distributed scheduling.
-
 Existing generic metric and telemetry storage should be reused where practical.
 
 ## 18. Placement cache identity
@@ -830,31 +826,20 @@ Deployment-level feasibility cache identity additionally includes every resident
 
 ## 19. CLI
 
-Implemented through V2-M8:
+Implemented through V2-M6:
 
 ~~~text
-llprof deployment create deployment.json
 llprof deployment preview deployment-plan.json
 llprof deployment plan deployment-plan.json
-llprof deployment show DEPLOYMENT_ID
-llprof deployment placement DEPLOYMENT_ID
-llprof deployment run DEPLOYMENT_ID deployment-benchmark.json
-llprof deployment pause DEPLOYMENT_ID
-llprof deployment resume DEPLOYMENT_ID
-llprof deployment cancel DEPLOYMENT_ID
-llprof deployment results DEPLOYMENT_ID
-llprof deployment pareto DEPLOYMENT_ID --objective ...
 llprof deployment execute deployment-execution.json
 llprof deployment benchmark deployment-benchmark.json
 ~~~
 
-The existing M4-M6 `preview`, `plan`, `execute`, and `benchmark` commands remain compatible. M8 adds the durable workflow commands rather than replacing those lower-level surfaces.
-
-`deployment create` persists an immutable base deployment definition. `show` reports its computed state and IDs. `placement` renders projected model/context/compute/reserved/free rows separately from runtime peak/minimum-free rows. `run` uses the M6 concurrent benchmark engine through a durable operation row; a second process can request `pause` or `cancel`, and `resume` can reconstruct the latest paused request when no replacement spec is supplied. Human-readable results retain aggregate and per-instance evidence, while JSON/CSV output uses the same M7 analysis service as HTTP. `pareto` accepts explicit objectives, constraints, and exact filters.
-
 The M5 execution specification identifies one persisted `deployment_placement_id` and supplies the concrete model path for every instance. Optional fields select bind host, readiness timeout, residency hold duration, and per-instance draft model paths. Execution persists the actual endpoints selected by the collision-safe port allocator.
 
 The M6 benchmark specification reuses those placement/model inputs and may add exact standalone baselines. Each baseline names the instance, prefill/decode mode, prompt/generate counts, depth, standalone TPS, and optional latency. `deployment benchmark` keeps the same servers resident, executes the generated DD/PP/PD/DP phase matrix, persists member/aggregate timing and retention evidence, and prints phase quality plus combined PP/TG TPS and minimum retention.
+
+Later milestones add deployment result exploration, resume/cancel surfaces, and Pareto analysis without changing the M5/M6 execution record semantics.
 
 Planning output should show:
 
@@ -897,35 +882,24 @@ Analysis coordinates support Candidate context/KV/batch fields, resolved GPU lay
 
 ## 20. API
 
-M8 exposes deployment resources under a separate namespace rather than overloading V1 Candidate endpoints.
+Expose deployment resources under a separate namespace rather than overloading V1 Candidate endpoints.
 
-Implemented routes:
+Suggested routes:
 
 ~~~text
 POST /api/deployments
 POST /api/deployments/{id}/plan
 POST /api/deployments/{id}/run
-POST /api/deployments/{id}/pause
 POST /api/deployments/{id}/resume
 POST /api/deployments/{id}/cancel
-
 GET  /api/deployments/{id}
-GET  /api/deployments/{id}/progress
-GET  /api/deployments/{id}/events
 GET  /api/deployments/{id}/candidates
 GET  /api/deployments/{id}/placements
 GET  /api/deployments/{id}/runs
-GET  /api/deployments/{id}/results
 GET  /api/deployments/{id}/pareto
 ~~~
 
-The path `{id}` is always the immutable base deployment definition. Generated deployment Candidate IDs and placement IDs are returned explicitly rather than being overloaded into that identifier.
-
-Typed DTOs expose planning/pruning summaries, generated Candidate rejection details, projected/runtime memory matrices, run/member/phase state, latest completed phase PP/TG/min-retention metrics, final raw analysis rows, and scoped Pareto results. M7 result/Pareto queries are explicitly restricted to placements belonging to the requested base deployment so unrelated deployments in the same SQLite database cannot affect the response.
-
-Deployment SSE emits only changed progress snapshots. A snapshot contains deployment status, planned/completed/failed candidate counts, active deployment run, per-member states, current workload phase, latest completed phase throughput/retention where available, and the durable operation state. Streams terminate for completed, paused, cancelled, or failed operations.
-
-V1 routes and the V1 experiment operation manager remain separate.
+SSE progress should include deployment-run state and per-instance state.
 
 ## 21. UI
 

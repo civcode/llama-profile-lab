@@ -638,6 +638,13 @@ def test_memory_matrix_distinguishes_projected_and_runtime(
     assert rows["runtime_peak"].source == "runtime"
     assert rows["runtime_peak"].values["gpu0"] == 8000
     assert rows["runtime_free_min"].values["gpu0"] == 2000
+    deltas = {item.device_id: item for item in matrix.deltas}
+    assert deltas["gpu0"].projected_bytes == 7300
+    assert deltas["gpu0"].runtime_peak_used_bytes == 8000
+    assert deltas["gpu0"].used_delta_bytes == 700
+    assert deltas["gpu0"].projected_free_bytes == 2200
+    assert deltas["gpu0"].runtime_min_free_bytes == 2000
+    assert deltas["gpu0"].free_delta_bytes == -200
 
 
 def test_interference_preserves_member_and_latency_metrics(
@@ -810,6 +817,9 @@ def test_export_round_trip_keeps_failed_rows(tmp_path: Path) -> None:
     )
     assert any(
         row["instance.qwen.retention"] == pytest.approx(0.80)
+        and row["instance.qwen.standalone_tps"] is not None
+        and row["instance.qwen.overlap_tps"] is not None
+        and row["instance.qwen.throughput_loss_pct"] == pytest.approx(20.0)
         for row in json_rows
         if row.get("instance.qwen.retention") is not None
     )

@@ -1,6 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { HeatmapTable, ParetoPlot } from "./components";
+import {
+  DeploymentParetoPlot,
+  HeatmapTable,
+  ParetoPlot
+} from "./components";
 import type { MatrixProjection, ParetoResult } from "./types";
 
 describe("analysis components", () => {
@@ -33,6 +37,43 @@ describe("analysis components", () => {
     render(<HeatmapTable matrix={matrix} />);
     expect(screen.getByText("123.45")).toBeInTheDocument();
     expect(screen.getAllByText("—")).toHaveLength(3);
+  });
+
+  it("renders deployment Pareto results as an accessible scatter plot", () => {
+    render(
+      <DeploymentParetoPlot
+        result={{
+          objectives: [
+            {
+              key: "x",
+              direction: "maximize",
+              metric: "deployment.combined_tg_tps",
+              filters: []
+            },
+            {
+              key: "y",
+              direction: "maximize",
+              metric: "deployment.combined_pp_tps",
+              filters: []
+            }
+          ],
+          constraints: [],
+          evaluated_count: 1,
+          frontier: [
+            {
+              deployment_candidate_id: "candidate-1",
+              deployment_placement_id: "placement-123456",
+              values: { x: 100, y: 200 }
+            }
+          ],
+          excluded: {}
+        }}
+      />
+    );
+    expect(
+      screen.getByLabelText("Deployment Pareto frontier scatter plot")
+    ).toBeInTheDocument();
+    expect(screen.getByText("123456")).toBeInTheDocument();
   });
 
   it("renders the Pareto frontier as observed candidates", () => {

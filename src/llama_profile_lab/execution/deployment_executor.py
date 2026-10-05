@@ -6,6 +6,7 @@ import socket
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from itertools import combinations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,11 @@ from llama_profile_lab.domain import (
     GpuTelemetrySample,
 )
 from llama_profile_lab.execution.host import BasicHostInfo, detect_basic_host
+from llama_profile_lab.execution.memory_estimator import (
+    DeviceInventoryError,
+    DeviceInventoryResult,
+    DeviceInventoryService,
+)
 from llama_profile_lab.execution.lock import HostLock, HostLockError
 from llama_profile_lab.execution.placement import (
     PlacementConfigurationError,
@@ -154,6 +160,19 @@ class GpuSnapshotProvider(Protocol):
         """Return one current GPU snapshot."""
 
 
+class DeviceInventoryProvider(Protocol):
+    """Exact-binary device discovery used to revalidate planned placements."""
+
+    def inspect(
+        self,
+        binary_id: str,
+        *,
+        timeout_seconds: float | None = 30.0,
+        cancel_event: Event | None = None,
+    ) -> DeviceInventoryResult:
+        """Return the current logical-to-physical accelerator inventory."""
+
+
 @dataclass(frozen=True, slots=True)
 class _MemberPlan:
     instance_id: str
@@ -169,6 +188,7 @@ class _RuntimeMemoryCheck:
     details: dict[str, object]
     violations: tuple[dict[str, object], ...]
     missing_devices: tuple[str, ...] = ()
+    projection_overruns: tuple[dict[str, object], ...] = ()
 
 
 class _DeploymentGpuSampler:
@@ -303,6 +323,7 @@ class DeploymentExecutor:
         ] | None = None,
         host_detector: Callable[[], BasicHostInfo] = detect_basic_host,
         gpu_provider: GpuSnapshotProvider | None = None,
+        device_inventory: DeviceInventoryProvider | None = None,
         gpu_sample_interval_seconds: float = 1.0,
     ) -> None:
         self.database = database
@@ -312,6 +333,9 @@ class DeploymentExecutor:
         )
         self.host_detector = host_detector
         self.gpu_provider = gpu_provider or AutoGpuTelemetryProvider()
+        self.device_inventory = (
+            device_inventory or DeviceInventoryService(database)
+        )
         if gpu_sample_interval_seconds <= 0:
             raise ValueError("GPU sample interval must be positive")
         self.gpu_sample_interval_seconds = gpu_sample_interval_seconds
@@ -428,6 +452,12 @@ class DeploymentExecutor:
         gpu_sampler: _DeploymentGpuSampler | None = None
 
         try:
+            self._revalidate_device_inventory(
+                deployment_placement_id,
+                deployment,
+                host_id=host_id,
+                cancel_event=cancel_event,
+            )
             member_plans = self._prepare_members(
                 deployment_placement_id,
                 deployment,
@@ -575,6 +605,13 @@ class DeploymentExecutor:
                     else:
                         failure_kind = "member_crash"
                     failure_message = f"{instance_id}: {error}"
+        except DeploymentExecutionError as exc:
+            failure_kind = (
+                exc.failure_kind
+                or failure_kind
+                or "server_start_failed"
+            )
+            failure_message = str(exc)
         except KeyboardInterrupt:
             cancelled = True
             failure_message = "deployment execution interrupted"
@@ -696,6 +733,154 @@ class DeploymentExecutor:
             ),
             runtime_memory=runtime_check.details,
         )
+
+    def _revalidate_device_inventory(
+        self,
+        deployment_placement_id: str,
+        deployment,
+        *,
+        host_id: str,
+        cancel_event: Event | None,
+    ) -> None:
+        with self.database.session() as connection:
+            placement = DeploymentPlacementRepository(connection).get(
+                deployment_placement_id
+            )
+            if placement is None:
+                raise DeploymentExecutionError(
+                    f"deployment placement not found: {deployment_placement_id}",
+                    failure_kind="device_capability_mismatch",
+                )
+            allocations = DeploymentPlacementRepository(
+                connection
+            ).allocations(deployment_placement_id)
+            planned_devices = {item.device_id for item in allocations}
+            resolved_repo = PlacementRepository(connection)
+            resolved_by_instance = {
+                item.instance_id: resolved_repo.get(
+                    item.resolved_placement_id
+                )
+                for item in placement.instance_placements
+            }
+
+        inventory_cache: dict[str, DeviceInventoryResult] = {}
+
+        def inventory(binary_id: str) -> DeviceInventoryResult:
+            cached = inventory_cache.get(binary_id)
+            if cached is not None:
+                return cached
+            try:
+                current = self.device_inventory.inspect(
+                    binary_id,
+                    timeout_seconds=30.0,
+                    cancel_event=cancel_event,
+                )
+            except DeviceInventoryError as exc:
+                raise DeploymentExecutionError(
+                    "device inventory revalidation failed for "
+                    f"{binary_id}: {exc}",
+                    failure_kind="device_capability_mismatch",
+                ) from exc
+            inventory_cache[binary_id] = current
+            return current
+
+        live_contexts: list[tuple[str, str, str]] = []
+        for instance in deployment.instances:
+            resolved = resolved_by_instance.get(instance.instance_id)
+            if resolved is None:
+                raise DeploymentExecutionError(
+                    "resolved placement disappeared for instance "
+                    f"{instance.instance_id}",
+                    failure_kind="device_capability_mismatch",
+                )
+            if resolved.devices == "auto":
+                raise DeploymentExecutionError(
+                    "deployment placement uses automatic device selection for "
+                    f"{instance.instance_id}; re-plan with explicit devices",
+                    failure_kind="device_capability_mismatch",
+                )
+
+            primary = inventory(instance.binary_id)
+            primary_by_name = {
+                item.logical_device_name: item
+                for item in primary.devices
+            }
+            helper_id = resolved.binary_id
+            helper_by_name = primary_by_name
+            if helper_id != instance.binary_id:
+                helper = inventory(helper_id)
+                helper_by_name = {
+                    item.logical_device_name: item
+                    for item in helper.devices
+                }
+
+            for logical_name in resolved.devices:
+                device = primary_by_name.get(logical_name)
+                mapping_binary_id = instance.binary_id
+                if device is None:
+                    device = helper_by_name.get(logical_name)
+                    mapping_binary_id = helper_id
+                if device is None:
+                    raise DeploymentExecutionError(
+                        "planned logical device is no longer exposed: "
+                        f"{instance.instance_id}:{logical_name}",
+                        failure_kind="device_capability_mismatch",
+                    )
+                device_id = _live_physical_device_id(
+                    deployment.resource_policy,
+                    mapping_binary_id,
+                    device.logical_device_name,
+                    device.physical_device_key,
+                )
+                if device_id is None:
+                    fallback_binary_id = (
+                        helper_id
+                        if mapping_binary_id == instance.binary_id
+                        else instance.binary_id
+                    )
+                    device_id = _live_physical_device_id(
+                        deployment.resource_policy,
+                        fallback_binary_id,
+                        device.logical_device_name,
+                        device.physical_device_key,
+                    )
+                if device_id is None:
+                    raise DeploymentExecutionError(
+                        "planned logical device no longer resolves to a stable "
+                        f"physical device: {instance.instance_id}:{logical_name}",
+                        failure_kind="device_capability_mismatch",
+                    )
+                if device_id not in planned_devices:
+                    raise DeploymentExecutionError(
+                        "device mapping changed after planning for "
+                        f"{instance.instance_id}:{logical_name}; "
+                        f"current={device_id}, planned={sorted(planned_devices)}",
+                        failure_kind="device_capability_mismatch",
+                    )
+                live_contexts.append(
+                    (device_id, str(device.backend), instance.instance_id)
+                )
+
+        if deployment.resource_policy.allowed_backend_pairs:
+            by_device: dict[str, set[str]] = {}
+            for device_id, backend, _ in live_contexts:
+                by_device.setdefault(device_id, set()).add(backend)
+            allowed = {
+                tuple(sorted((item.left, item.right)))
+                for item in deployment.resource_policy.allowed_backend_pairs
+            }
+            for left, right in combinations(sorted(by_device), 2):
+                for left_backend in sorted(by_device[left]):
+                    for right_backend in sorted(by_device[right]):
+                        pair = tuple(
+                            sorted((left_backend, right_backend))
+                        )
+                        if pair not in allowed:
+                            raise DeploymentExecutionError(
+                                "accelerator backend pairing changed after "
+                                f"planning: {left_backend}+{right_backend}",
+                                failure_kind="device_capability_mismatch",
+                            )
 
     def _prepare_members(
         self,
@@ -1067,6 +1252,23 @@ class DeploymentExecutor:
         return str(row["deployment_placement_id"])
 
 
+def _live_physical_device_id(
+    policy,
+    binary_id: str,
+    logical_device_name: str,
+    physical_device_key: str | None,
+) -> str | None:
+    if physical_device_key:
+        return physical_device_key
+    for mapping in policy.logical_device_mappings:
+        if (
+            mapping.binary_id == binary_id
+            and mapping.logical_device_name == logical_device_name
+        ):
+            return mapping.device_id
+    return None
+
+
 def _validate_runtime_margins(
     allocations: tuple[DeploymentDeviceAllocationRecord, ...],
     samples: tuple[GpuTelemetrySample, ...],
@@ -1079,6 +1281,7 @@ def _validate_runtime_margins(
     validated: list[dict[str, object]] = []
     missing: list[str] = []
     violations: list[dict[str, object]] = []
+    projection_overruns: list[dict[str, object]] = []
     for allocation in allocations:
         sample = by_key.get(allocation.device_id)
         if (
@@ -1097,9 +1300,19 @@ def _validate_runtime_margins(
             "observed_total_bytes": sample.vram_total_bytes,
             "observed_used_bytes": sample.vram_used_bytes,
             "observed_free_bytes": free_bytes,
+            "projected_bytes": allocation.projected_bytes,
+            "projected_free_bytes": allocation.projected_free_bytes,
             "reserved_margin_bytes": allocation.reserved_margin_bytes,
+            "used_delta_bytes": (
+                sample.vram_used_bytes - allocation.projected_bytes
+            ),
+            "free_delta_bytes": (
+                free_bytes - allocation.projected_free_bytes
+            ),
         }
         validated.append(detail)
+        if sample.vram_used_bytes > allocation.projected_bytes:
+            projection_overruns.append(detail)
         if free_bytes < allocation.reserved_margin_bytes:
             violations.append(detail)
     return _RuntimeMemoryCheck(
@@ -1107,9 +1320,11 @@ def _validate_runtime_margins(
             "validated_devices": validated,
             "missing_devices": missing,
             "violations": violations,
+            "projection_overruns": projection_overruns,
         },
         violations=tuple(violations),
         missing_devices=tuple(missing),
+        projection_overruns=tuple(projection_overruns),
     )
 
 

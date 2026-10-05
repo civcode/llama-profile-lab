@@ -90,6 +90,27 @@ class BinaryInspectRequest(ApiModel):
     ] = "auto"
 
 
+class AcceleratorDeviceDTO(ApiModel):
+    logical_device_name: str
+    backend: str
+    mapping_status: str
+    physical_device_key: str | None
+    pci_bus_id: str | None
+    uuid: str | None
+    vendor: str | None
+    product_name: str | None
+    total_memory_bytes: NonNegativeInt | None
+    free_memory_bytes: NonNegativeInt | None
+    driver: str | None
+    runtime_metadata: dict[str, JsonScalar]
+
+
+class DeviceInventoryResponse(ApiModel):
+    host_id: str
+    binary_id: str
+    items: tuple[AcceleratorDeviceDTO, ...]
+
+
 class ModelFileDTO(ApiModel):
     id: str
     part_index: NonNegativeInt
@@ -363,6 +384,33 @@ class PromotionResponse(ApiModel):
     validation: dict[str, Any]
 
 
+class DeploymentPromotionSourceDTO(ApiModel):
+    instance_id: Annotated[str, Field(min_length=1)]
+    experiment_id: Annotated[str, Field(min_length=1)]
+    source_profile_id: Annotated[str, Field(min_length=1)] | None = None
+
+
+class DeploymentPromotionRequest(ApiModel):
+    deployment_placement_id: Annotated[str, Field(min_length=1)]
+    sources: Annotated[
+        tuple[DeploymentPromotionSourceDTO, ...],
+        Field(min_length=1),
+    ]
+
+
+class DeploymentPromotionResponse(ApiModel):
+    id: str
+    base_deployment_candidate_id: str
+    deployment_candidate_id: str
+    deployment_placement_id: str
+    sources: tuple[dict[str, Any], ...]
+    changes: tuple[dict[str, Any], ...]
+    patch: str
+    source_snapshot: dict[str, Any]
+    proposed_snapshot: dict[str, Any]
+    evidence: dict[str, Any]
+
+
 class ParameterDefinitionDTO(ApiModel):
     path: str
     label: str
@@ -470,6 +518,10 @@ class DeploymentDTO(ApiModel):
     latest_plan_id: str | None = None
 
 
+class DeploymentListResponse(ApiModel):
+    items: tuple[DeploymentDTO, ...]
+
+
 class DeploymentEstimatorInputDTO(ApiModel):
     instance_id: Annotated[str, Field(min_length=1)]
     helper_binary_id: Annotated[str, Field(min_length=1)]
@@ -519,7 +571,7 @@ class DeploymentCandidateItemDTO(ApiModel):
     definition: DeploymentCandidate
     generation: dict[str, Any]
     rejection_count: NonNegativeInt
-    rejections: tuple[DeploymentRejectionDTO, ...]
+    rejections: tuple[DeploymentRejectionDTO, ...] = ()
     placement_ids: tuple[str, ...]
 
 
@@ -606,11 +658,15 @@ class DeploymentProgressDTO(ApiModel):
     completed_candidates: NonNegativeInt
     failed_candidates: NonNegativeInt
     active_deployment_run: str | None
+    current_deployment_candidate_id: str | None = None
+    current_placement_id: str | None = None
     member_states: tuple[DeploymentMemberStateDTO, ...]
     current_workload_phase: str | None
-    current_combined_prompt_tps: float | None = None
-    current_combined_decode_tps: float | None = None
-    current_min_retention: float | None = None
+    combined_prompt_tps: float | None = None
+    combined_decode_tps: float | None = None
+    memory: DeploymentMemoryMatrix | None = None
+    failure_kind: str | None = None
+    failure_details: dict[str, Any] | None = None
     operation: DeploymentOperationDTO | None
 
 

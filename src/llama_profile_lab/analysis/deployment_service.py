@@ -21,6 +21,7 @@ from llama_profile_lab.analysis.models import (
     DeploymentMatrixCell,
     DeploymentMatrixFacet,
     DeploymentMatrixProjection,
+    DeploymentMemoryDelta,
     DeploymentMemoryMatrix,
     DeploymentMemoryRow,
     DeploymentMetricConstraint,
@@ -371,11 +372,40 @@ class DeploymentAnalysisService:
                 ),
             )
         )
+        deltas = tuple(
+            DeploymentMemoryDelta(
+                device_id=device,
+                projected_bytes=allocations[device].projected_bytes,
+                runtime_peak_used_bytes=(
+                    runtime.peak_used_by_device.get(device)
+                ),
+                used_delta_bytes=(
+                    None
+                    if runtime.peak_used_by_device.get(device) is None
+                    else runtime.peak_used_by_device[device]
+                    - allocations[device].projected_bytes
+                ),
+                projected_free_bytes=(
+                    allocations[device].projected_free_bytes
+                ),
+                runtime_min_free_bytes=(
+                    runtime.min_free_by_device.get(device)
+                ),
+                free_delta_bytes=(
+                    None
+                    if runtime.min_free_by_device.get(device) is None
+                    else runtime.min_free_by_device[device]
+                    - allocations[device].projected_free_bytes
+                ),
+            )
+            for device in devices
+        )
         return DeploymentMemoryMatrix(
             deployment_placement_id=deployment_placement_id,
             deployment_run_id=selected_run_id,
             devices=devices,
             rows=tuple(rows),
+            deltas=deltas,
         )
 
     def interference(
@@ -1466,8 +1496,20 @@ def _export_row(item: _Observation) -> dict[str, Any]:
                 if member.mode == "prefill"
                 else member.native_decode_tps
             )
+            row[prefix + "overlap_tps"] = (
+                member.overlap_prompt_tps
+                if member.mode == "prefill"
+                else member.overlap_decode_tps
+            )
+            row[prefix + "standalone_tps"] = member.standalone_tps
             row[prefix + "retention"] = member.retention
+            row[prefix + "throughput_loss_pct"] = (
+                member.throughput_loss_pct
+            )
             row[prefix + "latency_ms"] = member.latency_ms
+            row[prefix + "baseline_latency_ms"] = (
+                member.baseline_latency_ms
+            )
             row[prefix + "latency_increase_pct"] = (
                 member.latency_increase_pct
             )

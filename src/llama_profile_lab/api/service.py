@@ -6,13 +6,13 @@ import json
 import sqlite3
 from pathlib import Path
 from statistics import fmean
-from typing import Literal, cast
 
 from llama_profile_lab.analysis import (
     DEFAULT_METRIC_REGISTRY,
     AnalysisFilter,
     AnalysisService,
     CandidateComparison,
+    DeploymentAnalysisError,
     DeploymentAnalysisFilter,
     DeploymentAnalysisService,
     DeploymentMetricConstraint,
@@ -22,6 +22,7 @@ from llama_profile_lab.analysis import (
     ParetoResult,
 )
 from llama_profile_lab.api.dto import (
+    AcceleratorDeviceDTO,
     BenchmarkSampleDTO,
     BinaryDTO,
     BinaryInspectRequest,
@@ -34,6 +35,7 @@ from llama_profile_lab.api.dto import (
     DeploymentCandidateListResponse,
     DeploymentCreateRequest,
     DeploymentDTO,
+    DeploymentListResponse,
     DeploymentMemberStateDTO,
     DeploymentOperationDTO,
     DeploymentParetoResponse,
@@ -43,6 +45,8 @@ from llama_profile_lab.api.dto import (
     DeploymentPlanRequest,
     DeploymentPlanResponse,
     DeploymentProgressDTO,
+    DeploymentPromotionRequest,
+    DeploymentPromotionResponse,
     DeploymentRejectionDTO,
     DeploymentResultsResponse,
     DeploymentRunDTO,
@@ -50,6 +54,7 @@ from llama_profile_lab.api.dto import (
     DeploymentRunMemberDTO,
     DeploymentRunRequest,
     DeploymentWorkloadPhaseDTO,
+    DeviceInventoryResponse,
     ExecutionRequest,
     ExecutionSummaryDTO,
     ExperimentCreateRequest,
@@ -118,6 +123,7 @@ from llama_profile_lab.db import (
 from llama_profile_lab.db.records import (
     BinaryRecord,
     DeploymentRunRecord,
+    DeploymentWorkloadRunRecord,
     ExperimentRecord,
     ResolvedPlacementRecord,
 )
@@ -129,6 +135,8 @@ from llama_profile_lab.domain import (
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
     DeploymentServerInput,
+    DeviceInventoryError,
+    DeviceInventoryService,
     ServerValidationService,
     StandaloneBaselineInput,
 )
@@ -142,7 +150,11 @@ from llama_profile_lab.planning import (
     build_plan,
     plan_experiment,
 )
-from llama_profile_lab.promotion import PromotionService
+from llama_profile_lab.promotion import (
+    DeploymentPromotionService,
+    DeploymentPromotionSource,
+    PromotionService,
+)
 
 
 class ApiNotFoundError(RuntimeError):
@@ -262,6 +274,41 @@ class ApiService:
                     raise RuntimeError("binary registration did not produce a record")
                 records.append(record)
         return BinaryListResponse(items=tuple(_binary_dto(record) for record in records))
+
+    def inspect_binary_devices(
+        self,
+        binary_id: str,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> DeviceInventoryResponse:
+        try:
+            inventory = DeviceInventoryService(self.database).inspect(
+                binary_id,
+                timeout_seconds=timeout_seconds,
+            )
+        except DeviceInventoryError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return DeviceInventoryResponse(
+            host_id=inventory.host_id,
+            binary_id=inventory.binary_id,
+            items=tuple(
+                AcceleratorDeviceDTO(
+                    logical_device_name=item.logical_device_name,
+                    backend=item.backend,
+                    mapping_status=item.mapping_status,
+                    physical_device_key=item.physical_device_key,
+                    pci_bus_id=item.pci_bus_id,
+                    uuid=item.uuid,
+                    vendor=item.vendor,
+                    product_name=item.product_name,
+                    total_memory_bytes=item.total_memory_bytes,
+                    free_memory_bytes=item.free_memory_bytes,
+                    driver=item.driver,
+                    runtime_metadata=dict(item.runtime_metadata),
+                )
+                for item in inventory.devices
+            ),
+        )
 
     def list_models(self) -> ModelListResponse:
         with self.database.session() as connection:
@@ -911,6 +958,41 @@ class ApiService:
             speculative=summary.speculative,
         )
 
+    def promote_deployment(
+        self,
+        deployment_id: str,
+        request: DeploymentPromotionRequest,
+    ) -> DeploymentPromotionResponse:
+        proposal = DeploymentPromotionService(
+            self.database,
+            self.profiles,
+        ).propose(
+            deployment_id,
+            request.deployment_placement_id,
+            sources=tuple(
+                DeploymentPromotionSource(
+                    instance_id=item.instance_id,
+                    experiment_id=item.experiment_id,
+                    source_profile_id=item.source_profile_id,
+                )
+                for item in request.sources
+            ),
+        )
+        return DeploymentPromotionResponse(
+            id=proposal.id,
+            base_deployment_candidate_id=(
+                proposal.base_deployment_candidate_id
+            ),
+            deployment_candidate_id=proposal.deployment_candidate_id,
+            deployment_placement_id=proposal.deployment_placement_id,
+            sources=proposal.sources,
+            changes=proposal.changes,
+            patch=proposal.patch,
+            source_snapshot=proposal.source_snapshot,
+            proposed_snapshot=proposal.proposed_snapshot,
+            evidence=proposal.evidence,
+        )
+
     def promote_candidate(
         self,
         candidate_id: str,
@@ -997,6 +1079,32 @@ class ApiService:
             search_space=search_space,
             workload_suite=workload_suite,
             measurement_policy=measurement_policy,
+        )
+
+    def list_deployments(self) -> DeploymentListResponse:
+        with self.database.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT dc.id
+                FROM deployment_candidate AS dc
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM deployment_plan AS plan
+                    WHERE plan.base_deployment_candidate_id = dc.id
+                )
+                   OR NOT EXISTS (
+                    SELECT 1
+                    FROM deployment_plan_case AS pc
+                    WHERE pc.deployment_candidate_id = dc.id
+                )
+                ORDER BY dc.created_at DESC, dc.id DESC
+                """
+            ).fetchall()
+        return DeploymentListResponse(
+            items=tuple(
+                self.get_deployment(str(row["id"]))
+                for row in rows
+            )
         )
 
     def create_deployment(
@@ -1116,6 +1224,31 @@ class ApiService:
                 None if latest_plan is None else str(latest_plan["id"])
             ),
         )
+
+    def preview_deployment(
+        self,
+        deployment_id: str,
+        request: DeploymentPlanRequest,
+    ) -> DeploymentPlanResponse:
+        self._require_deployment(deployment_id)
+        inputs = tuple(
+            DeploymentEstimatorInput(
+                instance_id=item.instance_id,
+                helper_binary_id=item.helper_binary_id,
+                model_path=Path(item.model_path),
+            )
+            for item in request.instances
+        )
+        try:
+            summary = DeploymentPlannerService(self.database).preview(
+                deployment_id,
+                request.search_space,
+                inputs,
+                timeout_seconds=request.timeout_seconds,
+            )
+        except ValueError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return _deployment_plan_response(summary)
 
     def plan_deployment(
         self,
@@ -1322,6 +1455,11 @@ class ApiService:
     ) -> DeploymentProgressDTO:
         self._require_deployment(deployment_id)
         operation = self.deployment_operations.snapshot(deployment_id)
+        evidence_run: DeploymentRunRecord | None = None
+        phase: DeploymentWorkloadRunRecord | None = None
+        current_candidate_id: str | None = None
+        current_placement_id: str | None = None
+
         with self.database.session() as connection:
             latest_plan = connection.execute(
                 """
@@ -1353,14 +1491,7 @@ class ApiService:
                             THEN pc.deployment_candidate_id
                         END) AS completed,
                         COUNT(DISTINCT CASE
-                            WHEN NOT EXISTS (
-                                SELECT 1
-                                FROM deployment_run AS dr
-                                WHERE dr.deployment_placement_id =
-                                      pc.deployment_placement_id
-                                  AND dr.status = 'completed'
-                            )
-                             AND EXISTS (
+                            WHEN EXISTS (
                                 SELECT 1
                                 FROM deployment_run AS dr
                                 WHERE dr.deployment_placement_id =
@@ -1415,71 +1546,9 @@ class ApiService:
             ):
                 active_run_id = operation.deployment_run_id
 
-            members: tuple[DeploymentMemberStateDTO, ...] = ()
-            current_phase: str | None = None
-            current_prompt_tps: float | None = None
-            current_decode_tps: float | None = None
-            current_min_retention: float | None = None
-            if active_run_id is not None:
-                run_repository = DeploymentRunRepository(connection)
-                members = tuple(
-                    DeploymentMemberStateDTO(
-                        instance_id=item.instance_id,
-                        status=item.member_status,
-                        endpoint=item.endpoint,
-                        pid=item.pid,
-                        ready_at=item.ready_at,
-                        exit_code=item.exit_code,
-                    )
-                    for item in run_repository.members(active_run_id)
-                )
-                phase_row = connection.execute(
-                    """
-                    SELECT phase
-                    FROM deployment_workload_run
-                    WHERE deployment_run_id = ? AND status = 'running'
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                    """,
-                    (active_run_id,),
-                ).fetchone()
-                current_phase = (
-                    None
-                    if phase_row is None
-                    else str(phase_row["phase"])
-                )
-                metric_row = connection.execute(
-                    """
-                    SELECT combined_prompt_tps, combined_decode_tps,
-                           min_retention
-                    FROM deployment_workload_run
-                    WHERE deployment_run_id = ?
-                      AND status = 'completed'
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT 1
-                    """,
-                    (active_run_id,),
-                ).fetchone()
-                if metric_row is not None:
-                    current_prompt_tps = (
-                        None
-                        if metric_row["combined_prompt_tps"] is None
-                        else float(metric_row["combined_prompt_tps"])
-                    )
-                    current_decode_tps = (
-                        None
-                        if metric_row["combined_decode_tps"] is None
-                        else float(metric_row["combined_decode_tps"])
-                    )
-                    current_min_retention = (
-                        None
-                        if metric_row["min_retention"] is None
-                        else float(metric_row["min_retention"])
-                    )
-
-            latest_run = connection.execute(
+            latest_run_row = connection.execute(
                 """
-                SELECT dr.status
+                SELECT dr.id
                 FROM deployment_run AS dr
                 WHERE dr.deployment_candidate_id = ?
                    OR EXISTS (
@@ -1496,23 +1565,135 @@ class ApiService:
                 """,
                 (deployment_id, deployment_id),
             ).fetchone()
+            latest_run_id = (
+                None
+                if latest_run_row is None
+                else str(latest_run_row["id"])
+            )
+            evidence_run_id = (
+                active_run_id
+                or (
+                    operation.deployment_run_id
+                    if operation is not None
+                    else latest_run_id
+                )
+            )
+
+            members: tuple[DeploymentMemberStateDTO, ...] = ()
+            run_repository = DeploymentRunRepository(connection)
+            if evidence_run_id is not None:
+                evidence_run = run_repository.get(evidence_run_id)
+                if evidence_run is not None:
+                    members = tuple(
+                        DeploymentMemberStateDTO(
+                            instance_id=item.instance_id,
+                            status=item.member_status,
+                            endpoint=item.endpoint,
+                            pid=item.pid,
+                            ready_at=item.ready_at,
+                            exit_code=item.exit_code,
+                        )
+                        for item in run_repository.members(evidence_run_id)
+                    )
+                    current_candidate_id = str(
+                        evidence_run.deployment_candidate_id
+                    )
+                    current_placement_id = (
+                        evidence_run.deployment_placement_id
+                    )
+                    phase_row = connection.execute(
+                        """
+                        SELECT id
+                        FROM deployment_workload_run
+                        WHERE deployment_run_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (evidence_run_id,),
+                    ).fetchone()
+                    if phase_row is not None:
+                        phase = ConcurrentWorkloadRepository(
+                            connection
+                        ).get_run(str(phase_row["id"]))
+
+            if (
+                current_placement_id is None
+                and operation is not None
+            ):
+                current_placement_id = operation.deployment_placement_id
+            if (
+                current_candidate_id is None
+                and current_placement_id is not None
+            ):
+                placement = DeploymentPlacementRepository(
+                    connection
+                ).record(current_placement_id)
+                if placement is not None:
+                    current_candidate_id = (
+                        placement.deployment_candidate_id
+                    )
+
+            latest_run_status = (
+                None
+                if evidence_run is None
+                else str(evidence_run.status)
+            )
+
+        memory = None
+        if current_placement_id is not None and evidence_run is not None:
+            try:
+                memory = DeploymentAnalysisService(
+                    self.database
+                ).memory_matrix(
+                    current_placement_id,
+                    deployment_run_id=evidence_run.id,
+                )
+            except DeploymentAnalysisError:
+                memory = None
+
+        failure_kind = None
+        failure_details = None
+        if phase is not None and phase.failure_kind is not None:
+            failure_kind = phase.failure_kind
+            failure_details = (
+                None
+                if phase.failure_details is None
+                else dict(phase.failure_details)
+            )
+        elif evidence_run is not None and evidence_run.failure_kind is not None:
+            failure_kind = evidence_run.failure_kind
+            failure_details = (
+                None
+                if evidence_run.failure_details is None
+                else dict(evidence_run.failure_details)
+            )
 
         return DeploymentProgressDTO(
             deployment_id=deployment_id,
             deployment_status=_deployment_status(
                 operation,
-                None if latest_run is None else str(latest_run["status"]),
+                latest_run_status,
                 0 if plan_id is None else 1,
             ),
             planned_candidates=planned,
             completed_candidates=completed,
             failed_candidates=failed,
             active_deployment_run=active_run_id,
+            current_deployment_candidate_id=current_candidate_id,
+            current_placement_id=current_placement_id,
             member_states=members,
-            current_workload_phase=current_phase,
-            current_combined_prompt_tps=current_prompt_tps,
-            current_combined_decode_tps=current_decode_tps,
-            current_min_retention=current_min_retention,
+            current_workload_phase=(
+                None if phase is None else phase.phase
+            ),
+            combined_prompt_tps=(
+                None if phase is None else phase.combined_prompt_tps
+            ),
+            combined_decode_tps=(
+                None if phase is None else phase.combined_decode_tps
+            ),
+            memory=memory,
+            failure_kind=failure_kind,
+            failure_details=failure_details,
             operation=_deployment_operation_dto(operation),
         )
 
@@ -1655,10 +1836,7 @@ def parse_deployment_objectives(
                 "KEY:DIRECTION:METRIC[@PATH=VALUE;...]"
             )
         key, raw_direction, metric = parts
-        direction_map: dict[
-            str,
-            Literal["maximize", "minimize"],
-        ] = {
+        direction_map = {
             "max": "maximize",
             "maximize": "maximize",
             "min": "minimize",
@@ -1711,10 +1889,6 @@ def parse_deployment_constraints(
             raise ValueError(
                 "deployment constraint operator must be ge/gt/le/lt/eq"
             )
-        typed_operator = cast(
-            Literal["ge", "gt", "le", "lt", "eq"],
-            operator,
-        )
         try:
             threshold = float(raw_value)
         except ValueError as exc:
@@ -1735,7 +1909,7 @@ def parse_deployment_constraints(
         constraints.append(
             DeploymentMetricConstraint(
                 metric=metric,
-                operator=typed_operator,
+                operator=operator,
                 value=threshold,
                 filters=filters,
             )

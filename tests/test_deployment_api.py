@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
+
 import llama_profile_lab.api.service as api_service_module
 from llama_profile_lab.api import create_app
 from llama_profile_lab.api.deployment_operations import (
@@ -15,9 +20,11 @@ from llama_profile_lab.db import (
     DeploymentRunRepository,
 )
 from llama_profile_lab.domain import (
+    AcceleratorDevice,
     DeploymentSearchDimension,
     DeploymentSearchSpace,
 )
+from llama_profile_lab.execution import DeviceInventoryResult
 from llama_profile_lab.planning import DeploymentPlanSummary
 from tests.test_api import api_request
 from tests.test_deployment_analysis import _seed
@@ -26,6 +33,36 @@ from tests.test_deployment_analysis import _seed
 class FakePlanner:
     def __init__(self, database: Database) -> None:
         self.database = database
+
+    @staticmethod
+    def _summary(deployment_id: str, *, plan_id: str | None) -> DeploymentPlanSummary:
+        return DeploymentPlanSummary(
+            base_deployment_candidate_id=deployment_id,
+            host_id="host_api",
+            raw_combinations=2,
+            rejected_by_constraints=0,
+            duplicate_candidates=0,
+            symmetry_reduced=0,
+            capability_rejected=0,
+            estimate_failed=0,
+            memory_rejected=1,
+            valid_count=1,
+            plan_id=plan_id,
+        )
+
+    def preview(
+        self,
+        deployment_id,
+        search_space,
+        inputs,
+        *,
+        timeout_seconds,
+    ) -> DeploymentPlanSummary:
+        assert deployment_id
+        assert len(search_space.dimensions) == 1
+        assert len(inputs) == 2
+        assert timeout_seconds == 30.0
+        return self._summary(deployment_id, plan_id=None)
 
     def plan(
         self,
@@ -39,18 +76,41 @@ class FakePlanner:
         assert len(search_space.dimensions) == 1
         assert len(inputs) == 2
         assert timeout_seconds == 30.0
-        return DeploymentPlanSummary(
-            base_deployment_candidate_id=deployment_id,
-            host_id="host_api",
-            raw_combinations=2,
-            rejected_by_constraints=0,
-            duplicate_candidates=0,
-            symmetry_reduced=0,
-            capability_rejected=0,
-            estimate_failed=0,
-            memory_rejected=1,
-            valid_count=1,
-            plan_id="deployplan_api",
+        return self._summary(deployment_id, plan_id="deployplan_api")
+
+
+class FakeDeviceInventory:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def inspect(
+        self,
+        binary_id: str,
+        *,
+        timeout_seconds: float | None = 30.0,
+        cancel_event=None,
+    ) -> DeviceInventoryResult:
+        del cancel_event
+        assert binary_id == "server-ui"
+        assert timeout_seconds == 12.0
+        return DeviceInventoryResult(
+            host_id="host-ui",
+            binary_id=binary_id,
+            devices=(
+                AcceleratorDevice(
+                    logical_device_name="CUDA0",
+                    backend="CUDA",
+                    mapping_status="mapped",
+                    physical_device_key="uuid:gpu-0",
+                    uuid="gpu-0",
+                    vendor="NVIDIA",
+                    product_name="RTX Test",
+                    total_memory_bytes=24 * 1024**3,
+                    free_memory_bytes=20 * 1024**3,
+                ),
+            ),
+            stdout="",
+            stderr="",
         )
 
 
@@ -208,6 +268,77 @@ def _run_body(placement_id: str) -> dict[str, object]:
     }
 
 
+def test_deployment_routes_preserve_v1_api_surface(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "api.db")
+    paths = {route.path for route in app.routes}
+
+    assert "/api/experiments" in paths
+    assert "/api/experiments/{experiment_id}" in paths
+    assert "/api/experiments/{experiment_id}/events" in paths
+    assert "/api/runs/{run_id}" in paths
+    assert "/api/runs/{run_id}/telemetry" in paths
+    assert "/api/placements" in paths
+    assert "/api/deployments" in paths
+    assert "/api/deployments/{deployment_id}/events" in paths
+
+
+def test_binary_device_inventory_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api_service_module,
+        "DeviceInventoryService",
+        FakeDeviceInventory,
+    )
+    app = create_app(tmp_path / "api.db")
+
+    response = api_request(
+        app,
+        "POST",
+        "/api/binaries/server-ui/devices",
+        query=[("timeout_seconds", "12")],
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["host_id"] == "host-ui"
+    assert payload["items"][0]["logical_device_name"] == "CUDA0"
+    assert payload["items"][0]["physical_device_key"] == "uuid:gpu-0"
+    assert payload["items"][0]["free_memory_bytes"] == 20 * 1024**3
+
+
+def test_deployment_list_returns_persisted_definitions(tmp_path: Path) -> None:
+    database, subjects = _seed(tmp_path)
+    app = create_app(
+        database.path,
+        deployment_operation_manager=SequencedDeploymentOperations(),
+    )
+
+    response = api_request(app, "GET", "/api/deployments")
+    assert response.status_code == 200
+    ids = {item["id"] for item in response.json()["items"]}
+    assert subjects["a"][0] in ids
+    assert subjects["b"][0] in ids
+
+
+def test_deployment_list_hides_generated_plan_candidates(tmp_path: Path) -> None:
+    database, subjects = _seed(tmp_path)
+    base_id = subjects["a"][0]
+    _link_plan(database, base_id, subjects)
+    app = create_app(
+        database.path,
+        deployment_operation_manager=SequencedDeploymentOperations(),
+    )
+
+    response = api_request(app, "GET", "/api/deployments")
+    assert response.status_code == 200
+    ids = {item["id"] for item in response.json()["items"]}
+    assert base_id in ids
+    assert subjects["b"][0] not in ids
+    assert subjects["c"][0] not in ids
+    assert subjects["d"][0] not in ids
+
+
 def test_deployment_create_plan_get_and_invalid_reference(
     tmp_path: Path,
     monkeypatch,
@@ -262,33 +393,46 @@ def test_deployment_create_plan_get_and_invalid_reference(
         "DeploymentPlannerService",
         FakePlanner,
     )
+    plan_body = {
+        "search_space": {
+            "dimensions": [
+                {
+                    "path": "instances.qwen.context.size",
+                    "values": [6000],
+                }
+            ]
+        },
+        "instances": [
+            {
+                "instance_id": "qwen",
+                "helper_binary_id": "helper_qwen",
+                "model_path": "/models/qwen.gguf",
+            },
+            {
+                "instance_id": "flash",
+                "helper_binary_id": "helper_flash",
+                "model_path": "/models/flash.gguf",
+            },
+        ],
+        "timeout_seconds": 30,
+    }
+    previewed = api_request(
+        app,
+        "POST",
+        f"/api/deployments/{base_id}/preview",
+        body=plan_body,
+    )
+    assert previewed.status_code == 200
+    assert previewed.json()["plan_id"] is None
+    assert previewed.json()["raw_combinations"] == 2
+    assert previewed.json()["memory_rejected"] == 1
+    assert previewed.json()["valid_count"] == 1
+
     planned = api_request(
         app,
         "POST",
         f"/api/deployments/{base_id}/plan",
-        body={
-            "search_space": {
-                "dimensions": [
-                    {
-                        "path": "instances.qwen.context.size",
-                        "values": [6000],
-                    }
-                ]
-            },
-            "instances": [
-                {
-                    "instance_id": "qwen",
-                    "helper_binary_id": "helper_qwen",
-                    "model_path": "/models/qwen.gguf",
-                },
-                {
-                    "instance_id": "flash",
-                    "helper_binary_id": "helper_flash",
-                    "model_path": "/models/flash.gguf",
-                },
-            ],
-            "timeout_seconds": 30,
-        },
+        body=plan_body,
     )
     assert planned.status_code == 200
     assert planned.json()["raw_combinations"] == 2
@@ -301,6 +445,12 @@ def test_deployment_inspection_results_and_pareto(tmp_path: Path) -> None:
     base_id = subjects["a"][0]
     _link_plan(database, base_id, subjects)
     with database.session() as connection:
+        DeploymentCandidateRepository(connection).add_rejection(
+            subjects["b"][0],
+            stage="memory",
+            reason="device_memory_exceeded",
+            details={"device_id": "GPU0", "projected_bytes": 123},
+        )
         failed_runs = DeploymentRunRepository(connection)
         failed_runs.add_member(
             subjects["d"][2],
@@ -327,7 +477,15 @@ def test_deployment_inspection_results_and_pareto(tmp_path: Path) -> None:
         f"/api/deployments/{base_id}/candidates",
     )
     assert candidates.status_code == 200
-    assert len(candidates.json()["items"]) == len(subjects)
+    candidate_items = candidates.json()["items"]
+    assert len(candidate_items) == len(subjects)
+    rejected_candidate = next(
+        item for item in candidate_items
+        if item["id"] == subjects["b"][0]
+    )
+    assert rejected_candidate["rejection_count"] == 1
+    assert rejected_candidate["rejections"][0]["reason"] == "device_memory_exceeded"
+    assert rejected_candidate["rejections"][0]["details"]["device_id"] == "GPU0"
 
     placements = api_request(
         app,
@@ -470,8 +628,21 @@ def test_deployment_run_control_routes_and_sse(tmp_path: Path) -> None:
     assert events.status_code == 200
     assert events.headers["content-type"].startswith("text/event-stream")
     assert events.text.count("event: progress") == 2
-    assert '"deployment_status":"running"' in events.text
-    assert '"deployment_status":"completed"' in events.text
+    payloads = [
+        json.loads(line.removeprefix("data: "))
+        for line in events.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert [item["deployment_status"] for item in payloads] == [
+        "running",
+        "completed",
+    ]
+    assert payloads[0]["memory"] is None
+    assert payloads[-1]["current_placement_id"] == subjects["a"][1]
+    assert payloads[-1]["current_deployment_candidate_id"] == subjects["a"][0]
+    assert payloads[-1]["memory"]["deployment_placement_id"] == subjects["a"][1]
+    assert "combined_prompt_tps" in payloads[-1]
+    assert "combined_decode_tps" in payloads[-1]
 
     operations = SequencedDeploymentOperations()
     app = create_app(

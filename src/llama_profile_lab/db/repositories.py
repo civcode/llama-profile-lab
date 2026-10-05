@@ -26,6 +26,7 @@ from llama_profile_lab.db.records import (
     DeploymentMemberStatus,
     DeploymentOperationRecord,
     DeploymentPlacementRecord,
+    DeploymentPromotionProposalRecord,
     DeploymentPlanCaseRecord,
     DeploymentPlanRecord,
     DeploymentRejectionRecord,
@@ -2397,6 +2398,119 @@ class DeploymentPlacementRepository:
                 projected_free_bytes=int(row["projected_free_bytes"]),
             )
             for row in rows
+        )
+
+
+class DeploymentPromotionRepository:
+    """Append-only coordinated deployment promotion proposals."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create(
+        self,
+        *,
+        base_deployment_candidate_id: str,
+        deployment_candidate_id: str,
+        deployment_placement_id: str,
+        sources: Sequence[Mapping[str, Any]],
+        changes: Sequence[Mapping[str, Any]],
+        source_snapshot: Mapping[str, Any],
+        proposed_snapshot: Mapping[str, Any],
+        evidence: Mapping[str, Any],
+        patch: str,
+    ) -> str:
+        identifier = _event_id("deploypromo")
+        self.connection.execute(
+            """
+            INSERT INTO deployment_promotion_proposal(
+                id, base_deployment_candidate_id, deployment_candidate_id,
+                deployment_placement_id, sources_json, changes_json,
+                source_snapshot_json, proposed_snapshot_json,
+                evidence_json, patch
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identifier,
+                base_deployment_candidate_id,
+                deployment_candidate_id,
+                deployment_placement_id,
+                canonical_json([dict(item) for item in sources]),
+                canonical_json([dict(item) for item in changes]),
+                canonical_json(dict(source_snapshot)),
+                canonical_json(dict(proposed_snapshot)),
+                canonical_json(dict(evidence)),
+                patch,
+            ),
+        )
+        return identifier
+
+    def get(
+        self,
+        identifier: str,
+    ) -> DeploymentPromotionProposalRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, base_deployment_candidate_id,
+                   deployment_candidate_id, deployment_placement_id,
+                   sources_json, changes_json,
+                   source_snapshot_json, proposed_snapshot_json,
+                   evidence_json, patch, created_at
+            FROM deployment_promotion_proposal
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        return None if row is None else self._record(row)
+
+    def list_for_deployment(
+        self,
+        base_deployment_candidate_id: str,
+    ) -> tuple[DeploymentPromotionProposalRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT id, base_deployment_candidate_id,
+                   deployment_candidate_id, deployment_placement_id,
+                   sources_json, changes_json,
+                   source_snapshot_json, proposed_snapshot_json,
+                   evidence_json, patch, created_at
+            FROM deployment_promotion_proposal
+            WHERE base_deployment_candidate_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (base_deployment_candidate_id,),
+        ).fetchall()
+        return tuple(self._record(row) for row in rows)
+
+    @staticmethod
+    def _record(row: sqlite3.Row) -> DeploymentPromotionProposalRecord:
+        sources_raw = json.loads(str(row["sources_json"]))
+        changes_raw = json.loads(str(row["changes_json"]))
+        if not isinstance(sources_raw, list) or not all(
+            isinstance(item, dict) for item in sources_raw
+        ):
+            raise ValueError("persisted deployment promotion sources must be a list")
+        if not isinstance(changes_raw, list) or not all(
+            isinstance(item, dict) for item in changes_raw
+        ):
+            raise ValueError("persisted deployment promotion changes must be a list")
+        return DeploymentPromotionProposalRecord(
+            id=str(row["id"]),
+            base_deployment_candidate_id=str(
+                row["base_deployment_candidate_id"]
+            ),
+            deployment_candidate_id=str(row["deployment_candidate_id"]),
+            deployment_placement_id=str(row["deployment_placement_id"]),
+            sources=tuple(dict(item) for item in sources_raw),
+            changes=tuple(dict(item) for item in changes_raw),
+            source_snapshot=_loads_object(str(row["source_snapshot_json"])),
+            proposed_snapshot=_loads_object(
+                str(row["proposed_snapshot_json"])
+            ),
+            evidence=_loads_object(str(row["evidence_json"])),
+            patch=str(row["patch"]),
+            created_at=str(row["created_at"]),
         )
 
 

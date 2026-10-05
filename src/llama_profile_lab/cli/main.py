@@ -41,6 +41,7 @@ from llama_profile_lab.api.profiles import LauncherProfileError, LauncherProfile
 from llama_profile_lab.archive import (
     ArchiveError,
     ArchiveService,
+    serialize_deployment_export,
     serialize_experiment_export,
 )
 from llama_profile_lab.db import (
@@ -507,6 +508,14 @@ def _add_deployment_parser(
     )
     results.add_argument("--output", type=Path, default=None)
     _add_database_argument(results)
+
+    export = deployment_commands.add_parser(
+        "export",
+        help="Export complete V2 deployment provenance as deterministic JSON.",
+    )
+    export.add_argument("deployment_id")
+    export.add_argument("--output", type=Path, default=None)
+    _add_database_argument(export)
 
     pareto = deployment_commands.add_parser(
         "pareto",
@@ -1789,6 +1798,24 @@ def _deployment_results_command(
     return 0
 
 
+def _deployment_export_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    output: Path | None,
+) -> int:
+    try:
+        rendered = serialize_deployment_export(
+            Database(database_path),
+            deployment_id,
+        )
+    except (ArchiveError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    _write_text_output(rendered.rstrip("\n"), output)
+    return 0
+
+
 def _deployment_pareto_command(
     database_path: Path,
     deployment_id: str,
@@ -1856,21 +1883,7 @@ def _deployment_rows_csv(
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
-    for row in rows:
-        writer.writerow(
-            {
-                key: (
-                    json.dumps(
-                        value,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    if isinstance(value, (dict, list, tuple))
-                    else value
-                )
-                for key, value in row.items()
-            }
-        )
+    writer.writerows(rows)
     return output.getvalue()
 
 
@@ -2718,6 +2731,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.deployment_id,
                 filter_args=args.filter,
                 format_name=args.format_name,
+                output=args.output,
+            )
+        if args.deployment_command == "export":
+            return _deployment_export_command(
+                args.database,
+                args.deployment_id,
                 output=args.output,
             )
         if args.deployment_command == "pareto":

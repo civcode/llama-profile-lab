@@ -14,7 +14,7 @@ def test_reference_database_diagnostics_are_healthy_and_indexed(tmp_path: Path) 
 
     report = inspect_database(database)
 
-    assert report.schema_version == 14
+    assert report.schema_version == 15
     assert report.integrity_ok
     assert report.foreign_key_violations == 0
     assert report.database_bytes > 0
@@ -23,7 +23,14 @@ def test_reference_database_diagnostics_are_healthy_and_indexed(tmp_path: Path) 
     assert report.row_counts["benchmark_case"] == 44
     assert report.row_counts["benchmark_run"] == 44
     assert report.row_counts["benchmark_sample"] == 142
+    assert "deployment_plan" in report.row_counts
+    assert "deployment_run" in report.row_counts
+    assert "deployment_promotion_proposal" in report.row_counts
     assert report.query_plans
+    by_name = {plan.name: plan for plan in report.query_plans}
+    assert by_name["deployment plan history"].uses_index
+    assert by_name["deployment run placement history"].uses_index
+    assert by_name["deployment promotion history"].uses_index
     assert all(plan.uses_index for plan in report.query_plans)
 
 

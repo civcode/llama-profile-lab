@@ -13,12 +13,15 @@ import pytest
 from llama_profile_lab.archive import (
     ArchiveError,
     ArchiveService,
+    export_deployment,
     export_experiment,
+    serialize_deployment_export,
     serialize_experiment_export,
 )
 from llama_profile_lab.cli.main import main
-from llama_profile_lab.db import Database
+from llama_profile_lab.db import Database, DeploymentPromotionRepository
 from tests.analysis_helpers import seed_analysis_experiment
+from tests.test_deployment_analysis import _seed as seed_deployment_analysis
 
 
 def _sha256(path: Path) -> str:
@@ -38,7 +41,7 @@ def test_archive_contains_consistent_database_snapshot_and_hashed_manifest(
     manifest = ArchiveService(database).create(output, artifacts=(artifact,))
 
     assert manifest.format == "llprof-archive-v1"
-    assert manifest.schema_version == 14
+    assert manifest.schema_version == 15
     assert output.is_file()
 
     extraction = tmp_path / "archive"
@@ -63,7 +66,7 @@ def test_archive_contains_consistent_database_snapshot_and_hashed_manifest(
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert (
             connection.execute("SELECT MAX(version) FROM schema_migration").fetchone()[0]
-            == 14
+            == 15
         )
         assert connection.execute("SELECT COUNT(*) FROM benchmark_run").fetchone()[0] > 0
     finally:
@@ -167,6 +170,115 @@ def test_archive_restore_verifies_snapshot_and_artifacts(tmp_path: Path) -> None
     restored = export_experiment(Database(restored_path), experiment_id)
     assert restored["experiment"]["id"] == experiment_id
     assert len(restored["execution"]["benchmark_runs"]) == 44
+
+
+def test_complete_deployment_export_contains_v2_provenance(
+    tmp_path: Path,
+) -> None:
+    database, subjects = seed_deployment_analysis(tmp_path)
+    deployment_id = subjects["a"][0]
+    placement_id = subjects["a"][1]
+    with database.session() as connection:
+        proposal_id = DeploymentPromotionRepository(connection).create(
+            base_deployment_candidate_id=deployment_id,
+            deployment_candidate_id=deployment_id,
+            deployment_placement_id=placement_id,
+            sources=(
+                {"instance_id": "qwen", "experiment_id": "exp-qwen"},
+                {"instance_id": "flash", "experiment_id": "exp-flash"},
+            ),
+            changes=(),
+            source_snapshot={"models": {}},
+            proposed_snapshot={"models": {}},
+            evidence={"deployment_run_id": subjects["a"][2]},
+            patch="",
+        )
+
+    payload = export_deployment(database, deployment_id)
+
+    assert payload["format"] == "llprof-deployment-export-v1"
+    assert payload["schema_version"] == 15
+    assert payload["deployment_id"] == deployment_id
+    assert payload["immutable"]["deployment_candidates"]
+    assert payload["immutable"]["deployment_instances"]
+    assert payload["planning"]["placements"]
+    assert payload["planning"]["placement_memory"]
+    assert payload["execution"]["deployment_runs"]
+    assert payload["execution"]["gpu_samples"]
+    assert payload["execution"]["workload_runs"]
+    assert payload["promotion"]["proposals"][0]["id"] == proposal_id
+    assert payload["environment"]["binaries"]
+    assert payload["environment"]["hosts"]
+
+    reparsed = json.loads(serialize_deployment_export(database, deployment_id))
+    assert reparsed["deployment_id"] == deployment_id
+    assert reparsed["promotion"]["proposals"][0]["id"] == proposal_id
+
+    output = tmp_path / "deployment.json"
+    assert (
+        main(
+            [
+                "deployment",
+                "export",
+                deployment_id,
+                "--output",
+                str(output),
+                "--database",
+                str(database.path),
+            ]
+        )
+        == 0
+    )
+    cli_payload = json.loads(output.read_text(encoding="utf-8"))
+    assert cli_payload["deployment_id"] == deployment_id
+    assert cli_payload["execution"]["workload_runs"]
+
+
+def test_archive_restore_preserves_v2_deployment_promotion(
+    tmp_path: Path,
+) -> None:
+    database, subjects = seed_deployment_analysis(tmp_path)
+    deployment_id = subjects["a"][0]
+    placement_id = subjects["a"][1]
+    with database.session() as connection:
+        proposal_id = DeploymentPromotionRepository(connection).create(
+            base_deployment_candidate_id=deployment_id,
+            deployment_candidate_id=deployment_id,
+            deployment_placement_id=placement_id,
+            sources=(
+                {
+                    "instance_id": "qwen",
+                    "experiment_id": "exp-qwen",
+                    "source_profile_id": "qwen",
+                },
+                {
+                    "instance_id": "flash",
+                    "experiment_id": "exp-flash",
+                    "source_profile_id": "flash",
+                },
+            ),
+            changes=(),
+            source_snapshot={"models": {"qwen": {}, "flash": {}}},
+            proposed_snapshot={"models": {"qwen": {}, "flash": {}}},
+            evidence={"deployment_run_id": subjects["a"][2]},
+            patch="",
+        )
+
+    archive_path = tmp_path / "v2-backup.tar.gz"
+    ArchiveService(database).create(archive_path)
+    restored_path = tmp_path / "v2-restored.db"
+    manifest = ArchiveService.restore(archive_path, restored_path)
+
+    assert manifest.schema_version == 15
+    with Database(restored_path).session() as connection:
+        restored = DeploymentPromotionRepository(connection).get(proposal_id)
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+    assert restored is not None
+    assert restored.deployment_placement_id == placement_id
+    assert restored.evidence["deployment_run_id"] == subjects["a"][2]
+    assert integrity is not None and integrity[0] == "ok"
+    assert foreign_keys == []
 
 
 def test_archive_restore_rejects_tampered_payload(tmp_path: Path) -> None:

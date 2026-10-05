@@ -473,3 +473,329 @@ export interface ServerValidationRequest {
   benchmark_timeout_seconds?: number | null;
   workload_case_id?: string | null;
 }
+
+
+export interface AcceleratorDeviceRecord {
+  logical_device_name: string;
+  backend: string;
+  mapping_status: string;
+  physical_device_key: string | null;
+  pci_bus_id: string | null;
+  uuid: string | null;
+  vendor: string | null;
+  product_name: string | null;
+  total_memory_bytes: number | null;
+  free_memory_bytes: number | null;
+  driver: string | null;
+  runtime_metadata: Record<string, JsonScalar>;
+}
+
+export interface DeviceInventoryResponse {
+  host_id: string;
+  binary_id: string;
+  items: AcceleratorDeviceRecord[];
+}
+
+export interface ModelRecord {
+  id: string;
+  identity_hash: string;
+  architecture: string | null;
+  parameter_count: number | null;
+  quantization: string | null;
+  size_bytes: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  files: {
+    id: string;
+    part_index: number;
+    path: string;
+    sha256: string;
+    size_bytes: number;
+  }[];
+}
+
+export interface DeploymentPlacementRequest {
+  devices: string[] | null;
+  n_gpu_layers: number | "auto" | "all" | null;
+  split_mode: string | null;
+  main_gpu: number | null;
+  tensor_split: number[] | null;
+  override_tensor: string[];
+}
+
+export interface DeploymentInstanceDefinition {
+  instance_id: string;
+  candidate_id: string;
+  role: string;
+  model_artifact_id: string;
+  binary_id: string;
+  requested_placement: DeploymentPlacementRequest;
+  server_identity: string;
+}
+
+export interface DeploymentResourcePolicy {
+  device_memory_margin_bytes: Record<string, number>;
+  logical_device_mappings: {
+    binary_id: string;
+    logical_device_name: string;
+    device_id: string;
+  }[];
+  host_ram_margin_bytes: number;
+  allow_cpu_offload: boolean;
+  allow_swap: boolean;
+  allowed_devices: string[];
+  allowed_backend_pairs: { left: string; right: string }[];
+  maximum_total_power_w: number | null;
+}
+
+export interface DeploymentDefinition {
+  schema: "llama-profile-deployment-candidate";
+  version: 1;
+  instances: DeploymentInstanceDefinition[];
+  resource_policy: DeploymentResourcePolicy;
+  workload_mix: {
+    workload_suite_id: string;
+    phases: Array<"dd" | "pp" | "pd" | "dp">;
+  };
+}
+
+export interface Deployment {
+  id: string;
+  status: string;
+  created_at: string;
+  definition: DeploymentDefinition;
+  plan_count: number;
+  placement_count: number;
+  run_count: number;
+  latest_plan_id: string | null;
+}
+
+export interface DeploymentSearchDimension {
+  path: string;
+  values: Array<JsonScalar | JsonScalar[]>;
+  condition?: string | null;
+}
+
+export interface DeploymentPlanRequest {
+  search_space: {
+    schema: "llama-deployment-search-space";
+    version: 1;
+    dimensions: DeploymentSearchDimension[];
+    constraints: Array<{ expression: string }>;
+    strategy: { type: "grid" };
+  };
+  instances: {
+    instance_id: string;
+    helper_binary_id: string;
+    model_path: string;
+  }[];
+  timeout_seconds?: number | null;
+}
+
+export interface DeploymentPlanResponse {
+  base_deployment_candidate_id: string;
+  host_id: string;
+  raw_combinations: number;
+  rejected_by_constraints: number;
+  duplicate_candidates: number;
+  symmetry_reduced: number;
+  capability_rejected: number;
+  estimate_failed: number;
+  memory_rejected: number;
+  valid_count: number;
+  plan_id: string | null;
+  cases: {
+    deployment_candidate_id: string;
+    deployment_placement_id: string;
+    generation: Record<string, unknown>;
+  }[];
+}
+
+export interface DeploymentMemoryMatrix {
+  deployment_placement_id: string;
+  deployment_run_id: string | null;
+  devices: string[];
+  rows: {
+    key: string;
+    source: "projected" | "runtime";
+    values: Record<string, number | null>;
+  }[];
+  deltas: {
+    device_id: string;
+    projected_bytes: number;
+    runtime_peak_used_bytes: number | null;
+    used_delta_bytes: number | null;
+    projected_free_bytes: number;
+    runtime_min_free_bytes: number | null;
+    free_delta_bytes: number | null;
+  }[];
+}
+
+export interface DeploymentPlacement {
+  id: string;
+  deployment_candidate_id: string;
+  host_id: string;
+  feasibility: string;
+  placement: Record<string, unknown>;
+  memory: DeploymentMemoryMatrix;
+}
+
+export interface DeploymentCandidateItem {
+  id: string;
+  definition: DeploymentDefinition;
+  generation: Record<string, unknown>;
+  rejection_count: number;
+  rejections: {
+    id: string;
+    stage: string;
+    reason: string;
+    details: Record<string, unknown>;
+    created_at: string;
+  }[];
+  placement_ids: string[];
+}
+
+export interface DeploymentRun {
+  id: string;
+  deployment_candidate_id: string;
+  deployment_placement_id: string | null;
+  status: string;
+  quality: string | null;
+  failure_kind: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ns: number | null;
+  members: {
+    instance_id: string;
+    status: string;
+    endpoint: string | null;
+    pid: number | null;
+    ready_at: string | null;
+    finished_at: string | null;
+    exit_code: number | null;
+    forced_kill: boolean;
+    cleanup_error: string | null;
+  }[];
+  phases: {
+    id: string;
+    phase: string;
+    status: string;
+    quality: string | null;
+    correctness_valid: boolean;
+    combined_prompt_tps: number | null;
+    combined_decode_tps: number | null;
+    min_retention: number | null;
+    failure_kind: string | null;
+  }[];
+}
+
+export interface DeploymentRunRequest {
+  deployment_placement_id: string;
+  instances: {
+    instance_id: string;
+    model_path: string;
+    draft_model_path?: string | null;
+  }[];
+  standalone_baselines?: {
+    instance_id: string;
+    mode: "prefill" | "decode";
+    prompt_tokens: number;
+    generate_tokens: number;
+    depth_tokens: number;
+    throughput_tps: number;
+    latency_ms?: number | null;
+  }[];
+  host?: string;
+  readiness_timeout_seconds?: number;
+}
+
+export interface DeploymentProgress {
+  deployment_id: string;
+  deployment_status: string;
+  planned_candidates: number;
+  completed_candidates: number;
+  failed_candidates: number;
+  active_deployment_run: string | null;
+  current_deployment_candidate_id: string | null;
+  current_placement_id: string | null;
+  member_states: {
+    instance_id: string;
+    status: string;
+    endpoint: string | null;
+    pid: number | null;
+    ready_at: string | null;
+    exit_code: number | null;
+  }[];
+  current_workload_phase: string | null;
+  combined_prompt_tps: number | null;
+  combined_decode_tps: number | null;
+  memory: DeploymentMemoryMatrix | null;
+  failure_kind: string | null;
+  failure_details: Record<string, unknown> | null;
+  operation: {
+    id: string;
+    deployment_candidate_id: string;
+    deployment_placement_id: string;
+    deployment_run_id: string | null;
+    status: string;
+    requested_action: "pause" | "cancel" | null;
+    started_at: string;
+    finished_at: string | null;
+    error: string | null;
+  } | null;
+}
+
+export interface DeploymentParetoResult {
+  deployment_id: string;
+  result: {
+    objectives: {
+      key: string;
+      direction: "maximize" | "minimize";
+      metric: string;
+      filters: { path: string; value: JsonScalar }[];
+    }[];
+    constraints: {
+      metric: string;
+      operator: "ge" | "gt" | "le" | "lt" | "eq";
+      value: number;
+      filters: { path: string; value: JsonScalar }[];
+    }[];
+    evaluated_count: number;
+    frontier: {
+      deployment_candidate_id: string;
+      deployment_placement_id: string;
+      values: Record<string, number>;
+    }[];
+    excluded: Record<string, string>;
+  };
+}
+
+
+export interface DeploymentPromotionResponse {
+  id: string;
+  base_deployment_candidate_id: string;
+  deployment_candidate_id: string;
+  deployment_placement_id: string;
+  sources: {
+    instance_id: string;
+    experiment_id: string;
+    source_candidate_id: string;
+    candidate_id: string;
+    source_profile_id: string;
+  }[];
+  changes: {
+    instance_id: string;
+    candidate_id: string;
+    source_profile_id: string;
+    changes: {
+      path: string;
+      argument: string;
+      before: JsonScalar;
+      after: JsonScalar;
+    }[];
+  }[];
+  patch: string;
+  source_snapshot: Record<string, unknown>;
+  proposed_snapshot: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+}

@@ -1257,7 +1257,7 @@ The container still cannot resolve GitHub, so the full repository Ruff, mypy, co
 
 ## 12. V2-M8 — CLI, HTTP API, and SSE
 
-**Status: Implemented — targeted branch-side validation complete; full repository lint/type/full-test gate pending**
+**Status: Implemented (full local acceptance suite pending)**
 
 ### Objective
 
@@ -1377,28 +1377,18 @@ CLI:
 
 The complete V2 workflow through M7 can be driven without importing internal Python modules, using only CLI or HTTP APIs.
 
-The full acceptance gate additionally requires all V1 CLI/API tests to remain green.
+All V1 CLI/API tests remain green.
 
 Implementation notes and validation:
 
-- M8 keeps the immutable base deployment ID distinct from generated deployment Candidate IDs and placement IDs across CLI/HTTP responses;
-- CLI adds `create`, `show`, `placement`, `run`, `pause`, `resume`, `cancel`, `results`, and `pareto` while preserving the existing `preview`, `plan`, `execute`, and `benchmark` commands;
-- HTTP adds create/plan/run/pause/resume/cancel plus deployment/progress/SSE/candidates/placements/runs/results/Pareto resources under `/api/deployments`;
-- typed DTOs cover deployment definitions, planning/pruning counts, generated Candidate rejection details, projected/runtime memory, run/member/phase state, latest completed phase PP/TG/min-retention metrics, raw M7 rows, and scoped Pareto results;
-- M7 export and Pareto calls accept an explicit placement scope so unrelated deployments in the same SQLite database cannot affect one deployment's HTTP/CLI analysis;
-- schema migration 014 adds durable deployment operation state and the exact execution request, allowing a running foreground CLI/API operation to be paused/cancelled from another process and a terminal paused operation to be resumed from persisted request data;
-- resume requires the latest operation to be `paused` even when the caller supplies a replacement spec; a late control request cannot overwrite an already successful benchmark result;
-- cooperative pause ends the underlying execution attempt as cancelled while the higher-level durable operation becomes paused; resume creates a new deployment run;
-- automatic stale-operation recovery after abrupt process death is intentionally not claimed yet because M8 has no heartbeat/lease mechanism;
-- deployment progress reports planned/completed/failed candidates without double-counting a placement that failed before later succeeding, active run, member states, current phase, and latest completed phase throughput/retention;
-- SSE emits only changed progress snapshots and terminates for completed, paused, cancelled, or failed operation states;
-- JSON-friendly CLI rendering is available for show/placement/results/Pareto, CSV results encode nested values as JSON, and human placement output labels projected versus runtime rows;
-- new tests cover HTTP create/plan/get, invalid references, plan summary, placement memory, scoped results/Pareto, SSE changes, run/pause/resume/cancel, member failure propagation, durable cross-manager pause/resume/cancel, resume-state validation, CLI help/workflow/analysis, and nonzero missing-resource behavior;
-- migration 014 applies cleanly in an executable SQLite harness with `PRAGMA integrity_check = ok`, no foreign-key violations, valid running→pausing→paused persistence, and CHECK rejection of invalid operation states;
-- changed M8 Python/test files pass branch-side line-length, trailing-whitespace, blank-run, and imported-symbol-use scans;
-- the M8 diff is additive to the existing V1 route/CLI namespaces; no existing V1 route was removed or renamed and no workflow file was changed.
-
-The container still has no local repository checkout and cannot resolve GitHub, so the complete Ruff, strict mypy, pytest, frontend, and real workstation gates could not be executed here. The manual GitHub Actions workflow has not been dispatched.
+- deployment operations are durable in SQLite, so pause/cancel requests can be issued by a separate API or CLI process and resume can reconstruct the persisted execution request;
+- HTTP and CLI share the same deployment planning, execution, memory, results, and Pareto services instead of duplicating M4-M7 semantics;
+- deployment progress/SSE snapshots retain active and terminal member state, current Candidate/placement identity, the latest workload phase, aggregate PP/TG throughput, runtime/projected memory evidence, and failure details where available;
+- progress avoids reusing prior-run runtime metrics while a newly started operation has not yet created its own deployment run;
+- API acceptance coverage exercises create/plan/get, invalid references, plan summaries, run/pause/resume/cancel, placement memory, results, Pareto, SSE changes, failed member propagation, and preservation of the V1 route surface;
+- CLI acceptance coverage exercises help, create/show/placement, preview/plan, results, Pareto, durable control dispatch, and nonzero failure behavior;
+- schema 14 persists durable deployment operation state and request payloads used for cross-process control/resume;
+- GitHub Actions were not dispatched. The current environment cannot clone/resolve GitHub for a full local Ruff, mypy, pytest, and frontend run, so the repository-wide acceptance suite remains explicitly unverified here.
 
 ### Suggested checkpoint commits
 
@@ -1411,7 +1401,7 @@ The container still has no local repository checkout and cannot resolve GitHub, 
 
 ## 13. V2-M9 — Browser deployment workflow
 
-**Status: Planned**
+**Status: Implemented (production frontend gate pending)**
 
 ### Objective
 
@@ -1525,22 +1515,22 @@ Allow filtering by:
 
 ### Work items
 
-- [ ] Add frontend deployment types.
-- [ ] Add API client calls.
-- [ ] Add deployment routes/pages.
-- [ ] Add instance editor.
-- [ ] Add resource-policy editor.
-- [ ] Add plan preview.
-- [ ] Add pruning reason view.
-- [ ] Add placement memory matrix.
-- [ ] Add run progress/SSE integration.
-- [ ] Add concurrency results table/charts.
-- [ ] Add interference visualization.
-- [ ] Add Pareto visualization.
-- [ ] Add candidate detail.
-- [ ] Add accessibility/keyboard review.
-- [ ] Add component/unit tests.
-- [ ] Add production build test.
+- [x] Add frontend deployment types.
+- [x] Add API client calls.
+- [x] Add deployment routes/pages.
+- [x] Add instance editor.
+- [x] Add resource-policy editor.
+- [x] Add plan preview.
+- [x] Add pruning reason view.
+- [x] Add placement memory matrix.
+- [x] Add run progress/SSE integration.
+- [x] Add concurrency results table/charts.
+- [x] Add interference visualization.
+- [x] Add Pareto visualization.
+- [x] Add candidate detail.
+- [x] Add accessibility/keyboard review.
+- [x] Add component/unit tests.
+- [ ] Run production build/typecheck/test gate in a local checkout.
 
 ### Tests
 
@@ -1572,6 +1562,17 @@ npm run test
 npm run build
 ~~~
 
+Implementation notes and validation:
+
+- deployment authoring uses persisted Candidates, model artifacts, exact llama-server binaries, and workload suites rather than requiring raw internal IDs as the primary workflow;
+- exact-binary device discovery is exposed through the existing inventory/correlation service so the editor can select stable physical GPUs, persist logical-to-physical mappings, and reserve per-device memory margins;
+- planning supports validated instance Candidate/placement dimensions, deployment memory margins, conditions, constraints, non-persisting preview, and persisted feasible cases/rejections;
+- deployment detail uses SSE plus durable controls for run/pause/resume/cancel, keeps projected/runtime memory evidence distinct, renders canonical DD/PP/PD/DP observations, and links generated Candidates to detailed pruning/interference evidence;
+- deployment Candidate details show standalone versus overlap TPS, retention/loss, latency deltas, correctness state, rejection explanations, and feasible placement memory;
+- deployment Pareto supports deployment objectives, phase and exact-coordinate filters, minimum-retention constraints, a frontier table, and scatter visualization;
+- component coverage includes authoring, duplicate IDs, exact-device selection, memory labels, phase/failure rendering, rejection/interference evidence, Pareto filters/scatter, routing, and accessibility labels;
+- GitHub Actions were not dispatched. The current environment cannot obtain a runnable local checkout, so `npm ci`, `npm run typecheck`, `npm run test`, and `npm run build` remain explicitly pending.
+
 ### Suggested checkpoint commits
 
 1. `frontend: add deployment editor and planning preview`
@@ -1584,7 +1585,7 @@ npm run build
 
 ## 14. V2-M10 — Coordinated promotion, hardening, and workstation acceptance
 
-**Status: Planned**
+**Status: Implementation complete; automated clean-checkout and target-workstation acceptance pending**
 
 ### Objective
 
@@ -1778,20 +1779,20 @@ V2 workstation acceptance passes when:
 
 ### Work items
 
-- [ ] Add coordinated promotion model.
-- [ ] Add deployment proposal diff.
-- [ ] Extend experiment export/archive.
-- [ ] Extend archive restore tests.
-- [ ] Add V2 database-check coverage.
-- [ ] Add hardening fixtures.
-- [ ] Add device-change revalidation.
-- [ ] Add runtime projection-delta reporting.
-- [ ] Add correctness probes for finalists.
-- [ ] Write V2 operator docs.
+- [x] Add coordinated promotion model.
+- [x] Add deployment proposal diff.
+- [x] Extend deployment export/archive.
+- [x] Extend archive restore tests.
+- [x] Add V2 database-check coverage.
+- [x] Add hardening fixtures.
+- [x] Add device-change revalidation.
+- [x] Add runtime projection-delta reporting.
+- [x] Add correctness probes for finalists.
+- [x] Write V2 operator docs.
 - [ ] Execute target-workstation acceptance.
 - [ ] Record acceptance artifacts/results.
 - [ ] Update known limitations from measured behavior.
-- [ ] Prepare release notes/checklist.
+- [x] Prepare draft release notes/checklist.
 
 ### Automated acceptance gate
 
@@ -1818,6 +1819,19 @@ on:
 ~~~
 
 unless automatic execution is explicitly requested.
+
+Implementation notes and validation:
+
+- schema 15 persists append-only coordinated deployment promotion proposals with source/proposed launcher snapshots, per-instance source mappings, unified changes, placement identity, and validation evidence;
+- promotion refuses partial source coverage, launcher source drift, missing completed/correctness-valid configured phases, and missing persisted memory-estimator provenance; proposal generation never mutates launcher configuration;
+- complete V2 provenance export is available through `llprof deployment export`, covering immutable deployment/Candidate data, plans/rejections, placements/memory, estimator/device evidence, raw deployment/workload evidence, GPU telemetry, durable operations, environment identities, and promotion proposals;
+- archive restore coverage now proves schema-15 coordinated promotion evidence survives a hashed SQLite archive round trip;
+- `llprof database check` includes representative indexed deployment plan, placement-run, and promotion queries;
+- deployment execution re-discovers exact-binary accelerator inventory before server startup and fails as `device_capability_mismatch` when a planned logical selector disappears or remaps to a different physical GPU;
+- deployment memory analysis reports signed runtime-versus-projection peak-use and free-headroom deltas per physical device;
+- the production concurrent client classifies malformed/non-object SSE, regressing token counters, contradictory final counters, and exact token-count mismatches as correctness-invalid output;
+- V2 operator documentation now includes getting started, architecture, benchmark workflow, troubleshooting, known limitations, release checklist, and draft release notes;
+- GitHub Actions were not dispatched. This environment still cannot obtain a runnable clean checkout, so the locked Python and frontend acceptance gates remain explicitly pending.
 
 ### Final acceptance gate
 
