@@ -3,6 +3,7 @@ import type {
   CandidateComparison,
   CandidateSummary,
   CandidateValidationHistory,
+  DeviceInventoryResponse,
   Deployment,
   DeploymentCandidateItem,
   DeploymentParetoResult,
@@ -78,6 +79,14 @@ export const api = {
   profiles: () => request<ProfileListResponse>("/api/profiles"),
   profile: (id: string) => request<LauncherProfile>("/api/profiles/" + encodeURIComponent(id)),
   binaries: async () => (await request<{ items: BinaryRecord[] }>("/api/binaries")).items,
+  binaryDevices: (id: string, timeoutSeconds = 30) =>
+    request<DeviceInventoryResponse>(
+      "/api/binaries/" +
+        encodeURIComponent(id) +
+        "/devices" +
+        query([["timeout_seconds", timeoutSeconds]]),
+      { method: "POST" }
+    ),
   parameters: async () =>
     (await request<{ items: ParameterDefinition[] }>("/api/parameters")).items,
   metrics: async () =>
