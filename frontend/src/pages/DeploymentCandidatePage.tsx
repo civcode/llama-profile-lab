@@ -97,8 +97,9 @@ export function DeploymentCandidatePage({
     );
   }
 
-  const latestResult = validResults.at(-1) ?? null;
-  const latestRun = runs.at(-1) ?? null;
+  const latestResult =
+    validResults.length === 0 ? null : validResults[validResults.length - 1];
+  const latestRun = runs.length === 0 ? null : runs[runs.length - 1];
 
   return (
     <main className="page">
@@ -148,9 +149,10 @@ export function DeploymentCandidatePage({
         <MetricCard
           label="Minimum retention"
           value={metric(
-            latestResult === null
+            latestResult === null ||
+              numeric(latestResult, "min_retention") === null
               ? null
-              : (numeric(latestResult, "min_retention") ?? 0) * 100,
+              : numeric(latestResult, "min_retention")! * 100,
             "%"
           )}
           note="Across concurrent members"
