@@ -620,6 +620,15 @@ export interface DeploymentMemoryMatrix {
     source: "projected" | "runtime";
     values: Record<string, number | null>;
   }[];
+  deltas: {
+    device_id: string;
+    projected_bytes: number;
+    runtime_peak_used_bytes: number | null;
+    used_delta_bytes: number | null;
+    projected_free_bytes: number;
+    runtime_min_free_bytes: number | null;
+    free_delta_bytes: number | null;
+  }[];
 }
 
 export interface DeploymentPlacement {
