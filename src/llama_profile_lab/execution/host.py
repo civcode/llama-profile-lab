@@ -8,12 +8,12 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
-from llama_profile_lab.domain import sha256_json
+from llama_profile_lab.domain import physical_device_key, sha256_json
 
 
 @dataclass(frozen=True, slots=True)
 class BasicHostInfo:
-    """Minimal reproducibility metadata sufficient for M5 run provenance."""
+    """Stable host identity including physical accelerator/topology metadata."""
 
     hostname: str
     hardware_fingerprint: str
@@ -89,9 +89,12 @@ def _linux_gpu_inventory() -> list[dict[str, object]]:
         if not device.exists():
             continue
 
+        pci_address = device.resolve().name
         entry: dict[str, object] = {
             "drm_card": card.name,
-            "pci_address": device.resolve().name,
+            "pci_address": pci_address,
+            "pci_bus_id": pci_address,
+            "stable_device_key": physical_device_key(pci_bus_id=pci_address),
         }
         for name in ("vendor", "device", "subsystem_vendor", "subsystem_device"):
             value = _read_text(device / name)
@@ -101,6 +104,14 @@ def _linux_gpu_inventory() -> list[dict[str, object]]:
         driver = device / "driver"
         if driver.exists():
             entry["driver"] = driver.resolve().name
+
+        numa_node = _read_text(device / "numa_node")
+        if numa_node is not None:
+            entry["numa_node"] = numa_node
+
+        iommu_group = device / "iommu_group"
+        if iommu_group.exists():
+            entry["iommu_group"] = iommu_group.resolve().name
 
         gpus.append(entry)
     return gpus
