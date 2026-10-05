@@ -171,11 +171,10 @@ class _PreparedLlamaCompletionClient:
                     predicted = _non_negative_int(
                         event.get("tokens_predicted")
                     )
-                    if predicted is not None:
-                        if predicted > 0 and first_token_ns is None:
+                    if predicted is not None and predicted > 0:
+                        if first_token_ns is None:
                             first_token_ns = now_ns
-                        if predicted > 0:
-                            last_token_ns = now_ns
+                        last_token_ns = now_ns
                         _append_cumulative(
                             decode_events,
                             kind="decode",
