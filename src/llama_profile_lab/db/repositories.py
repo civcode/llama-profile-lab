@@ -2879,6 +2879,10 @@ class MemoryEstimateRepository:
         )
         if actual != expected:
             raise ValueError("memory estimate attempt identity mismatch")
+        if str(attempt["status"]) != "completed":
+            raise ValueError(
+                "successful memory estimate requires a completed attempt"
+            )
 
         identifier = _content_id("memest", cache_hash)
         rows_by_name = {
