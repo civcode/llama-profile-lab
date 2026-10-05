@@ -368,6 +368,15 @@ class DeploymentRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentGpuSampleRecord:
+    """One timestamped per-device GPU snapshot during deployment residency."""
+
+    deployment_run_id: str
+    timestamp_ns: int
+    gpus: tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentRunMemberRecord:
     """One model-instance member of a deployment run."""
 
