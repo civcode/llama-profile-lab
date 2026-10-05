@@ -18,6 +18,15 @@ from llama_profile_lab.domain.candidate import (
     ServerConfig,
     SpeculativeConfig,
 )
+from llama_profile_lab.domain.device import (
+    AcceleratorDevice,
+    DeviceMappingStatus,
+    MemoryEstimateDevice,
+    MemoryEstimateIdentity,
+    MemoryEstimateOutput,
+    MemoryEstimateResolved,
+    physical_device_key,
+)
 from llama_profile_lab.domain.deployment import (
     BackendPair,
     DeploymentCandidate,
@@ -78,6 +87,7 @@ from llama_profile_lab.domain.workload import (
 
 __all__ = [
     "AbsoluteDepth",
+    "AcceleratorDevice",
     "AdaptiveMeasurementPolicy",
     "BackendPair",
     "DeploymentCandidate",
@@ -90,6 +100,7 @@ __all__ = [
     "DeploymentPlacementRequest",
     "DeploymentRunStatus",
     "DeploymentWorkloadMix",
+    "DeviceMappingStatus",
     "DeviceMemoryMargin",
     "BaseCandidateBaseline",
     "Candidate",
@@ -111,6 +122,10 @@ __all__ = [
     "GridStrategy",
     "HostResourcePolicy",
     "MeasurementPolicy",
+    "MemoryEstimateDevice",
+    "MemoryEstimateIdentity",
+    "MemoryEstimateOutput",
+    "MemoryEstimateResolved",
     "ModelInstanceCandidate",
     "ModelSelection",
     "PerCandidatePlacementPolicy",
@@ -135,5 +150,6 @@ __all__ = [
     "WorkloadEnvelope",
     "WorkloadSuite",
     "canonical_json",
+    "physical_device_key",
     "sha256_json",
 ]
