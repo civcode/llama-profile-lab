@@ -45,6 +45,8 @@ from llama_profile_lab.api.dto import (
     DeploymentPlanRequest,
     DeploymentPlanResponse,
     DeploymentProgressDTO,
+    DeploymentPromotionRequest,
+    DeploymentPromotionResponse,
     DeploymentRejectionDTO,
     DeploymentResultsResponse,
     DeploymentRunDTO,
@@ -148,7 +150,11 @@ from llama_profile_lab.planning import (
     build_plan,
     plan_experiment,
 )
-from llama_profile_lab.promotion import PromotionService
+from llama_profile_lab.promotion import (
+    DeploymentPromotionService,
+    DeploymentPromotionSource,
+    PromotionService,
+)
 
 
 class ApiNotFoundError(RuntimeError):
@@ -950,6 +956,41 @@ class ApiService:
             benchmark_ids=summary.benchmark_ids,
             completed=summary.completed,
             speculative=summary.speculative,
+        )
+
+    def promote_deployment(
+        self,
+        deployment_id: str,
+        request: DeploymentPromotionRequest,
+    ) -> DeploymentPromotionResponse:
+        proposal = DeploymentPromotionService(
+            self.database,
+            self.profiles,
+        ).propose(
+            deployment_id,
+            request.deployment_placement_id,
+            sources=tuple(
+                DeploymentPromotionSource(
+                    instance_id=item.instance_id,
+                    experiment_id=item.experiment_id,
+                    source_profile_id=item.source_profile_id,
+                )
+                for item in request.sources
+            ),
+        )
+        return DeploymentPromotionResponse(
+            id=proposal.id,
+            base_deployment_candidate_id=(
+                proposal.base_deployment_candidate_id
+            ),
+            deployment_candidate_id=proposal.deployment_candidate_id,
+            deployment_placement_id=proposal.deployment_placement_id,
+            sources=proposal.sources,
+            changes=proposal.changes,
+            patch=proposal.patch,
+            source_snapshot=proposal.source_snapshot,
+            proposed_snapshot=proposal.proposed_snapshot,
+            evidence=proposal.evidence,
         )
 
     def promote_candidate(
