@@ -265,10 +265,19 @@ class DeploymentPromotionService:
                     "deployment placement does not belong to this deployment workflow"
                 )
             deployment = deployments.get(placement.deployment_candidate_id)
-            if deployment is None:
+            base_deployment = deployments.get(base_deployment_candidate_id)
+            if deployment is None or base_deployment is None:
                 raise PromotionError("deployment Candidate is missing")
+            base_instances = {
+                item.instance_id: item
+                for item in base_deployment.instances
+            }
 
             expected_ids = {item.instance_id for item in deployment.instances}
+            if set(base_instances) != expected_ids:
+                raise PromotionError(
+                    "base and selected deployment Candidates have different instances"
+                )
             if set(source_by_instance) != expected_ids:
                 missing = sorted(expected_ids - set(source_by_instance))
                 extra = sorted(set(source_by_instance) - expected_ids)
@@ -342,18 +351,22 @@ class DeploymentPromotionService:
                         f"source experiment not found for {instance.instance_id}: "
                         f"{source.experiment_id}"
                     )
+                source_candidate_id = base_instances[
+                    instance.instance_id
+                ].candidate_id
                 linked = connection.execute(
                     """
                     SELECT 1
                     FROM experiment_candidate
                     WHERE experiment_id = ? AND candidate_id = ?
                     """,
-                    (source.experiment_id, instance.candidate_id),
+                    (source.experiment_id, source_candidate_id),
                 ).fetchone()
                 if linked is None:
                     raise PromotionError(
-                        f"Candidate {instance.candidate_id} is not part of source "
-                        f"experiment {source.experiment_id}"
+                        f"base Candidate {source_candidate_id} for "
+                        f"{instance.instance_id} is not part of source experiment "
+                        f"{source.experiment_id}"
                     )
                 base_candidate = candidates.get(experiment.base_candidate_id)
                 selected_candidate = candidates.get(instance.candidate_id)
@@ -402,6 +415,7 @@ class DeploymentPromotionService:
                     {
                         "instance_id": instance.instance_id,
                         "experiment_id": source.experiment_id,
+                        "source_candidate_id": source_candidate_id,
                         "candidate_id": instance.candidate_id,
                         "source_profile_id": profile_id,
                     }
