@@ -188,6 +188,7 @@ class _RuntimeMemoryCheck:
     details: dict[str, object]
     violations: tuple[dict[str, object], ...]
     missing_devices: tuple[str, ...] = ()
+    projection_overruns: tuple[dict[str, object], ...] = ()
 
 
 class _DeploymentGpuSampler:
@@ -1280,6 +1281,7 @@ def _validate_runtime_margins(
     validated: list[dict[str, object]] = []
     missing: list[str] = []
     violations: list[dict[str, object]] = []
+    projection_overruns: list[dict[str, object]] = []
     for allocation in allocations:
         sample = by_key.get(allocation.device_id)
         if (
@@ -1298,9 +1300,19 @@ def _validate_runtime_margins(
             "observed_total_bytes": sample.vram_total_bytes,
             "observed_used_bytes": sample.vram_used_bytes,
             "observed_free_bytes": free_bytes,
+            "projected_bytes": allocation.projected_bytes,
+            "projected_free_bytes": allocation.projected_free_bytes,
             "reserved_margin_bytes": allocation.reserved_margin_bytes,
+            "used_delta_bytes": (
+                sample.vram_used_bytes - allocation.projected_bytes
+            ),
+            "free_delta_bytes": (
+                free_bytes - allocation.projected_free_bytes
+            ),
         }
         validated.append(detail)
+        if sample.vram_used_bytes > allocation.projected_bytes:
+            projection_overruns.append(detail)
         if free_bytes < allocation.reserved_margin_bytes:
             violations.append(detail)
     return _RuntimeMemoryCheck(
@@ -1308,9 +1320,11 @@ def _validate_runtime_margins(
             "validated_devices": validated,
             "missing_devices": missing,
             "violations": violations,
+            "projection_overruns": projection_overruns,
         },
         violations=tuple(violations),
         missing_devices=tuple(missing),
+        projection_overruns=tuple(projection_overruns),
     )
 
 
