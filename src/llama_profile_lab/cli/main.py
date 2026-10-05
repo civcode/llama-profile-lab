@@ -1471,6 +1471,395 @@ def _ui_command(
     return 0
 
 
+def _deployment_scope_ids(
+    database: Database,
+    deployment_id: str,
+) -> tuple[str, ...]:
+    with database.session() as connection:
+        repository = DeploymentCandidateRepository(connection)
+        if repository.get(deployment_id) is None:
+            raise DeploymentAnalysisError(
+                f"deployment Candidate not found: {deployment_id}"
+            )
+        rows = connection.execute(
+            """
+            SELECT DISTINCT dpc.deployment_candidate_id
+            FROM deployment_plan_case AS dpc
+            JOIN deployment_plan AS dp
+              ON dp.id = dpc.deployment_plan_id
+            WHERE dp.base_deployment_candidate_id = ?
+            ORDER BY dpc.deployment_candidate_id
+            """,
+            (deployment_id,),
+        ).fetchall()
+    derived = tuple(
+        str(row["deployment_candidate_id"])
+        for row in rows
+        if str(row["deployment_candidate_id"]) != deployment_id
+    )
+    return (deployment_id, *derived)
+
+
+def _deployment_create_command(
+    database_path: Path,
+    spec_path: Path,
+) -> int:
+    try:
+        raw = json.loads(
+            spec_path.expanduser().resolve().read_text(encoding="utf-8")
+        )
+        payload = (
+            raw.get("deployment")
+            if isinstance(raw, dict) and "deployment" in raw
+            else raw
+        )
+        deployment = DeploymentCandidate.model_validate(payload)
+        with Database(database_path).session() as connection:
+            identifier = DeploymentCandidateRepository(connection).put(
+                deployment
+            )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(identifier)
+    return 0
+
+
+def _deployment_show_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    format_name: str,
+) -> int:
+    database = Database(database_path)
+    try:
+        scope = _deployment_scope_ids(database, deployment_id)
+        with database.session() as connection:
+            repository = DeploymentCandidateRepository(connection)
+            record = repository.record(deployment_id)
+            definition = repository.get(deployment_id)
+            if record is None or definition is None:
+                raise DeploymentAnalysisError(
+                    f"deployment Candidate not found: {deployment_id}"
+                )
+            placeholders = ",".join("?" for _ in scope)
+            counts = connection.execute(
+                f"""
+                SELECT
+                    (SELECT COUNT(*) FROM deployment_placement
+                     WHERE deployment_candidate_id IN ({placeholders}))
+                        AS placements,
+                    (SELECT COUNT(*) FROM deployment_run
+                     WHERE deployment_candidate_id IN ({placeholders}))
+                        AS runs
+                """,
+                (*scope, *scope),
+            ).fetchone()
+    except DeploymentAnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    placement_count = 0 if counts is None else int(counts["placements"])
+    run_count = 0 if counts is None else int(counts["runs"])
+    if format_name == "json":
+        print(
+            json.dumps(
+                {
+                    "id": deployment_id,
+                    "deployment_hash": record.deployment_hash,
+                    "created_at": record.created_at,
+                    "scope_candidate_ids": scope,
+                    "placement_count": placement_count,
+                    "run_count": run_count,
+                    "definition": definition.model_dump(mode="json"),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    print(f"Deployment: {deployment_id}")
+    print(f"Derived Candidates: {max(0, len(scope) - 1)}")
+    print(f"Placements: {placement_count}")
+    print(f"Runs: {run_count}")
+    print(f"Created: {record.created_at}")
+    return 0
+
+
+def _deployment_placement_command(
+    database_path: Path,
+    placement_id: str,
+    *,
+    deployment_run_id: str | None,
+    format_name: str,
+) -> int:
+    database = Database(database_path)
+    with database.session() as connection:
+        repository = DeploymentPlacementRepository(connection)
+        record = repository.record(placement_id)
+        placement = repository.get(placement_id)
+        memory = repository.memory(placement_id)
+        allocations = repository.allocations(placement_id)
+    if record is None or placement is None:
+        print(
+            f"error: deployment placement not found: {placement_id}",
+            file=sys.stderr,
+        )
+        return 2
+
+    matrix = None
+    if deployment_run_id is not None:
+        try:
+            matrix = DeploymentAnalysisService(database).memory_matrix(
+                placement_id,
+                deployment_run_id=deployment_run_id,
+            )
+        except DeploymentAnalysisError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+    if format_name == "json":
+        payload = {
+            "record": {
+                "id": record.id,
+                "deployment_candidate_id": record.deployment_candidate_id,
+                "host_id": record.host_id,
+                "feasibility": record.feasibility,
+                "request": dict(record.request),
+                "provenance": dict(record.provenance),
+                "created_at": record.created_at,
+            },
+            "placement": placement.model_dump(mode="json"),
+            "memory": [
+                {
+                    "instance_id": item.instance_id,
+                    "device_id": item.device_id,
+                    "model_bytes": item.model_bytes,
+                    "context_bytes": item.context_bytes,
+                    "compute_bytes": item.compute_bytes,
+                    "total_bytes": item.total_bytes,
+                    "device_total_bytes": item.device_total_bytes,
+                    "device_free_bytes": item.device_free_bytes,
+                    "source": item.source,
+                    "measured_at": item.measured_at,
+                }
+                for item in memory
+            ],
+            "allocations": [
+                {
+                    "device_id": item.device_id,
+                    "projected_bytes": item.projected_bytes,
+                    "reserved_margin_bytes": item.reserved_margin_bytes,
+                    "device_total_bytes": item.device_total_bytes,
+                    "projected_free_bytes": item.projected_free_bytes,
+                }
+                for item in allocations
+            ],
+            "runtime_matrix": (
+                None if matrix is None else matrix.model_dump(mode="json")
+            ),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    print(f"Placement: {record.id}")
+    print(f"Deployment Candidate: {record.deployment_candidate_id}")
+    print(f"Host: {record.host_id}")
+    print(f"Feasibility: {record.feasibility}")
+    for item in allocations:
+        print(
+            f"{item.device_id}: projected={item.projected_bytes} "
+            f"reserved={item.reserved_margin_bytes} "
+            f"free={item.projected_free_bytes}"
+        )
+    if matrix is not None:
+        print(f"Runtime run: {matrix.deployment_run_id}")
+        for row in matrix.rows:
+            values = ", ".join(
+                f"{device}={value if value is not None else '-'}"
+                for device, value in row.values.items()
+            )
+            print(f"{row.source}:{row.key}: {values}")
+    return 0
+
+
+def _parse_deployment_filter(
+    value: str,
+) -> DeploymentAnalysisFilter:
+    path, separator, raw_value = value.partition("=")
+    if not separator or not path:
+        raise DeploymentAnalysisError(
+            f"invalid deployment filter {value!r}; expected PATH=VALUE"
+        )
+    return DeploymentAnalysisFilter(
+        path=path,
+        value=_parse_scalar(raw_value),
+    )
+
+
+def _parse_deployment_objective(
+    value: str,
+) -> DeploymentParetoObjective:
+    head, separator, raw_filters = value.partition("@")
+    parts = head.split(":", 2)
+    if len(parts) != 3 or any(not item for item in parts):
+        raise DeploymentAnalysisError(
+            "invalid deployment objective; expected "
+            "KEY:DIRECTION:METRIC[@FILTERS]"
+        )
+    key, raw_direction, metric = parts
+    direction_map: dict[str, Literal["maximize", "minimize"]] = {
+        "max": "maximize",
+        "maximize": "maximize",
+        "min": "minimize",
+        "minimize": "minimize",
+    }
+    direction = direction_map.get(raw_direction)
+    if direction is None:
+        raise DeploymentAnalysisError(
+            f"invalid deployment Pareto direction: {raw_direction}"
+        )
+    filters = (
+        tuple(
+            _parse_deployment_filter(item)
+            for item in raw_filters.split(";")
+            if item
+        )
+        if separator
+        else ()
+    )
+    return DeploymentParetoObjective(
+        key=key,
+        direction=direction,
+        metric=metric,
+        filters=filters,
+    )
+
+
+def _parse_deployment_constraint(
+    value: str,
+) -> DeploymentMetricConstraint:
+    head, separator, raw_filters = value.partition("@")
+    parts = head.split(":", 2)
+    if len(parts) != 3 or any(not item for item in parts):
+        raise DeploymentAnalysisError(
+            "invalid deployment constraint; expected "
+            "METRIC:OPERATOR:VALUE[@FILTERS]"
+        )
+    metric, operator, raw_threshold = parts
+    if operator not in {"ge", "gt", "le", "lt", "eq"}:
+        raise DeploymentAnalysisError(
+            f"invalid deployment constraint operator: {operator}"
+        )
+    try:
+        threshold = float(raw_threshold)
+    except ValueError as exc:
+        raise DeploymentAnalysisError(
+            "deployment constraint VALUE must be numeric"
+        ) from exc
+    filters = (
+        tuple(
+            _parse_deployment_filter(item)
+            for item in raw_filters.split(";")
+            if item
+        )
+        if separator
+        else ()
+    )
+    return DeploymentMetricConstraint(
+        metric=metric,
+        operator=operator,
+        value=threshold,
+        filters=filters,
+    )
+
+
+def _deployment_results_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    format_name: str,
+    output: Path | None,
+    filter_args: Sequence[str],
+) -> int:
+    database = Database(database_path)
+    try:
+        scope = _deployment_scope_ids(database, deployment_id)
+        rendered = DeploymentAnalysisService(database).export(
+            format_name=format_name,
+            filters=tuple(
+                _parse_deployment_filter(value)
+                for value in filter_args
+            ),
+            deployment_candidate_ids=scope,
+        )
+    except DeploymentAnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if output is None:
+        print(rendered, end="" if rendered.endswith("\n") else "\n")
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+        print(f"Wrote deployment results to {output}")
+    return 0
+
+
+def _deployment_pareto_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    objective_args: Sequence[str],
+    constraint_args: Sequence[str],
+    filter_args: Sequence[str],
+    format_name: str,
+) -> int:
+    database = Database(database_path)
+    try:
+        scope = _deployment_scope_ids(database, deployment_id)
+        result = DeploymentAnalysisService(database).pareto(
+            objectives=tuple(
+                _parse_deployment_objective(value)
+                for value in objective_args
+            ),
+            constraints=tuple(
+                _parse_deployment_constraint(value)
+                for value in constraint_args
+            ),
+            filters=tuple(
+                _parse_deployment_filter(value)
+                for value in filter_args
+            ),
+            deployment_candidate_ids=scope,
+        )
+    except DeploymentAnalysisError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if format_name == "json":
+        print(result.model_dump_json(indent=2))
+        return 0
+
+    print(f"Evaluated placements: {result.evaluated_count}")
+    print(f"Frontier placements: {len(result.frontier)}")
+    for point in result.frontier:
+        values = " ".join(
+            f"{key}={_format_number(value)}"
+            for key, value in sorted(point.values.items())
+        )
+        print(
+            f"{point.deployment_placement_id}\t"
+            f"{point.deployment_candidate_id}\t{values}"
+        )
+    if result.excluded:
+        print("Excluded:")
+        for placement_id, reason in sorted(result.excluded.items()):
+            print(f"  {placement_id}: {reason}")
+    return 0
+
+
 def _deployment_benchmark_command(
     database_path: Path,
     spec_path: Path,
