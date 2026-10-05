@@ -1085,6 +1085,46 @@ textarea.planner-textarea:focus {
   margin-bottom: 0;
 }
 
+.rejection-list,
+.interference-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.rejection-card,
+.interference-card,
+.pareto-objective-card {
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.interference-card.is-invalid {
+  border-color: #fecaca;
+  background: #fff9f8;
+}
+
+.interference-card .metric-grid {
+  margin-top: 14px;
+}
+
+.pareto-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.pareto-objective-card > strong {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.pareto-constraint-row {
+  margin-bottom: 14px;
+}
+
 .app-footer {
   padding: 22px 20px 34px;
   color: #94a3b8;
@@ -1111,7 +1151,8 @@ textarea.planner-textarea:focus {
     grid-template-columns: repeat(2, minmax(150px, 1fr));
   }
 
-  .two-column {
+  .two-column,
+  .pareto-controls {
     grid-template-columns: 1fr;
   }
 }
