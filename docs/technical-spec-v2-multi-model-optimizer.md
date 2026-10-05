@@ -472,6 +472,10 @@ The executor shall:
 
 If one instance fails, the run remains a deployment failure even if another instance completes.
 
+The V2-M6 implementation reuses the M5 resident-server lifecycle. Each generated phase prepares every client before a shared `threading.Barrier`; the barrier action records the monotonic release timestamp used by all members. The production llama-server client prewarms `depth_tokens` before the barrier, then streams `/completion` with prompt-progress and predicted-token counters. Per-member evidence retains client-ready, barrier-release, request, token, and finish timestamps plus cumulative token events.
+
+Generated phases come from the existing Candidate-dependent workload-suite expander. For two instances, the planner forms the Cartesian product of concrete prefill/decode cases required by DD/PP/PD/DP, which naturally includes equal-depth and asymmetric-depth combinations when shallow and deep cases are present in the suite.
+
 ### 11.3 Workload depth
 
 Prompt and decode depths remain explicit. Mixed phases should include shallow and deep-context cases because placement interference can change as KV occupancy grows.
@@ -507,6 +511,8 @@ combined_prompt_processing_tps =
 
 Do not sum independently measured rates from non-overlapping intervals.
 
+M6 uses cumulative prompt/decode token events to count only tokens observed inside the common active interval. The common interval starts at the latest member request start and ends at the earliest member finish. A phase with no positive common interval is persisted as `no_overlap` and is not assigned aggregate throughput.
+
 ### 12.3 Retention / interference
 
 For each instance and workload kind:
@@ -524,6 +530,8 @@ latency_increase_pct
 ~~~
 
 These metrics expose candidates that maximize aggregate throughput by starving one service.
+
+M6 standalone baselines are exact-match evidence keyed by Candidate, resolved placement, host, binary, workload mode, prompt/generate token counts, and depth. Re-importing the exact same evidence is idempotent. Multiple conflicting exact matches are surfaced as `baseline_ambiguous`; no match is `baseline_missing`. Neither condition is guessed away. When baseline latency is available, M6 also persists the baseline latency and the concurrent percentage increase.
 
 ### 12.4 Fairness
 
@@ -759,6 +767,15 @@ result_json
 
 V2-M5 migration 010 adds the explicit server lifecycle fields above. They preserve enough evidence to diagnose startup/readiness/cleanup behavior independently for every resident model instance while retaining `result_json` for extensible member metadata.
 
+V2-M6 migrations 011 and 012 add:
+
+- `deployment_concurrent_workload_case` for immutable generated phase definitions;
+- `deployment_workload_run` for phase status, quality, barrier/overlap timing, aggregate token counts/TPS, minimum retention, correctness, and failure evidence;
+- `deployment_workload_member` for per-instance native/overlap throughput, timing, exact baseline reference, retention/loss, latency delta, correctness, and raw evidence;
+- `deployment_standalone_baseline` for exact standalone denominators.
+
+Raw member JSON always includes serialized cumulative token events so the overlap calculation remains auditable even for non-production client implementations.
+
 Existing generic metric and telemetry storage should be reused where practical.
 
 ## 18. Placement cache identity
@@ -783,17 +800,20 @@ Deployment-level feasibility cache identity additionally includes every resident
 
 ## 19. CLI
 
-Implemented through V2-M5:
+Implemented through V2-M6:
 
 ~~~text
 llprof deployment preview deployment-plan.json
 llprof deployment plan deployment-plan.json
 llprof deployment execute deployment-execution.json
+llprof deployment benchmark deployment-benchmark.json
 ~~~
 
 The M5 execution specification identifies one persisted `deployment_placement_id` and supplies the concrete model path for every instance. Optional fields select bind host, readiness timeout, residency hold duration, and per-instance draft model paths. Execution persists the actual endpoints selected by the collision-safe port allocator.
 
-Later milestones add deployment results, resume/cancel surfaces, and Pareto analysis without changing the M5 execution record semantics.
+The M6 benchmark specification reuses those placement/model inputs and may add exact standalone baselines. Each baseline names the instance, prefill/decode mode, prompt/generate counts, depth, standalone TPS, and optional latency. `deployment benchmark` keeps the same servers resident, executes the generated DD/PP/PD/DP phase matrix, persists member/aggregate timing and retention evidence, and prints phase quality plus combined PP/TG TPS and minimum retention.
+
+Later milestones add deployment result exploration, resume/cancel surfaces, and Pareto analysis without changing the M5/M6 execution record semantics.
 
 Planning output should show:
 
