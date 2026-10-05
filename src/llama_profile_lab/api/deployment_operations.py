@@ -414,7 +414,9 @@ class DeploymentOperationManager:
             if record is None:
                 return
             requested = record.requested_action
-            if requested == "pause":
+            if summary is not None:
+                terminal = "completed"
+            elif requested == "pause":
                 terminal = "paused"
             elif requested == "cancel":
                 terminal = "cancelled"
