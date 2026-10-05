@@ -585,6 +585,44 @@ def test_deployment_inspection_results_and_pareto(tmp_path: Path) -> None:
     )
 
 
+def test_deployment_progress_does_not_double_count_recovered_candidate(
+    tmp_path: Path,
+) -> None:
+    database, subjects = _seed(tmp_path)
+    base_id = subjects["a"][0]
+    _link_plan(database, base_id, {"a": subjects["a"]})
+    with database.session() as connection:
+        runs = DeploymentRunRepository(connection)
+        failed_run_id = runs.create(
+            deployment_candidate_id=subjects["a"][0],
+            deployment_placement_id=subjects["a"][1],
+            status="ready",
+        )
+        runs.finish(
+            failed_run_id,
+            status="failed",
+            duration_ns=1,
+            failure_kind="synthetic_failure",
+            failure_details={"error": "recovered later"},
+        )
+
+    app = create_app(
+        database.path,
+        deployment_operation_manager=SequencedDeploymentOperations(),
+    )
+    response = api_request(
+        app,
+        "GET",
+        f"/api/deployments/{base_id}/progress",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["planned_candidates"] == 1
+    assert payload["completed_candidates"] == 1
+    assert payload["failed_candidates"] == 0
+
+
 def test_deployment_run_control_routes_and_sse(tmp_path: Path) -> None:
     database, subjects = _seed(tmp_path)
     base_id = subjects["a"][0]
@@ -643,6 +681,9 @@ def test_deployment_run_control_routes_and_sse(tmp_path: Path) -> None:
     assert payloads[-1]["memory"]["deployment_placement_id"] == subjects["a"][1]
     assert "combined_prompt_tps" in payloads[-1]
     assert "combined_decode_tps" in payloads[-1]
+    assert "current_combined_prompt_tps" in payloads[-1]
+    assert "current_combined_decode_tps" in payloads[-1]
+    assert "current_min_retention" in payloads[-1]
 
     operations = SequencedDeploymentOperations()
     app = create_app(
