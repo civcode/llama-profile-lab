@@ -1510,6 +1510,367 @@ def _ui_command(
     return 0
 
 
+def _deployment_api_service(database_path: Path) -> ApiService:
+    database = Database(database_path)
+    return ApiService(
+        database,
+        profiles=LauncherProfileProvider(None),
+        operations=OperationManager(database),
+        deployment_operations=DeploymentOperationManager(database),
+    )
+
+
+def _deployment_create_command(
+    database_path: Path,
+    spec_path: Path,
+) -> int:
+    try:
+        raw = json.loads(
+            spec_path.expanduser().resolve().read_text(encoding="utf-8")
+        )
+        if not isinstance(raw, dict):
+            raise ValueError("deployment create spec must be a JSON object")
+        deployment_raw = raw.get("deployment", raw)
+        if not isinstance(deployment_raw, dict):
+            raise ValueError("deployment definition must be a JSON object")
+        deployment = DeploymentCandidate.model_validate(deployment_raw)
+        result = _deployment_api_service(
+            database_path
+        ).create_deployment(
+            DeploymentCreateRequest(deployment=deployment)
+        )
+    except (
+        ApiConflictError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Deployment: {result.id}")
+    print(f"Status: {result.status}")
+    print(f"Instances: {len(result.definition.instances)}")
+    return 0
+
+
+def _deployment_show_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    format_name: str,
+) -> int:
+    try:
+        result = _deployment_api_service(
+            database_path
+        ).get_deployment(deployment_id)
+    except ApiNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if format_name == "json":
+        print(result.model_dump_json(indent=2))
+        return 0
+
+    print(f"Deployment: {result.id}")
+    print(f"Status: {result.status}")
+    print(f"Created: {result.created_at}")
+    print(f"Plans: {result.plan_count}")
+    print(f"Placements: {result.placement_count}")
+    print(f"Runs: {result.run_count}")
+    print(f"Latest plan: {result.latest_plan_id or '-'}")
+    for instance in result.definition.instances:
+        print(
+            f"{instance.instance_id}: role={instance.role} "
+            f"candidate={instance.candidate_id} "
+            f"binary={instance.binary_id}"
+        )
+    return 0
+
+
+def _deployment_placement_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    format_name: str,
+) -> int:
+    try:
+        response = _deployment_api_service(
+            database_path
+        ).list_deployment_placements(deployment_id)
+    except (ApiNotFoundError, DeploymentAnalysisError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if format_name == "json":
+        print(response.model_dump_json(indent=2))
+        return 0
+    if not response.items:
+        print("No deployment placements.")
+        return 0
+
+    for index, item in enumerate(response.items):
+        if index:
+            print()
+        print(
+            f"Placement: {item.id} "
+            f"candidate={item.deployment_candidate_id} "
+            f"feasibility={item.feasibility}"
+        )
+        devices = item.memory.devices
+        print("Memory matrix:")
+        print("  row/source  " + "  ".join(devices))
+        for row in item.memory.rows:
+            values = "  ".join(
+                "-"
+                if row.values.get(device) is None
+                else str(row.values[device])
+                for device in devices
+            )
+            print(f"  {row.key}/{row.source}  {values}")
+    return 0
+
+
+def _operation_spec_from_path(path: Path) -> DeploymentOperationSpec:
+    (
+        placement_id,
+        inputs,
+        baselines,
+        host,
+        readiness_timeout_seconds,
+    ) = _load_concurrent_deployment_spec(path)
+    return DeploymentOperationSpec(
+        deployment_placement_id=placement_id,
+        inputs=inputs,
+        standalone_baselines=baselines,
+        host=host,
+        readiness_timeout_seconds=readiness_timeout_seconds,
+    )
+
+
+def _render_deployment_operation(snapshot) -> str:
+    return (
+        f"Operation: {snapshot.id}\n"
+        f"Deployment: {snapshot.deployment_candidate_id}\n"
+        f"Placement: {snapshot.deployment_placement_id}\n"
+        f"Run: {snapshot.deployment_run_id or '-'}\n"
+        f"Status: {snapshot.status}\n"
+        f"Action: {snapshot.requested_action or '-'}\n"
+        f"Error: {snapshot.error or '-'}"
+    )
+
+
+def _deployment_run_command(
+    database_path: Path,
+    deployment_id: str,
+    spec_path: Path,
+) -> int:
+    try:
+        snapshot = DeploymentOperationManager(
+            Database(database_path)
+        ).start(
+            deployment_id,
+            _operation_spec_from_path(spec_path),
+            background=False,
+        )
+    except (
+        DeploymentOperationError,
+        DeploymentExecutionError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(_render_deployment_operation(snapshot))
+    return 0 if snapshot.status == "completed" else 2
+
+
+def _deployment_resume_command(
+    database_path: Path,
+    deployment_id: str,
+    spec_path: Path | None,
+) -> int:
+    try:
+        spec = (
+            None
+            if spec_path is None
+            else _operation_spec_from_path(spec_path)
+        )
+        snapshot = DeploymentOperationManager(
+            Database(database_path)
+        ).resume(
+            deployment_id,
+            spec,
+            background=False,
+        )
+    except (
+        DeploymentOperationError,
+        DeploymentExecutionError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(_render_deployment_operation(snapshot))
+    return 0 if snapshot.status == "completed" else 2
+
+
+def _deployment_control_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    action: str,
+) -> int:
+    manager = DeploymentOperationManager(Database(database_path))
+    try:
+        if action == "pause":
+            snapshot = manager.pause(deployment_id)
+        elif action == "cancel":
+            snapshot = manager.cancel(deployment_id)
+        else:
+            raise ValueError(f"unsupported deployment action: {action}")
+    except (DeploymentOperationError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(_render_deployment_operation(snapshot))
+    return 0
+
+
+def _deployment_results_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    filter_args: Sequence[str],
+    format_name: str,
+    output: Path | None,
+) -> int:
+    try:
+        filters = parse_deployment_filters(tuple(filter_args))
+        response = _deployment_api_service(
+            database_path
+        ).deployment_results(
+            deployment_id,
+            filters=filters,
+        )
+    except (
+        ApiNotFoundError,
+        DeploymentAnalysisError,
+        ValueError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if format_name == "json":
+        rendered = response.model_dump_json(indent=2)
+    elif format_name == "csv":
+        rendered = _deployment_rows_csv(response.rows)
+    else:
+        lines = [
+            f"Deployment: {response.deployment_id}",
+            f"Rows: {len(response.rows)}",
+        ]
+        for row in response.rows:
+            lines.append(
+                "  "
+                f"placement={row.get('deployment_placement_id', '-')} "
+                f"run={row.get('deployment_run_id', '-')} "
+                f"phase={row.get('phase', '-')} "
+                f"status={row.get('workload_status') or row.get('deployment_status', '-')} "
+                f"pp_tps={row.get('combined_pp_tps', '-')} "
+                f"tg_tps={row.get('combined_tg_tps', '-')} "
+                f"retention={row.get('min_retention', '-')}"
+            )
+        rendered = "\n".join(lines)
+    _write_text_output(rendered, output)
+    return 0
+
+
+def _deployment_pareto_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    objective_args: Sequence[str],
+    constraint_args: Sequence[str],
+    filter_args: Sequence[str],
+    format_name: str,
+) -> int:
+    try:
+        response = _deployment_api_service(
+            database_path
+        ).deployment_pareto(
+            deployment_id,
+            objectives=parse_deployment_objectives(
+                tuple(objective_args)
+            ),
+            constraints=parse_deployment_constraints(
+                tuple(constraint_args)
+            ),
+            filters=parse_deployment_filters(tuple(filter_args)),
+        )
+    except (
+        ApiNotFoundError,
+        DeploymentAnalysisError,
+        ValueError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if format_name == "json":
+        print(response.model_dump_json(indent=2))
+        return 0
+
+    result = response.result
+    print(f"Deployment: {deployment_id}")
+    print(f"Evaluated: {result.evaluated_count}")
+    print(f"Frontier: {len(result.frontier)}")
+    for point in result.frontier:
+        values = " ".join(
+            f"{key}={value:.6g}"
+            for key, value in point.values.items()
+        )
+        print(
+            f"  {point.deployment_placement_id} "
+            f"candidate={point.deployment_candidate_id} {values}"
+        )
+    if result.excluded:
+        print("Excluded:")
+        for placement_id, reason in sorted(result.excluded.items()):
+            print(f"  {placement_id}: {reason}")
+    return 0
+
+
+def _deployment_rows_csv(
+    rows: Sequence[dict[str, object]],
+) -> str:
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue()
+
+
+def _write_text_output(
+    value: str,
+    output: Path | None,
+) -> None:
+    if output is None:
+        print(value)
+        return
+    resolved = output.expanduser().resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(value, encoding="utf-8")
+    print(resolved)
+
+
 def _deployment_benchmark_command(
     database_path: Path,
     spec_path: Path,
