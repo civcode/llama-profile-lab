@@ -598,6 +598,19 @@ class ConcurrentDeploymentExecutor:
                         if retention is None
                         else retention.throughput_loss_pct
                     ),
+                    baseline_latency_ms=(
+                        None
+                        if retention is None
+                        else matches[0].latency_ms
+                    ),
+                    latency_increase_pct=(
+                        _latency_increase_pct(
+                            result.latency_ms,
+                            matches[0].latency_ms,
+                        )
+                        if retention is not None
+                        else None
+                    ),
                     failure_details=(
                         None
                         if result.failure is None
@@ -656,6 +669,8 @@ class ConcurrentDeploymentExecutor:
                     standalone_tps=None,
                     retention=None,
                     throughput_loss_pct=None,
+                    baseline_latency_ms=None,
+                    latency_increase_pct=None,
                     failure_details=(
                         None
                         if result.failure is None
@@ -722,6 +737,23 @@ class ConcurrentDeploymentExecutor:
             failure_kind="member_failed",
             failure_details={"preparation_failures": failures},
         )
+
+
+def _latency_increase_pct(
+    concurrent_latency_ms: float | None,
+    baseline_latency_ms: float | None,
+) -> float | None:
+    if (
+        concurrent_latency_ms is None
+        or baseline_latency_ms is None
+        or baseline_latency_ms <= 0
+    ):
+        return None
+    return (
+        (concurrent_latency_ms - baseline_latency_ms)
+        / baseline_latency_ms
+        * 100.0
+    )
 
 
 def _member_failure(
