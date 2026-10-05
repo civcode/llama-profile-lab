@@ -1352,7 +1352,14 @@ class ApiService:
                             THEN pc.deployment_candidate_id
                         END) AS completed,
                         COUNT(DISTINCT CASE
-                            WHEN EXISTS (
+                            WHEN NOT EXISTS (
+                                SELECT 1
+                                FROM deployment_run AS dr
+                                WHERE dr.deployment_placement_id =
+                                      pc.deployment_placement_id
+                                  AND dr.status = 'completed'
+                            )
+                             AND EXISTS (
                                 SELECT 1
                                 FROM deployment_run AS dr
                                 WHERE dr.deployment_placement_id =
