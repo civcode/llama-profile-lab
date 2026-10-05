@@ -37,6 +37,7 @@ from llama_profile_lab.execution.server_validation import (
 )
 from llama_profile_lab.execution.telemetry import (
     AutoGpuTelemetryProvider,
+    CompositeGpuTelemetryProvider,
     LinuxTelemetryProvider,
     RunQualityPolicy,
     TelemetryProvider,
@@ -77,6 +78,7 @@ __all__ = [
     "TelemetryProvider",
     "TelemetrySampler",
     "AutoGpuTelemetryProvider",
+    "CompositeGpuTelemetryProvider",
     "classify_run_quality",
     "detect_basic_host",
     "resolved_placement_from_record",
