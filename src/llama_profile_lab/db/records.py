@@ -368,6 +368,23 @@ class DeploymentRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentOperationRecord:
+    """Durable deployment execution/control operation."""
+
+    id: str
+    base_deployment_candidate_id: str
+    deployment_placement_id: str
+    deployment_run_id: str | None
+    request: Mapping[str, Any]
+    status: str
+    requested_action: str | None
+    started_at: str
+    finished_at: str | None
+    error: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentGpuSampleRecord:
     """One timestamped per-device GPU snapshot during deployment residency."""
 
