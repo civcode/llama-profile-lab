@@ -213,6 +213,20 @@ def _run_body(placement_id: str) -> dict[str, object]:
     }
 
 
+def test_deployment_routes_preserve_v1_api_surface(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "api.db")
+    paths = {route.path for route in app.routes}
+
+    assert "/api/experiments" in paths
+    assert "/api/experiments/{experiment_id}" in paths
+    assert "/api/experiments/{experiment_id}/events" in paths
+    assert "/api/runs/{run_id}" in paths
+    assert "/api/runs/{run_id}/telemetry" in paths
+    assert "/api/placements" in paths
+    assert "/api/deployments" in paths
+    assert "/api/deployments/{deployment_id}/events" in paths
+
+
 def test_deployment_create_plan_get_and_invalid_reference(
     tmp_path: Path,
     monkeypatch,
