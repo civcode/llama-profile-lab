@@ -8,10 +8,66 @@ import pytest
 import llama_profile_lab.cli.main as cli_module
 from llama_profile_lab.cli.main import main
 from llama_profile_lab.execution import (
+    ConcurrentDeploymentSummary,
+    ConcurrentPhaseSummary,
     DeploymentExecutionMember,
     DeploymentExecutionSummary,
 )
 from llama_profile_lab.planning import DeploymentPlanSummary
+
+
+class FakeConcurrentDeploymentExecutor:
+    def __init__(self, database) -> None:
+        self.database = database
+
+    def execute(
+        self,
+        placement_id,
+        inputs,
+        *,
+        standalone_baselines,
+        host,
+        readiness_timeout_seconds,
+    ) -> ConcurrentDeploymentSummary:
+        assert placement_id == "deployplace_1"
+        assert [item.instance_id for item in inputs] == ["qwen", "flash"]
+        assert len(standalone_baselines) == 2
+        assert standalone_baselines[0].instance_id == "qwen"
+        assert standalone_baselines[0].latency_ms == 1000.0
+        assert host == "127.0.0.1"
+        assert readiness_timeout_seconds == 45.0
+        execution = FakeDeploymentExecutor(self.database).execute(
+            placement_id,
+            inputs,
+            host=host,
+            readiness_timeout_seconds=readiness_timeout_seconds,
+            residency_hold_seconds=0.0,
+        )
+        return ConcurrentDeploymentSummary(
+            deployment_run_id=execution.run_id,
+            deployment_placement_id=placement_id,
+            phases=(
+                ConcurrentPhaseSummary(
+                    run_id="conc_1",
+                    workload_case_id="work_dd",
+                    phase="dd",
+                    quality="clean",
+                    combined_prompt_tps=None,
+                    combined_decode_tps=42.0,
+                    min_retention=0.8,
+                ),
+                ConcurrentPhaseSummary(
+                    run_id="conc_2",
+                    workload_case_id="work_pp",
+                    phase="pp",
+                    quality="clean",
+                    combined_prompt_tps=123.0,
+                    combined_decode_tps=None,
+                    min_retention=0.75,
+                ),
+            ),
+            execution=execution,
+        )
 
 
 class FakeDeploymentExecutor:
@@ -230,6 +286,74 @@ def test_deployment_cli_execute(
     assert "Status: completed" in output
     assert "qwen: http://127.0.0.1:41001" in output
     assert "flash: http://127.0.0.1:41002" in output
+
+
+def test_deployment_cli_benchmark(
+    tmp_path: Path,
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spec = tmp_path / "benchmark.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "deployment_placement_id": "deployplace_1",
+                "instances": [
+                    {
+                        "instance_id": "qwen",
+                        "model_path": "/models/qwen.gguf",
+                    },
+                    {
+                        "instance_id": "flash",
+                        "model_path": "/models/flash.gguf",
+                    },
+                ],
+                "readiness_timeout_seconds": 45,
+                "standalone_baselines": [
+                    {
+                        "instance_id": "qwen",
+                        "mode": "decode",
+                        "prompt_tokens": 0,
+                        "generate_tokens": 32,
+                        "depth_tokens": 128,
+                        "throughput_tps": 20.0,
+                        "latency_ms": 1000.0,
+                    },
+                    {
+                        "instance_id": "flash",
+                        "mode": "decode",
+                        "prompt_tokens": 0,
+                        "generate_tokens": 32,
+                        "depth_tokens": 128,
+                        "throughput_tps": 22.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "ConcurrentDeploymentExecutor",
+        FakeConcurrentDeploymentExecutor,
+    )
+
+    assert main(
+        [
+            "deployment",
+            "benchmark",
+            str(spec),
+            "--database",
+            str(tmp_path / "benchmarks.db"),
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "Concurrent phases: 2" in output
+    assert "DD: quality=clean" in output
+    assert "tg_tps=42.000" in output
+    assert "PP: quality=clean" in output
+    assert "pp_tps=123.000" in output
 
 
 def test_deployment_cli_rejects_invalid_spec(
