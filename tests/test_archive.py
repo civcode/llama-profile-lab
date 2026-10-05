@@ -38,7 +38,7 @@ def test_archive_contains_consistent_database_snapshot_and_hashed_manifest(
     manifest = ArchiveService(database).create(output, artifacts=(artifact,))
 
     assert manifest.format == "llprof-archive-v1"
-    assert manifest.schema_version == 14
+    assert manifest.schema_version == 15
     assert output.is_file()
 
     extraction = tmp_path / "archive"
