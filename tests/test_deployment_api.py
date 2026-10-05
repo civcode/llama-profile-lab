@@ -227,6 +227,20 @@ def test_deployment_routes_preserve_v1_api_surface(tmp_path: Path) -> None:
     assert "/api/deployments/{deployment_id}/events" in paths
 
 
+def test_deployment_list_returns_persisted_definitions(tmp_path: Path) -> None:
+    database, subjects = _seed(tmp_path)
+    app = create_app(
+        database.path,
+        deployment_operation_manager=SequencedDeploymentOperations(),
+    )
+
+    response = api_request(app, "GET", "/api/deployments")
+    assert response.status_code == 200
+    ids = {item["id"] for item in response.json()["items"]}
+    assert subjects["a"][0] in ids
+    assert subjects["b"][0] in ids
+
+
 def test_deployment_create_plan_get_and_invalid_reference(
     tmp_path: Path,
     monkeypatch,
