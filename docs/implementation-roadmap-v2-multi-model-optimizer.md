@@ -430,7 +430,7 @@ Implementation validation completed locally without GitHub Actions:
 
 - V2-M2 domain, device-list, estimator adapter, persistence, execution, migration, and failure-path tests pass;
 - V1 domain and V2-M1 regression tests remain green;
-- 62 relevant pytest tests pass after the host-scoped cache and binary-drift hardening changes;
+- 63 relevant pytest tests pass after the host-scoped cache and binary-drift hardening changes;
 - Python compile checks pass;
 - synthetic helper coverage includes one GPU, homogeneous two-GPU, and heterogeneous two-device inventories, successful estimates, cache reuse, malformed JSON, nonzero exit, timeout, cancellation, and helper SHA drift.
 
