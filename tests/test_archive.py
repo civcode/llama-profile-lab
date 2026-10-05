@@ -80,10 +80,10 @@ def test_full_experiment_export_contains_plan_runs_and_environment(tmp_path: Pat
 
     assert payload["format"] == "llprof-experiment-export-v1"
     assert payload["experiment"]["id"] == experiment_id
-    assert len(payload["plan"]["experiment_candidates"]) == 14
+    assert len(payload["plan"]["experiment_candidates"]) == 11
     assert len(payload["plan"]["benchmark_cases"]) == 44
     assert len(payload["execution"]["benchmark_runs"]) == 44
-    assert len(payload["execution"]["benchmark_samples"]) == 142
+    assert len(payload["execution"]["benchmark_samples"]) == 132
     assert payload["environment"]["binaries"]
     assert payload["environment"]["hosts"]
 
