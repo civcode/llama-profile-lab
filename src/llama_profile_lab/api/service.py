@@ -1004,9 +1004,19 @@ class ApiService:
         with self.database.session() as connection:
             rows = connection.execute(
                 """
-                SELECT id
-                FROM deployment_candidate
-                ORDER BY created_at DESC, id DESC
+                SELECT dc.id
+                FROM deployment_candidate AS dc
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM deployment_plan AS plan
+                    WHERE plan.base_deployment_candidate_id = dc.id
+                )
+                   OR NOT EXISTS (
+                    SELECT 1
+                    FROM deployment_plan_case AS pc
+                    WHERE pc.deployment_candidate_id = dc.id
+                )
+                ORDER BY dc.created_at DESC, dc.id DESC
                 """
             ).fetchall()
         return DeploymentListResponse(
