@@ -5,6 +5,12 @@ describe("hash routing", () => {
   it("routes experiment and candidate URLs without a router dependency", () => {
     expect(parseRoute("#/")).toEqual({ kind: "experiments" });
     expect(parseRoute("#/new")).toEqual({ kind: "new" });
+    expect(parseRoute("#/deployments")).toEqual({ kind: "deployments" });
+    expect(parseRoute("#/deployments/new")).toEqual({ kind: "newDeployment" });
+    expect(parseRoute("#/deployments/deploy-1")).toEqual({
+      kind: "deployment",
+      deploymentId: "deploy-1"
+    });
     expect(parseRoute("#/experiments/exp-1")).toEqual({
       kind: "experiment",
       experimentId: "exp-1"
