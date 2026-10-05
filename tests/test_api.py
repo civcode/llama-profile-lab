@@ -250,7 +250,7 @@ def test_health_profiles_binary_registration_and_experiment_planning(
 
     health = api_request(app, "GET", "/api/health")
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 5
+    assert health.json()["schema_version"] == 6
 
     profiles = api_request(app, "GET", "/api/profiles")
     assert profiles.status_code == 200
