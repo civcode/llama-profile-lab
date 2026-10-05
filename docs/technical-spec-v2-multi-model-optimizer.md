@@ -241,6 +241,18 @@ The helper executable must be fingerprinted like other llama.cpp tools.
 
 Text log parsing may be supported as a compatibility fallback, but structured output is preferred.
 
+The V2-M2 implementation resolves this boundary as a separately registered binary kind,
+`llama-memory-estimator`, with a strict version-1 JSON contract documented in
+`docs/memory-estimator-helper-v1.md`. Successful standalone estimates are cached by stable
+host identity, Candidate semantic hash, model artifact identity, helper SHA-256, and exact
+placement/device-order inputs. Attempts retain argv, stdout, stderr, exit status, duration,
+and typed failure state.
+
+Standalone estimates are stored in `memory_estimate` and `memory_estimate_device`.
+`placement_device_memory` remains tied to a concrete joint `DeploymentPlacement`; the
+joint planner introduced in V2-M4 materializes the selected standalone estimate rows into
+that table rather than inventing deployment identity during M2.
+
 ### 8.4 Multi-model memory feasibility
 
 For an independently served deployment, projected memory on a device is:
