@@ -1466,8 +1466,20 @@ def _export_row(item: _Observation) -> dict[str, Any]:
                 if member.mode == "prefill"
                 else member.native_decode_tps
             )
+            row[prefix + "overlap_tps"] = (
+                member.overlap_prompt_tps
+                if member.mode == "prefill"
+                else member.overlap_decode_tps
+            )
+            row[prefix + "standalone_tps"] = member.standalone_tps
             row[prefix + "retention"] = member.retention
+            row[prefix + "throughput_loss_pct"] = (
+                member.throughput_loss_pct
+            )
             row[prefix + "latency_ms"] = member.latency_ms
+            row[prefix + "baseline_latency_ms"] = (
+                member.baseline_latency_ms
+            )
             row[prefix + "latency_increase_pct"] = (
                 member.latency_increase_pct
             )
