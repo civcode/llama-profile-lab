@@ -1020,6 +1020,46 @@ select:disabled {
   background: #f2edff;
 }
 
+.memory-delta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.memory-delta-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.memory-delta-card > strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.memory-delta-card > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-delta-card b {
+  font-variant-numeric: tabular-nums;
+}
+
+.delta-worse {
+  color: var(--danger);
+}
+
+.delta-better {
+  color: var(--success);
+}
+
 .memory-matrix td:not(:first-child),
 .memory-matrix th:not(:first-child) {
   text-align: right;
