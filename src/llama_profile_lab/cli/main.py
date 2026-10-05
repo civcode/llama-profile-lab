@@ -21,6 +21,7 @@ from llama_profile_lab.analysis import (
     ParetoObjective,
     serialize_export,
 )
+from llama_profile_lab.acceptance import evaluate_deployment_acceptance
 from llama_profile_lab.api.deployment_operations import (
     DeploymentOperationError,
     DeploymentOperationManager,
@@ -516,6 +517,32 @@ def _add_deployment_parser(
     export.add_argument("deployment_id")
     export.add_argument("--output", type=Path, default=None)
     _add_database_argument(export)
+
+    acceptance = deployment_commands.add_parser(
+        "acceptance-report",
+        help="Evaluate persisted V2 workstation-acceptance evidence.",
+    )
+    acceptance.add_argument("deployment_id")
+    acceptance.add_argument(
+        "--minimum-devices",
+        type=int,
+        default=2,
+        help="Minimum simultaneously observed accelerator count.",
+    )
+    acceptance.add_argument(
+        "--minimum-phase-repetitions",
+        type=int,
+        default=3,
+        help="Required correctness-valid repetitions for DD/PP/PD/DP.",
+    )
+    acceptance.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default="table",
+        dest="format_name",
+    )
+    acceptance.add_argument("--output", type=Path, default=None)
+    _add_database_argument(acceptance)
 
     pareto = deployment_commands.add_parser(
         "pareto",
@@ -1816,6 +1843,58 @@ def _deployment_export_command(
     return 0
 
 
+def _deployment_acceptance_command(
+    database_path: Path,
+    deployment_id: str,
+    *,
+    minimum_devices: int,
+    minimum_phase_repetitions: int,
+    format_name: str,
+    output: Path | None,
+) -> int:
+    try:
+        report = evaluate_deployment_acceptance(
+            Database(database_path),
+            deployment_id,
+            minimum_devices=minimum_devices,
+            minimum_phase_repetitions=minimum_phase_repetitions,
+        )
+    except (ArchiveError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if format_name == "json":
+        rendered = json.dumps(
+            report,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    else:
+        lines = [
+            f"Deployment: {report['deployment_id']}",
+            (
+                "Machine-checkable evidence: PASS"
+                if report["machine_checks_passed"]
+                else "Machine-checkable evidence: FAIL"
+            ),
+            (
+                "Release ready: yes"
+                if report["release_ready"]
+                else "Release ready: no"
+            ),
+            "Checks:",
+        ]
+        for item in report["checks"]:
+            lines.append(
+                f"  {str(item['status']).upper():7} "
+                f"{item['key']}: {item['summary']}"
+            )
+        rendered = "\n".join(lines)
+    _write_text_output(rendered, output)
+    return 0 if report["machine_checks_passed"] else 1
+
+
 def _deployment_pareto_command(
     database_path: Path,
     deployment_id: str,
@@ -2751,6 +2830,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _deployment_export_command(
                 args.database,
                 args.deployment_id,
+                output=args.output,
+            )
+        if args.deployment_command == "acceptance-report":
+            return _deployment_acceptance_command(
+                args.database,
+                args.deployment_id,
+                minimum_devices=args.minimum_devices,
+                minimum_phase_repetitions=args.minimum_phase_repetitions,
+                format_name=args.format_name,
                 output=args.output,
             )
         if args.deployment_command == "pareto":
