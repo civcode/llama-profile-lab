@@ -112,10 +112,16 @@ def test_discovery_searches_explicit_directories(tmp_path: Path) -> None:
     native_dir.mkdir(parents=True)
     bench = native_dir / "llama-bench"
     fit = native_dir / "llama-fit-params"
+    memory = native_dir / "llama-memory-estimator"
     server = native_dir / "llama-server"
     speed = native_dir / "speed_bench.py"
     write_fake_binary(bench, version="version: 1 (aaaaaaa)", help_text="  --model F")
     write_fake_binary(fit, version="version: 1 (aaaaaaa)", help_text="  --fit-target N")
+    write_fake_binary(
+        memory,
+        version="version: 1 (aaaaaaa)",
+        help_text="  --json\n  --list-devices",
+    )
     write_fake_binary(server, version="version: 1 (aaaaaaa)", help_text="  --model F")
     write_fake_binary(speed, version="version: 1", help_text="  --url URL\n  --output FILE")
 
@@ -123,8 +129,15 @@ def test_discovery_searches_explicit_directories(tmp_path: Path) -> None:
 
     assert discovered == tuple(
         sorted(
-            (bench.resolve(), fit.resolve(), server.resolve(), speed.resolve()),
+            (
+                bench.resolve(),
+                fit.resolve(),
+                memory.resolve(),
+                server.resolve(),
+                speed.resolve(),
+            ),
             key=str,
         )
     )
+    assert probe_binary(memory).kind == "llama-memory-estimator"
     assert probe_binary(speed).kind == "speed-bench"
