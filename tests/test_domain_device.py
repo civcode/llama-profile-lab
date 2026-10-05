@@ -71,6 +71,19 @@ def test_memory_estimate_identity_rejects_split_length_mismatch() -> None:
         )
 
 
+def test_memory_estimate_device_rejects_negative_memory() -> None:
+    with pytest.raises(ValidationError):
+        MemoryEstimateDevice(
+            logical_device_name="CUDA0",
+            model_bytes=-1,
+            context_bytes=0,
+            compute_bytes=0,
+            total_bytes=0,
+            device_total_bytes=100,
+            device_free_bytes=50,
+        )
+
+
 def test_memory_estimate_device_rejects_impossible_totals() -> None:
     with pytest.raises(ValidationError, match="total_bytes"):
         MemoryEstimateDevice(
