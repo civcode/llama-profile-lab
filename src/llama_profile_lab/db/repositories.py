@@ -38,11 +38,9 @@ from llama_profile_lab.db.records import (
 from llama_profile_lab.domain import (
     Candidate,
     DeploymentCandidate,
-    DeploymentDeviceAllocation,
     DeploymentFailureKind,
     DeploymentPlacement,
     DeploymentRunStatus,
-    PlacementDeviceMemory,
     ExperimentDefinition,
     MeasurementPolicy,
     ResolvedPlacement,
