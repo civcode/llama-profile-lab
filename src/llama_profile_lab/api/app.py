@@ -19,6 +19,10 @@ from llama_profile_lab.analysis import (
     MatrixProjection,
     ParetoResult,
 )
+from llama_profile_lab.api.deployments import (
+    DeploymentApiService,
+    register_deployment_routes,
+)
 from llama_profile_lab.api.dto import (
     BinaryInspectRequest,
     BinaryListResponse,
@@ -84,6 +88,7 @@ def create_app(
     profiles = LauncherProfileProvider(configured_launcher)
     operations = operation_manager or OperationManager(database)
     service = ApiService(database, profiles=profiles, operations=operations)
+    deployment_service = DeploymentApiService(database)
 
     app = FastAPI(
         title="llama-profile-lab API",
@@ -95,9 +100,11 @@ def create_app(
     app.state.database = database
     app.state.api_service = service
     app.state.operation_manager = operations
+    app.state.deployment_api_service = deployment_service
 
     _register_exception_handlers(app)
     _register_routes(app, service)
+    register_deployment_routes(app, deployment_service)
 
     frontend_dist = _resolve_frontend_dist(frontend_dist_path)
     if frontend_dist is not None:
