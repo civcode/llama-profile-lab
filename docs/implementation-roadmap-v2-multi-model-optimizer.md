@@ -1087,6 +1087,7 @@ Implementation notes and validation:
 - deterministic tests cover exact synchronized start, partial/staggered overlap, no overlap, aggregate arithmetic, missing/ambiguous baselines, latency deltas, member failure, member timeout, correctness failure, cancellation, asymmetric depths, and all DD/PP/PD/DP phases;
 - production-client protocol tests cover context-depth prewarm, prompt-progress token accounting, raw event evidence, and decode token-count mismatch rejection;
 - a local reconstructed pure-M6 validation pass completed with all focused planner/overlap/HTTP-client tests green;
+- migrations 011 and 012 apply cleanly in an executable SQLite harness; integrity and foreign-key checks pass and representative concurrent phase/member/baseline latency rows persist successfully;
 - changed M6 Python/test files pass the branch-side line-length/trailing-whitespace/blank-run hygiene scan.
 
 The full repository Ruff, mypy, complete pytest suite, frontend gates, and real llama.cpp two-model workstation acceptance remain pending because the execution environment cannot clone GitHub over DNS. The manual GitHub Actions workflow has not been dispatched.
