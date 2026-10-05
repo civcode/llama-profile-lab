@@ -8,12 +8,21 @@ The project is designed around reproducible N-dimensional parameter sweeps, prod
 
 V1 implementation is complete through M13. **The automated hardening/release suite is complete; the final primary-workstation acceptance and the `v1.0.0` tag remain intentionally pending until the required Qwen models and target llama.cpp builds are exercised on that workstation.**
 
+V2 multi-model / multi-GPU implementation is complete through the M10 implementation boundary. **Clean-checkout Python/frontend gates and the target heterogeneous-workstation acceptance remain intentionally pending; no workstation performance or estimator-accuracy claims are treated as accepted until those measurements are recorded.**
+
 Project documents:
 
 - [Getting started](docs/getting-started.md)
 - [V1 technical specification](docs/technical-spec-v1.md)
 - [V2 multi-model / multi-GPU optimization specification](docs/technical-spec-v2-multi-model-optimizer.md)
 - [V2 multi-model / multi-GPU implementation roadmap](docs/implementation-roadmap-v2-multi-model-optimizer.md)
+- [V2 getting started](docs/getting-started-v2.md)
+- [V2 architecture](docs/architecture-v2.md)
+- [V2 benchmark workflow](docs/benchmark-workflow-v2.md)
+- [V2 troubleshooting](docs/troubleshooting-v2.md)
+- [V2 known limitations](docs/known-limitations-v2.md)
+- [V2 release checklist](docs/release-checklist-v2.md)
+- [V2 draft release notes](docs/release-notes-v2-draft.md)
 - [V1 implementation roadmap](docs/implementation-roadmap-v1.md)
 - [V1 architecture](docs/architecture-v1.md)
 - [V1 benchmark workflow](docs/benchmark-workflow-v1.md)
@@ -123,6 +132,10 @@ llprof deployment execute deployment-execution.json \
 llprof deployment benchmark deployment-benchmark.json \
   --database data/benchmarks.db
 
+llprof deployment export DEPLOYMENT_ID \
+  --output deployment-provenance.json \
+  --database data/benchmarks.db
+
 llprof results matrix EXPERIMENT_ID \
   --x compute.batch_size \
   --y compute.ubatch_size \
@@ -219,6 +232,10 @@ V2-M6 runs synchronized DD/PP/PD/DP workloads while the M5 server set remains re
 V2-M7 adds read-only deployment analysis and Pareto optimization. Deployment placements are analyzed as the optimization points while repeated runs remain evidence for those points. Exact filters/facets expose instance Candidate settings, resolved GPU-layer/split/tensor ratios, binary/backend identity, workload depth/phase, and device allocation coordinates without silently averaging hidden workload dimensions. Memory matrices distinguish projected model/context/compute/reserved/free values from runtime peak-used/minimum-free evidence. Interference views retain per-instance throughput, retention/loss, latency deltas, and correctness; constrained Pareto analysis can combine DD TG, PP throughput, minimum retention, validated context, runtime headroom, and total power. Schema 13 records timestamped deployment GPU samples during residency so runtime VRAM and sample-weighted power metrics are based on observed data. Failed and correctness-invalid rows stay available in raw CSV/JSON export but are excluded from valid frontier evidence.
 
 V2-M8 exposes the complete deployment workflow through CLI and HTTP/SSE boundaries. Durable schema-14 deployment operations persist the exact execution request and cooperative pause/cancel state so control and resume work across separate CLI/API processes. The deployment API covers create/plan/run/pause/resume/cancel plus Candidate, placement, run, raw-result, and Pareto inspection; SSE progress snapshots retain member state, current Candidate/placement identity, workload phase, aggregate PP/TG throughput, memory evidence, and failure details without leaking stale runtime metrics from prior runs. Matching `llprof deployment` commands provide human-readable and JSON/CSV inspection while reusing the M4-M7 planner, executor, and analysis services.
+
+V2-M9 adds the browser deployment workflow: persisted-Candidate authoring, exact device/resource policy, plan preview, pruning explanations, projected/runtime memory matrices, SSE execution controls, canonical phase results, per-instance interference evidence, Pareto filtering/scatter, and deployment Candidate drill-down.
+
+V2-M10 closes the implementation lifecycle with schema-15 coordinated multi-profile promotion proposals, pre-start exact-device revalidation, signed runtime memory projection deltas, corrupted concurrent-output validation, complete deployment provenance export, V2 archive/restore and database diagnostics, and operator/release documentation. Coordinated promotion is review-only and refuses partial source coverage, launcher drift, missing helper provenance, or incomplete/correctness-invalid configured phases. The remaining M10 gates require a clean runnable checkout and the documented target NVIDIA + AMD workstation acceptance.
 
 M8 adds a read-only analysis layer over SQLite. Individual repetitions drive mean/median/stddev/CV throughput statistics; resource metrics can be projected over arbitrary Candidate dimensions; higher dimensions use exact filters and facets; ambiguous hidden coordinates are rejected instead of silently averaged. Baseline comparisons report signed deltas, Pareto analysis returns the non-dominated set for caller-defined maximize/minimize objectives, and PP/TG curves can estimate compute-only request latency. CSV and JSON export use the same services as the CLI and future API/UI.
 
