@@ -123,6 +123,7 @@ class ConcurrentDeploymentExecutor:
         cancel_event: Event | None = None,
     ) -> ConcurrentDeploymentSummary:
         (
+            deployment_id,
             deployment,
             workload_cases,
             baseline_identity,
@@ -141,10 +142,7 @@ class ConcurrentDeploymentExecutor:
             resident: ResidentDeployment,
             resident_cancel: Event | None,
         ) -> dict[str, object]:
-            if resident.deployment_candidate_id != deployment.content_id(
-                "deploy"
-            ):
-                # Repository IDs are content-addressed from the same hash.
+            if resident.deployment_candidate_id != deployment_id:
                 raise DeploymentResidentActionError(
                     "resident deployment Candidate does not match workload plan"
                 )
@@ -193,6 +191,7 @@ class ConcurrentDeploymentExecutor:
         self,
         deployment_placement_id: str,
     ) -> tuple[
+        str,
         object,
         tuple[tuple[str, ConcurrentWorkloadCase], ...],
         dict[str, _BaselineIdentity],
@@ -255,7 +254,12 @@ class ConcurrentDeploymentExecutor:
                 )
                 for instance_id, instance in instances.items()
             }
-        return deployment, workload_cases, baseline_identity
+        return (
+            placement.deployment_candidate_id,
+            deployment,
+            workload_cases,
+            baseline_identity,
+        )
 
     def _persist_baselines(
         self,
