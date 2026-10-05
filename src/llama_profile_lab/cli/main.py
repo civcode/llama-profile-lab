@@ -2644,6 +2644,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
     if args.command == "deployment":
+        if args.deployment_command == "create":
+            return _deployment_create_command(
+                args.database,
+                args.spec,
+            )
         if args.deployment_command == "preview":
             return _deployment_plan_command(
                 args.database,
@@ -2656,15 +2661,45 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.spec,
                 persist=True,
             )
+        if args.deployment_command == "show":
+            return _deployment_show_command(
+                args.database,
+                args.deployment_id,
+                format_name=args.format_name,
+            )
+        if args.deployment_command == "placement":
+            return _deployment_placement_command(
+                args.database,
+                args.placement_id,
+                deployment_run_id=args.deployment_run_id,
+                format_name=args.format_name,
+            )
         if args.deployment_command == "execute":
             return _deployment_execute_command(
                 args.database,
                 args.spec,
             )
-        if args.deployment_command == "benchmark":
+        if args.deployment_command in {"benchmark", "run", "resume"}:
             return _deployment_benchmark_command(
                 args.database,
                 args.spec,
+            )
+        if args.deployment_command == "results":
+            return _deployment_results_command(
+                args.database,
+                args.deployment_id,
+                format_name=args.format_name,
+                output=args.output,
+                filter_args=args.filters,
+            )
+        if args.deployment_command == "pareto":
+            return _deployment_pareto_command(
+                args.database,
+                args.deployment_id,
+                objective_args=args.objectives,
+                constraint_args=args.constraints,
+                filter_args=args.filters,
+                format_name=args.format_name,
             )
 
     if args.command == "server":
