@@ -1401,7 +1401,7 @@ Implementation notes and validation:
 
 ## 13. V2-M9 — Browser deployment workflow
 
-**Status: Planned**
+**Status: Implemented (production frontend gate pending)**
 
 ### Objective
 
@@ -1515,22 +1515,22 @@ Allow filtering by:
 
 ### Work items
 
-- [ ] Add frontend deployment types.
-- [ ] Add API client calls.
-- [ ] Add deployment routes/pages.
-- [ ] Add instance editor.
-- [ ] Add resource-policy editor.
-- [ ] Add plan preview.
-- [ ] Add pruning reason view.
-- [ ] Add placement memory matrix.
-- [ ] Add run progress/SSE integration.
-- [ ] Add concurrency results table/charts.
-- [ ] Add interference visualization.
-- [ ] Add Pareto visualization.
-- [ ] Add candidate detail.
-- [ ] Add accessibility/keyboard review.
-- [ ] Add component/unit tests.
-- [ ] Add production build test.
+- [x] Add frontend deployment types.
+- [x] Add API client calls.
+- [x] Add deployment routes/pages.
+- [x] Add instance editor.
+- [x] Add resource-policy editor.
+- [x] Add plan preview.
+- [x] Add pruning reason view.
+- [x] Add placement memory matrix.
+- [x] Add run progress/SSE integration.
+- [x] Add concurrency results table/charts.
+- [x] Add interference visualization.
+- [x] Add Pareto visualization.
+- [x] Add candidate detail.
+- [x] Add accessibility/keyboard review.
+- [x] Add component/unit tests.
+- [ ] Run production build/typecheck/test gate in a local checkout.
 
 ### Tests
 
@@ -1561,6 +1561,17 @@ npm run typecheck
 npm run test
 npm run build
 ~~~
+
+Implementation notes and validation:
+
+- deployment authoring uses persisted Candidates, model artifacts, exact llama-server binaries, and workload suites rather than requiring raw internal IDs as the primary workflow;
+- exact-binary device discovery is exposed through the existing inventory/correlation service so the editor can select stable physical GPUs, persist logical-to-physical mappings, and reserve per-device memory margins;
+- planning supports validated instance Candidate/placement dimensions, deployment memory margins, conditions, constraints, non-persisting preview, and persisted feasible cases/rejections;
+- deployment detail uses SSE plus durable controls for run/pause/resume/cancel, keeps projected/runtime memory evidence distinct, renders canonical DD/PP/PD/DP observations, and links generated Candidates to detailed pruning/interference evidence;
+- deployment Candidate details show standalone versus overlap TPS, retention/loss, latency deltas, correctness state, rejection explanations, and feasible placement memory;
+- deployment Pareto supports deployment objectives, phase and exact-coordinate filters, minimum-retention constraints, a frontier table, and scatter visualization;
+- component coverage includes authoring, duplicate IDs, exact-device selection, memory labels, phase/failure rendering, rejection/interference evidence, Pareto filters/scatter, routing, and accessibility labels;
+- GitHub Actions were not dispatched. The current environment cannot obtain a runnable local checkout, so `npm ci`, `npm run typecheck`, `npm run test`, and `npm run build` remain explicitly pending.
 
 ### Suggested checkpoint commits
 
