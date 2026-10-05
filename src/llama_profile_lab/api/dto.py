@@ -470,6 +470,10 @@ class DeploymentDTO(ApiModel):
     latest_plan_id: str | None = None
 
 
+class DeploymentListResponse(ApiModel):
+    items: tuple[DeploymentDTO, ...]
+
+
 class DeploymentEstimatorInputDTO(ApiModel):
     instance_id: Annotated[str, Field(min_length=1)]
     helper_binary_id: Annotated[str, Field(min_length=1)]
