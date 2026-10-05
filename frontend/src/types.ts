@@ -475,6 +475,27 @@ export interface ServerValidationRequest {
 }
 
 
+export interface AcceleratorDeviceRecord {
+  logical_device_name: string;
+  backend: string;
+  mapping_status: string;
+  physical_device_key: string | null;
+  pci_bus_id: string | null;
+  uuid: string | null;
+  vendor: string | null;
+  product_name: string | null;
+  total_memory_bytes: number | null;
+  free_memory_bytes: number | null;
+  driver: string | null;
+  runtime_metadata: Record<string, JsonScalar>;
+}
+
+export interface DeviceInventoryResponse {
+  host_id: string;
+  binary_id: string;
+  items: AcceleratorDeviceRecord[];
+}
+
 export interface ModelRecord {
   id: string;
   identity_hash: string;
