@@ -13,8 +13,8 @@ from pydantic import TypeAdapter
 
 from llama_profile_lab.db.connection import transaction
 from llama_profile_lab.db.records import (
-    BenchmarkCaseRecord,
     AcceleratorDeviceRecord,
+    BenchmarkCaseRecord,
     BenchmarkRunRecord,
     BinaryRecord,
     CandidateEvaluationRecord,
