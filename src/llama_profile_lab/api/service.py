@@ -1134,6 +1134,31 @@ class ApiService:
             ),
         )
 
+    def preview_deployment(
+        self,
+        deployment_id: str,
+        request: DeploymentPlanRequest,
+    ) -> DeploymentPlanResponse:
+        self._require_deployment(deployment_id)
+        inputs = tuple(
+            DeploymentEstimatorInput(
+                instance_id=item.instance_id,
+                helper_binary_id=item.helper_binary_id,
+                model_path=Path(item.model_path),
+            )
+            for item in request.instances
+        )
+        try:
+            summary = DeploymentPlannerService(self.database).preview(
+                deployment_id,
+                request.search_space,
+                inputs,
+                timeout_seconds=request.timeout_seconds,
+            )
+        except ValueError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return _deployment_plan_response(summary)
+
     def plan_deployment(
         self,
         deployment_id: str,
