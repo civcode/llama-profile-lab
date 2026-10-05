@@ -506,11 +506,20 @@ class DeploymentPlanResponse(ApiModel):
     cases: tuple[DeploymentPlanCaseDTO, ...]
 
 
+class DeploymentRejectionDTO(ApiModel):
+    id: str
+    stage: str
+    reason: str
+    details: dict[str, Any]
+    created_at: str
+
+
 class DeploymentCandidateItemDTO(ApiModel):
     id: str
     definition: DeploymentCandidate
     generation: dict[str, Any]
     rejection_count: NonNegativeInt
+    rejections: tuple[DeploymentRejectionDTO, ...]
     placement_ids: tuple[str, ...]
 
 
