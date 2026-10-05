@@ -15,6 +15,7 @@ from llama_profile_lab.domain import (
 
 def identity(*, devices: tuple[str, ...] = ("CUDA0", "Vulkan0")) -> MemoryEstimateIdentity:
     return MemoryEstimateIdentity(
+        host_id="host_test",
         candidate_hash="a" * 64,
         model_artifact_id="model:qwen",
         helper_sha256="b" * 64,
@@ -61,6 +62,7 @@ def test_memory_estimate_identity_preserves_device_order() -> None:
 def test_memory_estimate_identity_rejects_split_length_mismatch() -> None:
     with pytest.raises(ValidationError, match="one value per selected device"):
         MemoryEstimateIdentity(
+            host_id="host_test",
             candidate_hash="a" * 64,
             model_artifact_id="model:qwen",
             helper_sha256="b" * 64,
