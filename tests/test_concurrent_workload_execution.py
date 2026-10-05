@@ -573,12 +573,32 @@ def test_missing_and_ambiguous_baselines_are_not_guessed(tmp_path: Path) -> None
     assert all(item.quality == "baseline_missing" for item in missing.phases)
     assert all(item.min_retention is None for item in missing.phases)
 
-    database2, placement_id2, inputs2 = _seed(tmp_path / "ambiguous")
-    duplicated = (*_baselines(), _baselines()[0])
-    ambiguous = _service(database2).execute(
+    database2, placement_id2, inputs2 = _seed(tmp_path / "idempotent")
+    exact_duplicates = (*_baselines(), _baselines()[0])
+    repeated = _service(database2).execute(
         placement_id2,
         inputs2,
-        standalone_baselines=duplicated,
+        standalone_baselines=exact_duplicates,
+    )
+    assert all(item.quality == "clean" for item in repeated.phases)
+
+    database3, placement_id3, inputs3 = _seed(tmp_path / "ambiguous")
+    conflicting = (
+        *_baselines(),
+        StandaloneBaselineInput(
+            "a",
+            "prefill",
+            100,
+            0,
+            128,
+            110.0,
+            1000.0,
+        ),
+    )
+    ambiguous = _service(database3).execute(
+        placement_id3,
+        inputs3,
+        standalone_baselines=conflicting,
     )
     qualities = {item.quality for item in ambiguous.phases}
     assert "baseline_ambiguous" in qualities
