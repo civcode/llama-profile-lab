@@ -1104,7 +1104,7 @@ The full repository Ruff, mypy, complete pytest suite, frontend gates, and real 
 
 ## 11. V2-M7 — Deployment analysis and Pareto optimization
 
-**Status: Planned**
+**Status: Implemented — targeted branch-side validation complete; full repository lint/type/full-test gate pending**
 
 ### Objective
 
@@ -1198,18 +1198,18 @@ Do not drop failure rows from raw export.
 
 ### Work items
 
-- [ ] Add deployment analysis repository queries.
-- [ ] Add deployment metric namespace.
-- [ ] Add memory matrix projection.
-- [ ] Add interference/retention view.
-- [ ] Add deployment baseline comparison.
-- [ ] Extend Pareto service to deployment candidates.
-- [ ] Add context-capacity metrics.
-- [ ] Add power aggregation.
-- [ ] Add CSV/JSON export.
-- [ ] Add exact-filter/facet handling.
-- [ ] Add ambiguity rejection tests.
-- [ ] Add failed-candidate visibility.
+- [x] Add deployment analysis repository queries.
+- [x] Add deployment metric namespace.
+- [x] Add memory matrix projection.
+- [x] Add interference/retention view.
+- [x] Add deployment baseline comparison.
+- [x] Extend Pareto service to deployment candidates.
+- [x] Add context-capacity metrics.
+- [x] Add power aggregation.
+- [x] Add CSV/JSON export.
+- [x] Add exact-filter/facet handling.
+- [x] Add ambiguity rejection tests.
+- [x] Add failed-candidate visibility.
 
 ### Tests
 
@@ -1225,6 +1225,26 @@ Do not drop failure rows from raw export.
 ### Acceptance gate
 
 Given a fixture database containing multiple joint placements, analysis can identify a non-dominated set using combined decode TPS, combined PP TPS, minimum retention, context capacity, and device headroom without losing per-instance metrics.
+
+Implementation notes and validation:
+
+- `DeploymentAnalysisService` treats a persisted deployment placement as the optimization point and repeated deployment runs as evidence for that point;
+- exact analysis coordinates include instance Candidate settings, resolved placement fields, tensor-split elements, binary IDs, persisted accelerator backends, workload phase/member depth, and per-device projected allocation fields;
+- rate/latency projections reject hidden workload-coordinate ambiguity rather than averaging across prompt/decode depths;
+- the deployment metric namespace includes combined PP/TG TPS, minimum retention, total validated context, runtime/projected device headroom, total runtime power, and dynamic per-instance throughput/retention/latency metrics;
+- unqualified headroom metrics are runtime-only and require complete evidence for every planned device; projected headroom remains a separate explicit namespace so Pareto vectors do not mix projected and runtime semantics;
+- memory matrices separate projected model/context/compute/reserved/free rows from runtime peak-used and minimum-free rows;
+- interference views preserve aggregate phase metrics plus per-instance native/overlap throughput, standalone references, retention/loss, latency deltas, and correctness;
+- placement comparison uses candidate-minus-baseline signs and percentage deltas against the absolute baseline magnitude;
+- deployment Pareto analysis applies explicit metric constraints before dominance and excludes placements with no valid completed/correctness-valid concurrent evidence while retaining their raw rows for export;
+- six-objective fixture coverage exercises DD throughput, PP throughput, minimum retention, validated context capacity, runtime headroom, and total average power;
+- JSON/CSV export preserves successful, failed, and correctness-invalid deployment observations with per-instance configuration and result fields;
+- migration 013 adds timestamped GPU samples across the resident deployment interval, enabling runtime peak-memory and sample-weighted average/peak total-power metrics; schema version is 13;
+- the M5 residency executor now samples GPUs from readiness through resident action/probe and persists those snapshots without changing the existing manual-only workflow policy;
+- the M7 fixture tests cover projected/runtime memory distinction, per-instance interference, backend coordinates, hidden-dimension rejection, signed baseline deltas, pre-Pareto constraints, correctness-invalid/failed exclusion, multi-objective dominance, runtime power aggregation, and export round-trip;
+- an executable SQLite check confirmed the additive deployment GPU telemetry table, foreign-key behavior, and integrity constraints.
+
+The container still cannot resolve GitHub, so the full repository Ruff, mypy, complete pytest suite, frontend gates, and real workstation acceptance remain pending. The GitHub Actions workflow has not been dispatched.
 
 ### Suggested checkpoint commits
 
