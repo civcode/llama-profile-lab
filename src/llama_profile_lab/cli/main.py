@@ -18,7 +18,6 @@ from llama_profile_lab.analysis import (
     AnalysisFilter,
     AnalysisService,
     DeploymentAnalysisError,
-    DeploymentAnalysisService,
     ParetoObjective,
     serialize_export,
 )
