@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from threading import RLock, Thread
+from threading import Event, RLock, Thread
 from typing import Any, Literal, cast
 
 from llama_profile_lab.db import (
@@ -238,10 +238,11 @@ class DeploymentOperationSnapshot:
     error: str | None
 
 
-class _PersistentControlSignal:
-    """Event-like signal backed by the durable operation row."""
+class _PersistentControlSignal(Event):
+    """Threading Event whose observed state is backed by SQLite."""
 
     def __init__(self, database: Database, operation_id: str) -> None:
+        super().__init__()
         self.database = database
         self.operation_id = operation_id
 
