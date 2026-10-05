@@ -187,6 +187,7 @@ class MemoryEstimatorService:
                 _verify_registered_binary(
                     helper,
                     expected_kind="llama-memory-estimator",
+                    verify_hash=False,
                 )
             except DeviceInventoryError as exc:
                 raise MemoryEstimatorError(str(exc)) from exc
@@ -206,6 +207,34 @@ class MemoryEstimatorService:
                 raise MemoryEstimatorError(str(exc)) from exc
 
             estimates = MemoryEstimateRepository(connection)
+            actual_sha256 = sha256_file(Path(helper.path))
+            if actual_sha256 != helper.sha256:
+                attempt_id = estimates.create_attempt(
+                    identity=invocation.identity,
+                    candidate_id=candidate_id,
+                    host_id=host_id,
+                    helper_binary_id=helper_binary_id,
+                    model_artifact_id=candidate.model.target_model_id,
+                    argv=invocation.argv,
+                )
+                message = (
+                    "registered memory estimator binary changed on disk; "
+                    "re-run binary inspect"
+                )
+                estimates.finish_attempt(
+                    attempt_id,
+                    status="binary_changed",
+                    duration_ns=0,
+                    exit_code=None,
+                    stdout="",
+                    stderr=message,
+                    failure_details={
+                        "expected_sha256": helper.sha256,
+                        "actual_sha256": actual_sha256,
+                    },
+                )
+                raise MemoryEstimatorError(message)
+
             cached = estimates.find_by_cache_hash(
                 invocation.identity.content_hash()
             )
@@ -359,6 +388,7 @@ def _verify_registered_binary(
     binary: BinaryRecord,
     *,
     expected_kind: str | None = None,
+    verify_hash: bool = True,
 ) -> None:
     if expected_kind is not None and binary.kind != expected_kind:
         raise DeviceInventoryError(
@@ -369,7 +399,7 @@ def _verify_registered_binary(
         raise DeviceInventoryError(
             f"registered binary path does not exist: {path}"
         )
-    if sha256_file(path) != binary.sha256:
+    if verify_hash and sha256_file(path) != binary.sha256:
         raise DeviceInventoryError(
             "registered binary changed on disk; re-run binary inspect"
         )
