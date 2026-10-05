@@ -7,6 +7,14 @@ from llama_profile_lab.execution.engine import (
 )
 from llama_profile_lab.execution.host import BasicHostInfo, detect_basic_host
 from llama_profile_lab.execution.lock import HostLock, HostLockError
+from llama_profile_lab.execution.memory_estimator import (
+    DeviceInventoryError,
+    DeviceInventoryResult,
+    DeviceInventoryService,
+    MemoryEstimateObservation,
+    MemoryEstimatorError,
+    MemoryEstimatorService,
+)
 from llama_profile_lab.execution.placement import (
     PlacementConfigurationError,
     PlacementResolution,
@@ -41,10 +49,16 @@ __all__ = [
     "BasicHostInfo",
     "ExecutionError",
     "ExecutionSummary",
+    "DeviceInventoryError",
+    "DeviceInventoryResult",
+    "DeviceInventoryService",
     "ExperimentExecutor",
     "HostLock",
     "HostLockError",
     "ManagedServerProcess",
+    "MemoryEstimateObservation",
+    "MemoryEstimatorError",
+    "MemoryEstimatorService",
     "LinuxTelemetryProvider",
     "PlacementConfigurationError",
     "PlacementResolution",
