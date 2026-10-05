@@ -480,6 +480,7 @@ class DeploymentAnalysisService:
         objectives: Sequence[DeploymentParetoObjective],
         constraints: Sequence[DeploymentMetricConstraint] = (),
         filters: Sequence[DeploymentAnalysisFilter] = (),
+        deployment_candidate_ids: Sequence[str] | None = None,
     ) -> DeploymentParetoResult:
         """Return non-dominated valid placements after metric constraints."""
         if not objectives:
@@ -493,11 +494,25 @@ class DeploymentAnalysisService:
             )
 
         observations = self._load()
+        candidate_scope = (
+            None
+            if deployment_candidate_ids is None
+            else set(deployment_candidate_ids)
+        )
         placement_ids = sorted(
             {
                 item.context.placement_id
                 for item in observations
-                if _matches_filters(item, filters, missing_is_false=True)
+                if (
+                    candidate_scope is None
+                    or item.context.deployment_candidate_id
+                    in candidate_scope
+                )
+                and _matches_filters(
+                    item,
+                    filters,
+                    missing_is_false=True,
+                )
             }
         )
         vectors: list[DeploymentParetoPoint] = []
@@ -583,12 +598,23 @@ class DeploymentAnalysisService:
         *,
         format_name: str,
         filters: Sequence[DeploymentAnalysisFilter] = (),
+        deployment_candidate_ids: Sequence[str] | None = None,
     ) -> str:
         """Export raw successful and failed deployment observations."""
+        candidate_scope = (
+            None
+            if deployment_candidate_ids is None
+            else set(deployment_candidate_ids)
+        )
         rows = [
             _export_row(item)
             for item in self._load()
-            if _matches_filters(
+            if (
+                candidate_scope is None
+                or item.context.deployment_candidate_id
+                in candidate_scope
+            )
+            and _matches_filters(
                 item,
                 filters,
                 missing_is_false=True,
