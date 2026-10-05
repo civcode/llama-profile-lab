@@ -11,6 +11,7 @@ import type {
   DeploymentPlanRequest,
   DeploymentPlanResponse,
   DeploymentProgress,
+  DeploymentPromotionResponse,
   DeploymentRun,
   DeploymentRunRequest,
   ExecutionRequest,
@@ -163,6 +164,21 @@ export const api = {
       "/api/deployments/" + encodeURIComponent(id) + "/pareto" + query(params)
     );
   },
+  promoteDeployment: (
+    id: string,
+    body: {
+      deployment_placement_id: string;
+      sources: {
+        instance_id: string;
+        experiment_id: string;
+        source_profile_id?: string | null;
+      }[];
+    }
+  ) =>
+    request<DeploymentPromotionResponse>(
+      "/api/deployments/" + encodeURIComponent(id) + "/promote",
+      { method: "POST", body: JSON.stringify(body) }
+    ),
   runDeployment: (
     id: string,
     body: DeploymentRunRequest,
