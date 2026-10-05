@@ -438,6 +438,440 @@ def export_experiment(database: Database, experiment_id: str) -> dict[str, Any]:
     return payload
 
 
+def export_deployment(
+    database: Database,
+    deployment_id: str,
+) -> dict[str, Any]:
+    """Export complete persisted provenance for one V2 deployment workflow."""
+    with database.session() as connection:
+        root = connection.execute(
+            "SELECT * FROM deployment_candidate WHERE id = ?",
+            (deployment_id,),
+        ).fetchone()
+        if root is None:
+            raise ArchiveError(f"deployment not found: {deployment_id}")
+
+        plans = _rows(
+            connection,
+            """
+            SELECT *
+            FROM deployment_plan
+            WHERE base_deployment_candidate_id = ?
+            ORDER BY created_at, id
+            """,
+            (deployment_id,),
+        )
+        plan_ids = [str(row["id"]) for row in plans]
+        plan_cases = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_plan_case
+            WHERE deployment_plan_id IN ({})
+            ORDER BY deployment_plan_id, ordinal
+            """,
+            plan_ids,
+        )
+
+        deployment_candidate_ids = {deployment_id}
+        deployment_candidate_ids.update(
+            str(row["deployment_candidate_id"])
+            for row in plan_cases
+        )
+        deployment_candidates = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_candidate
+            WHERE id IN ({})
+            ORDER BY created_at, id
+            """,
+            sorted(deployment_candidate_ids),
+        )
+        instances = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_instance
+            WHERE deployment_candidate_id IN ({})
+            ORDER BY deployment_candidate_id, ordinal
+            """,
+            sorted(deployment_candidate_ids),
+        )
+        candidate_ids = sorted(
+            {str(row["candidate_id"]) for row in instances}
+        )
+        workload_suite_ids = sorted(
+            {
+                str(row["workload_suite_id"])
+                for row in deployment_candidates
+            }
+        )
+        model_ids = sorted(
+            {str(row["model_artifact_id"]) for row in instances}
+        )
+
+        rejections = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_rejection
+            WHERE deployment_candidate_id IN ({})
+            ORDER BY created_at, id
+            """,
+            sorted(deployment_candidate_ids),
+        )
+        placements = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_placement
+            WHERE deployment_candidate_id IN ({})
+            ORDER BY created_at, id
+            """,
+            sorted(deployment_candidate_ids),
+        )
+        placement_ids = [str(row["id"]) for row in placements]
+        instance_placements = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_instance_placement
+            WHERE deployment_placement_id IN ({})
+            ORDER BY deployment_placement_id, instance_id
+            """,
+            placement_ids,
+        )
+        resolved_placement_ids = sorted(
+            {
+                str(row["resolved_placement_id"])
+                for row in instance_placements
+            }
+        )
+        resolved_placements = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM resolved_placement
+            WHERE id IN ({})
+            ORDER BY created_at, id
+            """,
+            resolved_placement_ids,
+        )
+        fit_attempt_ids = sorted(
+            {
+                str(row["fit_attempt_id"])
+                for row in resolved_placements
+                if row["fit_attempt_id"] is not None
+            }
+        )
+        placement_attempts = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM placement_attempt
+            WHERE id IN ({})
+            ORDER BY started_at, id
+            """,
+            fit_attempt_ids,
+        )
+        placement_memory = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM placement_device_memory
+            WHERE deployment_placement_id IN ({})
+            ORDER BY deployment_placement_id, instance_id, device_id
+            """,
+            placement_ids,
+        )
+        allocations = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_device_allocation
+            WHERE deployment_placement_id IN ({})
+            ORDER BY deployment_placement_id, device_id
+            """,
+            placement_ids,
+        )
+
+        deployment_runs = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_run
+            WHERE deployment_candidate_id IN ({})
+            ORDER BY created_at, id
+            """,
+            sorted(deployment_candidate_ids),
+        )
+        deployment_run_ids = [str(row["id"]) for row in deployment_runs]
+        run_members = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_run_member
+            WHERE deployment_run_id IN ({})
+            ORDER BY deployment_run_id, instance_id
+            """,
+            deployment_run_ids,
+        )
+        gpu_samples = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_gpu_sample
+            WHERE deployment_run_id IN ({})
+            ORDER BY deployment_run_id, timestamp_ns
+            """,
+            deployment_run_ids,
+        )
+
+        workload_cases = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_concurrent_workload_case
+            WHERE deployment_candidate_id IN ({})
+            ORDER BY deployment_candidate_id, phase, created_at, id
+            """,
+            sorted(deployment_candidate_ids),
+        )
+        workload_runs = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_workload_run
+            WHERE deployment_run_id IN ({})
+            ORDER BY deployment_run_id, created_at, id
+            """,
+            deployment_run_ids,
+        )
+        workload_run_ids = [str(row["id"]) for row in workload_runs]
+        workload_members = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_workload_member
+            WHERE deployment_workload_run_id IN ({})
+            ORDER BY deployment_workload_run_id, ordinal
+            """,
+            workload_run_ids,
+        )
+        baseline_ids = sorted(
+            {
+                str(row["standalone_baseline_id"])
+                for row in workload_members
+                if row["standalone_baseline_id"] is not None
+            }
+        )
+        standalone_baselines = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM deployment_standalone_baseline
+            WHERE id IN ({})
+            ORDER BY created_at, id
+            """,
+            baseline_ids,
+        )
+
+        operations = _rows(
+            connection,
+            """
+            SELECT *
+            FROM deployment_operation
+            WHERE base_deployment_candidate_id = ?
+            ORDER BY created_at, id
+            """,
+            (deployment_id,),
+        )
+        promotions = _rows(
+            connection,
+            """
+            SELECT *
+            FROM deployment_promotion_proposal
+            WHERE base_deployment_candidate_id = ?
+            ORDER BY created_at, id
+            """,
+            (deployment_id,),
+        )
+
+        estimate_attempts = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM memory_estimate_attempt
+            WHERE candidate_id IN ({})
+            ORDER BY started_at, id
+            """,
+            candidate_ids,
+        )
+        estimates = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM memory_estimate
+            WHERE candidate_id IN ({})
+            ORDER BY created_at, id
+            """,
+            candidate_ids,
+        )
+        estimate_ids = [str(row["id"]) for row in estimates]
+        estimate_devices = _rows_in(
+            connection,
+            """
+            SELECT *
+            FROM memory_estimate_device
+            WHERE memory_estimate_id IN ({})
+            ORDER BY memory_estimate_id, ordinal
+            """,
+            estimate_ids,
+        )
+
+        binary_ids = {
+            str(row["binary_id"]) for row in instances
+        }
+        binary_ids.update(
+            str(row["binary_id"])
+            for row in resolved_placements
+            if row["binary_id"] is not None
+        )
+        binary_ids.update(
+            str(row["binary_id"])
+            for row in placement_attempts
+            if row["binary_id"] is not None
+        )
+        binary_ids.update(
+            str(row["helper_binary_id"])
+            for row in estimate_attempts
+        )
+        binary_ids.update(
+            str(row["helper_binary_id"]) for row in estimates
+        )
+        binary_ids.update(
+            str(row["binary_id"]) for row in standalone_baselines
+        )
+
+        host_ids = {
+            str(row["host_id"]) for row in placements
+        }
+        host_ids.update(
+            str(row["host_id"])
+            for row in resolved_placements
+            if row["host_id"] is not None
+        )
+        host_ids.update(
+            str(row["host_id"])
+            for row in placement_attempts
+            if row["host_id"] is not None
+        )
+        host_ids.update(
+            str(row["host_id"]) for row in estimate_attempts
+        )
+        host_ids.update(
+            str(row["host_id"]) for row in estimates
+        )
+        host_ids.update(
+            str(row["host_id"]) for row in standalone_baselines
+        )
+
+        payload = {
+            "format": "llprof-deployment-export-v1",
+            "exported_at": _utc_now(),
+            "schema_version": schema_version(connection),
+            "deployment_id": deployment_id,
+            "immutable": {
+                "deployment_candidates": deployment_candidates,
+                "deployment_instances": instances,
+                "candidates": _rows_in(
+                    connection,
+                    "SELECT * FROM candidate WHERE id IN ({}) ORDER BY id",
+                    candidate_ids,
+                ),
+                "workload_suites": _rows_in(
+                    connection,
+                    "SELECT * FROM workload_suite WHERE id IN ({}) ORDER BY id",
+                    workload_suite_ids,
+                ),
+                "models": _rows_in(
+                    connection,
+                    "SELECT * FROM model WHERE id IN ({}) ORDER BY id",
+                    model_ids,
+                ),
+                "model_files": _rows_in(
+                    connection,
+                    "SELECT * FROM model_file WHERE model_id IN ({}) ORDER BY model_id, part_index",
+                    model_ids,
+                ),
+            },
+            "planning": {
+                "plans": plans,
+                "cases": plan_cases,
+                "rejections": rejections,
+                "placements": placements,
+                "instance_placements": instance_placements,
+                "placement_memory": placement_memory,
+                "device_allocations": allocations,
+                "resolved_placements": resolved_placements,
+                "placement_attempts": placement_attempts,
+                "memory_estimate_attempts": estimate_attempts,
+                "memory_estimates": estimates,
+                "memory_estimate_devices": estimate_devices,
+            },
+            "execution": {
+                "deployment_runs": deployment_runs,
+                "deployment_run_members": run_members,
+                "gpu_samples": gpu_samples,
+                "concurrent_workload_cases": workload_cases,
+                "workload_runs": workload_runs,
+                "workload_members": workload_members,
+                "standalone_baselines": standalone_baselines,
+                "operations": operations,
+            },
+            "promotion": {
+                "proposals": promotions,
+            },
+            "environment": {
+                "binaries": _rows_in(
+                    connection,
+                    "SELECT * FROM binary WHERE id IN ({}) ORDER BY kind, id",
+                    sorted(binary_ids),
+                ),
+                "hosts": _rows_in(
+                    connection,
+                    "SELECT * FROM host WHERE id IN ({}) ORDER BY id",
+                    sorted(host_ids),
+                ),
+                "accelerator_devices": _rows_in(
+                    connection,
+                    """
+                    SELECT *
+                    FROM accelerator_device
+                    WHERE host_id IN ({})
+                    ORDER BY host_id, binary_id, logical_device_name
+                    """,
+                    sorted(host_ids),
+                ),
+            },
+        }
+    return payload
+
+
+def serialize_deployment_export(
+    database: Database,
+    deployment_id: str,
+) -> str:
+    """Render one complete V2 deployment provenance export as JSON."""
+    return json.dumps(
+        export_deployment(database, deployment_id),
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
+    ) + "\n"
+
+
 def serialize_experiment_export(
     database: Database,
     experiment_id: str,
