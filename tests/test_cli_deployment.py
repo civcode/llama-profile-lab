@@ -2,12 +2,14 @@
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 import llama_profile_lab.cli.main as cli_module
 from llama_profile_lab.cli.main import main
+from llama_profile_lab.api.deployment_operations import (
+    DeploymentOperationSnapshot,
+)
 from llama_profile_lab.execution import (
     ConcurrentDeploymentSummary,
     ConcurrentPhaseSummary,
@@ -73,13 +75,69 @@ class FakeConcurrentDeploymentExecutor:
         )
 
 
-class FakeDeploymentPlacementRepository:
-    def __init__(self, connection) -> None:
-        self.connection = connection
+class FakeDeploymentOperationManager:
+    def __init__(self, database) -> None:
+        self.database = database
 
-    def record(self, placement_id):
-        assert placement_id == "deployplace_1"
-        return SimpleNamespace(deployment_candidate_id="deploy_1")
+    @staticmethod
+    def _snapshot(
+        deployment_id,
+        placement_id,
+        *,
+        status="completed",
+        action=None,
+    ) -> DeploymentOperationSnapshot:
+        return DeploymentOperationSnapshot(
+            id="deployop_cli",
+            deployment_candidate_id=deployment_id,
+            deployment_placement_id=placement_id,
+            deployment_run_id=(
+                "deployrun_cli" if status == "completed" else None
+            ),
+            status=status,
+            requested_action=action,
+            started_at="2026-10-05T18:00:00Z",
+            finished_at=(
+                "2026-10-05T18:00:01Z"
+                if status in {"completed", "paused", "cancelled", "failed"}
+                else None
+            ),
+            error=None,
+        )
+
+    def start(self, deployment_id, spec, *, background):
+        assert background is False
+        assert spec.deployment_placement_id == "deployplace_1"
+        assert [item.instance_id for item in spec.inputs] == [
+            "qwen",
+            "flash",
+        ]
+        return self._snapshot(deployment_id, spec.deployment_placement_id)
+
+    def resume(self, deployment_id, spec=None, *, background):
+        assert background is False
+        placement_id = (
+            "deployplace_1"
+            if spec is None
+            else spec.deployment_placement_id
+        )
+        return self._snapshot(deployment_id, placement_id)
+
+    def pause(self, deployment_id):
+        return self._snapshot(
+            deployment_id,
+            "deployplace_1",
+            status="pausing",
+            action="pause",
+        )
+
+    def cancel(self, deployment_id):
+        return self._snapshot(
+            deployment_id,
+            "deployplace_1",
+            status="cancelling",
+            action="cancel",
+        )
 
 
 class FakeDeploymentExecutor:
@@ -388,7 +446,7 @@ def test_deployment_cli_rejects_invalid_spec(
 
 
 @pytest.mark.parametrize("command", ("run", "resume"))
-def test_deployment_cli_run_and_resume_aliases(
+def test_deployment_cli_run_and_resume(
     tmp_path: Path,
     monkeypatch,
     capsys: pytest.CaptureFixture[str],
@@ -410,114 +468,69 @@ def test_deployment_cli_run_and_resume_aliases(
                     },
                 ],
                 "readiness_timeout_seconds": 45,
-                "standalone_baselines": [
-                    {
-                        "instance_id": "qwen",
-                        "mode": "decode",
-                        "prompt_tokens": 0,
-                        "generate_tokens": 32,
-                        "depth_tokens": 128,
-                        "throughput_tps": 20.0,
-                        "latency_ms": 1000.0,
-                    },
-                    {
-                        "instance_id": "flash",
-                        "mode": "decode",
-                        "prompt_tokens": 0,
-                        "generate_tokens": 32,
-                        "depth_tokens": 128,
-                        "throughput_tps": 22.0,
-                    },
-                ],
             }
         ),
         encoding="utf-8",
     )
     monkeypatch.setattr(
         cli_module,
-        "ConcurrentDeploymentExecutor",
-        FakeConcurrentDeploymentExecutor,
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "DeploymentPlacementRepository",
-        FakeDeploymentPlacementRepository,
+        "DeploymentOperationManager",
+        FakeDeploymentOperationManager,
     )
 
-    assert main(
+    argv = [
+        "deployment",
+        command,
+        "deploy_base",
+    ]
+    if command == "run":
+        argv.append(str(spec))
+    else:
+        argv.extend(["--spec", str(spec)])
+    argv.extend(
         [
-            "deployment",
-            command,
-            str(spec),
             "--database",
             str(tmp_path / "benchmarks.db"),
         ]
-    ) == 0
+    )
+
+    assert main(argv) == 0
     output = capsys.readouterr().out
-    assert "Concurrent phases: 2" in output
-    assert "DD: quality=clean" in output
+    assert "Operation: deployop_cli" in output
+    assert "Deployment: deploy_base" in output
+    assert "Placement: deployplace_1" in output
+    assert "Status: completed" in output
 
 
-@pytest.mark.parametrize("action", ("pause", "cancel"))
-def test_deployment_cli_cross_process_control(
+@pytest.mark.parametrize(
+    ("action", "status"),
+    (("pause", "pausing"), ("cancel", "cancelling")),
+)
+def test_deployment_cli_control_commands(
     tmp_path: Path,
+    monkeypatch,
     capsys: pytest.CaptureFixture[str],
     action: str,
+    status: str,
 ) -> None:
-    database, subjects = _seed(tmp_path)
-    deployment_id, _, run_id, _ = subjects["b"]
-    with database.session() as connection:
-        connection.execute(
-            """
-            UPDATE deployment_run
-            SET status = 'running', finished_at = NULL
-            WHERE id = ?
-            """,
-            (run_id,),
-        )
+    monkeypatch.setattr(
+        cli_module,
+        "DeploymentOperationManager",
+        FakeDeploymentOperationManager,
+    )
 
     assert main(
         [
             "deployment",
             action,
-            deployment_id,
+            "deploy_base",
             "--database",
-            str(database.path),
+            str(tmp_path / "benchmarks.db"),
         ]
     ) == 0
     output = capsys.readouterr().out
-    assert f"Requested {action}" in output
-
-    with database.session() as connection:
-        row = connection.execute(
-            """
-            SELECT action
-            FROM deployment_control_request
-            WHERE deployment_candidate_id = ?
-            """,
-            (deployment_id,),
-        ).fetchone()
-    assert row is not None
-    assert row["action"] == action
-
-
-def test_deployment_cli_control_requires_active_run(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    database, subjects = _seed(tmp_path)
-    deployment_id = subjects["c"][0]
-
-    assert main(
-        [
-            "deployment",
-            "pause",
-            deployment_id,
-            "--database",
-            str(database.path),
-        ]
-    ) == 2
-    assert "no active deployment run" in capsys.readouterr().err
+    assert f"Status: {status}" in output
+    assert f"Action: {action}" in output
 
 
 def test_deployment_cli_show_placement_results_and_pareto(
@@ -546,18 +559,19 @@ def test_deployment_cli_show_placement_results_and_pareto(
         [
             "deployment",
             "placement",
-            placement_id,
-            "--run",
-            run_id,
+            deployment_id,
             "--format",
             "json",
             "--database",
             str(database.path),
         ]
     ) == 0
-    placement = json.loads(capsys.readouterr().out)
-    assert placement["record"]["id"] == placement_id
-    assert placement["runtime_matrix"]["deployment_run_id"] == run_id
+    placements = json.loads(capsys.readouterr().out)
+    assert placements["items"][0]["id"] == placement_id
+    assert (
+        placements["items"][0]["memory"]["deployment_run_id"]
+        == run_id
+    )
 
     assert main(
         [
@@ -571,10 +585,11 @@ def test_deployment_cli_show_placement_results_and_pareto(
         ]
     ) == 0
     results = json.loads(capsys.readouterr().out)
-    assert results
+    assert results["deployment_id"] == deployment_id
+    assert results["rows"]
     assert all(
         item["deployment_candidate_id"] == deployment_id
-        for item in results
+        for item in results["rows"]
     )
 
     assert main(
@@ -591,8 +606,12 @@ def test_deployment_cli_show_placement_results_and_pareto(
         ]
     ) == 0
     pareto = json.loads(capsys.readouterr().out)
-    assert pareto["evaluated_count"] == 1
-    assert pareto["frontier"][0]["deployment_placement_id"] == placement_id
+    assert pareto["deployment_id"] == deployment_id
+    assert pareto["result"]["evaluated_count"] == 1
+    assert (
+        pareto["result"]["frontier"][0]["deployment_placement_id"]
+        == placement_id
+    )
 
 
 def test_deployment_cli_create_is_idempotent_for_existing_definition(
@@ -623,7 +642,9 @@ def test_deployment_cli_create_is_idempotent_for_existing_definition(
             str(database.path),
         ]
     ) == 0
-    assert capsys.readouterr().out.strip() == deployment_id
+    output = capsys.readouterr().out
+    assert f"Deployment: {deployment_id}" in output
+    assert "Status:" in output
 
 
 def test_deployment_cli_help_lists_m8_commands(
