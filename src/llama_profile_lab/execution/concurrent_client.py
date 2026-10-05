@@ -241,7 +241,7 @@ class _PreparedLlamaCompletionClient:
                 timestamp_ns=finished_ns,
                 cumulative_tokens=concurrent_prompt_n,
             )
-        if workload.mode == "decode" and predicted_n > 0:
+        if status == "completed" and workload.mode == "decode" and predicted_n > 0:
             _append_cumulative(
                 decode_events,
                 kind="decode",
