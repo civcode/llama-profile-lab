@@ -760,7 +760,7 @@ The repository-wide Ruff, mypy, and complete pytest gate remains pending because
 
 ## 9. V2-M5 — Simultaneous multi-server execution
 
-**Status: Planned**
+**Status: Implemented — synthetic real-process lifecycle coverage passing locally; full repository lint/type/full-test gate pending**
 
 ### Objective
 
@@ -852,20 +852,20 @@ Required cases:
 
 ### Work items
 
-- [ ] Add DeploymentExecutor.
-- [ ] Reuse host lock.
-- [ ] Add multi-server process registry.
-- [ ] Add per-instance server state.
-- [ ] Add readiness barrier.
-- [ ] Add port allocator.
-- [ ] Add deployment status transitions.
-- [ ] Add deployment cancellation.
-- [ ] Add cleanup on partial startup.
-- [ ] Add runtime memory validation.
-- [ ] Add server log persistence.
-- [ ] Add stale-run recovery.
-- [ ] Add residency smoke probe.
-- [ ] Add execution service tests.
+- [x] Add DeploymentExecutor.
+- [x] Reuse host lock.
+- [x] Add multi-server process registry.
+- [x] Add per-instance server state.
+- [x] Add readiness barrier.
+- [x] Add port allocator.
+- [x] Add deployment status transitions.
+- [x] Add deployment cancellation.
+- [x] Add cleanup on partial startup.
+- [x] Add runtime memory validation.
+- [x] Add server log persistence.
+- [x] Add stale-run recovery.
+- [x] Add residency smoke probe.
+- [x] Add execution service tests.
 
 ### Tests
 
@@ -885,6 +885,22 @@ Integration tests with fake servers must verify:
 A synthetic deployment starts two independent fake llama-server processes, reaches a single deployment-ready state, persists both member identities/endpoints, and shuts both down cleanly.
 
 No concurrent benchmark clients are required yet.
+
+Implementation validation completed locally without GitHub Actions:
+
+- two independent executable fake llama-server processes reach one deployment-ready barrier, receive distinct reserved ports, persist endpoints/PIDs/argv/readiness/logs, and shut down cleanly;
+- readiness completion order does not affect the final deployment status;
+- first-member failure, later-member failure, readiness timeout, cancellation, binary drift, missing model artifact, runtime OOM, cleanup failure, leader-process crash with a surviving child, host-lock contention, and stale-run recovery are covered;
+- process-group cleanup terminates child processes even when the server leader has already exited;
+- runtime headroom validation compares observed free VRAM with the M4 reserved margin and persists runtime_memory_margin_violated when the hard margin is breached;
+- missing planned-device GPU telemetry now fails closed as telemetry_incomplete instead of silently accepting an unvalidated margin;
+- schema version 10 persists explicit deployment member endpoint/status/PID/argv/model paths/readiness/exit/log/forced-kill/cleanup evidence;
+- llprof deployment execute accepts a persisted placement plus per-instance model paths and performs the residency lifecycle without starting M6 benchmark clients;
+- the pushed M5 executor suite contains 14 real-process lifecycle/failure tests, with deployment CLI coverage alongside it;
+- the reconstructed V1/V2-M1/M2/M3/M4 regression workspace remains green at 100 pytest tests after the M5 persistence/executor changes;
+- Python compile checks pass.
+
+The repository-wide Ruff, mypy, complete pytest suite, and frontend gates remain pending because the local reconstruction is intentionally partial. The manual GitHub Actions workflow has not been dispatched.
 
 ### Suggested checkpoint commits
 
