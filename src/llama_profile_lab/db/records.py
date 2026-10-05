@@ -6,6 +6,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from llama_profile_lab.domain.concurrent_workload import (
+    ConcurrentMemberStatus,
+    ConcurrentQuality,
+    ConcurrentRunStatus,
+    ConcurrentWorkloadMode,
+)
 from llama_profile_lab.domain.deployment import (
     DeploymentFailureKind,
     DeploymentFeasibility,
@@ -491,4 +497,92 @@ class DeploymentPlanCaseRecord:
     deployment_candidate_id: str
     deployment_placement_id: str
     generation: Mapping[str, Any]
+
+@dataclass(frozen=True, slots=True)
+class ConcurrentWorkloadCaseRecord:
+    """Persisted immutable concurrent workload case."""
+
+    id: str
+    deployment_candidate_id: str
+    case_hash: str
+    phase: str
+    definition: Mapping[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentWorkloadRunRecord:
+    """One synchronized concurrent workload phase."""
+
+    id: str
+    deployment_run_id: str
+    workload_case_id: str
+    phase: str
+    status: ConcurrentRunStatus
+    quality: ConcurrentQuality | None
+    correctness_valid: bool
+    barrier_release_ns: int | None
+    overlap_start_ns: int | None
+    overlap_end_ns: int | None
+    overlap_duration_ns: int | None
+    prompt_tokens: int
+    decode_tokens: int
+    combined_prompt_tps: float | None
+    combined_decode_tps: float | None
+    min_retention: float | None
+    failure_kind: str | None
+    failure_details: Mapping[str, Any] | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class StandaloneBaselineRecord:
+    """One exact standalone throughput denominator."""
+
+    id: str
+    candidate_id: str
+    resolved_placement_id: str
+    host_id: str
+    binary_id: str
+    mode: ConcurrentWorkloadMode
+    prompt_tokens: int
+    generate_tokens: int
+    depth_tokens: int
+    throughput_tps: float
+    latency_ms: float | None
+    source: Mapping[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentWorkloadMemberRecord:
+    """One instance result inside a concurrent workload phase."""
+
+    deployment_workload_run_id: str
+    instance_id: str
+    ordinal: int
+    mode: ConcurrentWorkloadMode
+    status: ConcurrentMemberStatus
+    client_ready_ns: int
+    barrier_release_ns: int
+    first_request_ns: int | None
+    first_token_ns: int | None
+    last_token_ns: int | None
+    finished_ns: int | None
+    prompt_tokens: int
+    decode_tokens: int
+    native_prompt_tps: float | None
+    native_decode_tps: float | None
+    overlap_prompt_tokens: int
+    overlap_decode_tokens: int
+    overlap_prompt_tps: float | None
+    overlap_decode_tps: float | None
+    latency_ms: float | None
+    standalone_baseline_id: str | None
+    standalone_tps: float | None
+    retention: float | None
+    throughput_loss_pct: float | None
+    correctness_valid: bool
+    raw: Mapping[str, Any]
+    failure_details: Mapping[str, Any] | None
 
