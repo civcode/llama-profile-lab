@@ -9,6 +9,11 @@ from statistics import fmean
 
 from llama_profile_lab.analysis import (
     DEFAULT_METRIC_REGISTRY,
+    DeploymentAnalysisFilter,
+    DeploymentAnalysisService,
+    DeploymentMetricConstraint,
+    DeploymentParetoObjective,
+    DeploymentParetoResult,
     AnalysisFilter,
     AnalysisService,
     CandidateComparison,
@@ -25,6 +30,25 @@ from llama_profile_lab.api.dto import (
     CandidateEvaluationDTO,
     CandidateListResponse,
     CandidateValidationHistoryDTO,
+    DeploymentCandidateItemDTO,
+    DeploymentCandidateListResponse,
+    DeploymentCreateRequest,
+    DeploymentDTO,
+    DeploymentMemberStateDTO,
+    DeploymentOperationDTO,
+    DeploymentParetoResponse,
+    DeploymentPlacementDTO,
+    DeploymentPlacementListResponse,
+    DeploymentPlanCaseDTO,
+    DeploymentPlanRequest,
+    DeploymentPlanResponse,
+    DeploymentProgressDTO,
+    DeploymentResultsResponse,
+    DeploymentRunDTO,
+    DeploymentRunListResponse,
+    DeploymentRunMemberDTO,
+    DeploymentRunRequest,
+    DeploymentWorkloadPhaseDTO,
     ExecutionRequest,
     ExecutionSummaryDTO,
     ExperimentCreateRequest,
@@ -59,6 +83,12 @@ from llama_profile_lab.api.dto import (
     ServerValidationResponse,
     TelemetryResponse,
 )
+from llama_profile_lab.api.deployment_operations import (
+    DeploymentOperationError,
+    DeploymentOperationManager,
+    DeploymentOperationSnapshot,
+    DeploymentOperationSpec,
+)
 from llama_profile_lab.api.operations import (
     ExecutionSpec,
     OperationManager,
@@ -68,6 +98,11 @@ from llama_profile_lab.api.profiles import LauncherProfile, LauncherProfileProvi
 from llama_profile_lab.db import (
     BenchmarkCaseRepository,
     BenchmarkRunRepository,
+    ConcurrentWorkloadRepository,
+    DeploymentCandidateRepository,
+    DeploymentPlanRepository,
+    DeploymentPlacementRepository,
+    DeploymentRunRepository,
     CandidateRepository,
     Database,
     EnvironmentRepository,
@@ -91,10 +126,16 @@ from llama_profile_lab.domain import (
     FixedPlacementPolicy,
 )
 from llama_profile_lab.domain.base import JsonScalar
-from llama_profile_lab.execution import ServerValidationService
+from llama_profile_lab.execution import (
+    DeploymentServerInput,
+    ServerValidationService,
+    StandaloneBaselineInput,
+)
 from llama_profile_lab.llama import BinaryKind, probe_binary
 from llama_profile_lab.planning import (
     DEFAULT_PARAMETER_REGISTRY,
+    DeploymentEstimatorInput,
+    DeploymentPlannerService,
     PlanSummary,
     build_plan,
     plan_experiment,
@@ -119,10 +160,15 @@ class ApiService:
         *,
         profiles: LauncherProfileProvider,
         operations: OperationManager,
+        deployment_operations: DeploymentOperationManager | None = None,
     ) -> None:
         self.database = database
         self.profiles = profiles
         self.operations = operations
+        self.deployment_operations = (
+            deployment_operations
+            or DeploymentOperationManager(database)
+        )
 
     def health(self) -> int:
         with self.database.session() as connection:
