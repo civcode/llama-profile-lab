@@ -612,6 +612,12 @@ Deployment execution owns a process group for every server and client. Cancellat
 
 Stale-running recovery must recognize deployment runs in addition to V1 benchmark runs.
 
+The V2-M5 implementation launches one managed llama-server per deployment instance under the existing exclusive host lock. It reserves collision-safe local ports before startup, persists the actual endpoint and argv for every member, launches all members before entering a concurrent readiness barrier, and treats the deployment as ready only after every member reports a healthy `/health` endpoint.
+
+Shutdown is deployment-wide. Partial startup, readiness timeout, cancellation, interruption, runtime memory failure, or member crash tears down every registered process group. Process-group termination is attempted even when the server leader has already exited so children cannot survive an otherwise terminal deployment run.
+
+After readiness, M5 samples current per-device GPU memory and compares observed free VRAM against the M4 reserved margin. A hard margin violation is persisted as `runtime_memory_margin_violated`. If a planned physical device cannot be observed, validation fails closed as `telemetry_incomplete` instead of treating the margin as validated.
+
 ## 16. Telemetry extensions
 
 ### 16.1 Composite GPU provider
@@ -734,8 +740,24 @@ deployment_run_id
 instance_id
 server_run_id
 client_run_id
+endpoint
+member_status
+pid
+argv_json
+target_model_path
+draft_model_path
+started_at
+ready_at
+finished_at
+exit_code
+stdout
+stderr
+forced_kill
+cleanup_error
 result_json
 ~~~
+
+V2-M5 migration 010 adds the explicit server lifecycle fields above. They preserve enough evidence to diagnose startup/readiness/cleanup behavior independently for every resident model instance while retaining `result_json` for extensible member metadata.
 
 Existing generic metric and telemetry storage should be reused where practical.
 
@@ -761,17 +783,17 @@ Deployment-level feasibility cache identity additionally includes every resident
 
 ## 19. CLI
 
-Initial commands:
+Implemented through V2-M5:
 
 ~~~text
-llprof deployment plan DEPLOYMENT_ID
-llprof deployment placement DEPLOYMENT_ID
-llprof deployment run DEPLOYMENT_ID
-llprof deployment resume DEPLOYMENT_ID
-llprof deployment show DEPLOYMENT_ID
-llprof deployment results DEPLOYMENT_ID
-llprof deployment pareto DEPLOYMENT_ID
+llprof deployment preview deployment-plan.json
+llprof deployment plan deployment-plan.json
+llprof deployment execute deployment-execution.json
 ~~~
+
+The M5 execution specification identifies one persisted `deployment_placement_id` and supplies the concrete model path for every instance. Optional fields select bind host, readiness timeout, residency hold duration, and per-instance draft model paths. Execution persists the actual endpoints selected by the collision-safe port allocator.
+
+Later milestones add deployment results, resume/cancel surfaces, and Pareto analysis without changing the M5 execution record semantics.
 
 Planning output should show:
 
