@@ -200,6 +200,18 @@ def test_device_inventory_and_memory_estimate_cache(tmp_path: Path) -> None:
         ]
         assert all(item.mapping_status == "unresolved" for item in persisted)
 
+        AcceleratorDeviceRepository(connection).put_inventory(
+            host_id=inventory.host_id,
+            binary_id=helper_id,
+            devices=inventory.devices[:1],
+            raw_output="refreshed",
+        )
+        refreshed = AcceleratorDeviceRepository(connection).list_for_binary(
+            host_id=inventory.host_id,
+            binary_id=helper_id,
+        )
+        assert [item.logical_device_name for item in refreshed] == ["CUDA0"]
+
     service = MemoryEstimatorService(database)
     first = service.estimate(
         candidate_id,
