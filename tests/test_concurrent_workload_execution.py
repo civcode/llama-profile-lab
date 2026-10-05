@@ -329,6 +329,7 @@ def _candidate(model_id: str) -> Candidate:
 def _seed(
     tmp_path: Path,
 ) -> tuple[Database, str, tuple[DeploymentServerInput, ...]]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     database = Database(tmp_path / "concurrent.db")
     server = tmp_path / "llama-server"
     server.write_bytes(b"fake server")
