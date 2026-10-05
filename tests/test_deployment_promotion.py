@@ -440,9 +440,13 @@ def test_coordinated_deployment_promotion_requires_complete_sources_and_persists
         item["correctness_valid"]
         for item in proposal["evidence"]["concurrent_validation"]
     )
-    assert '"qwen"' in proposal["patch"]
-    assert '"flash"' in proposal["patch"]
+    assert {item["instance_id"] for item in proposal["changes"]} == {
+        "qwen",
+        "flash",
+    }
+    assert all(item["changes"] for item in proposal["changes"])
     assert '"--device"' in proposal["patch"]
+    assert '"--tensor-split"' in proposal["patch"]
     assert json.loads(launcher.read_text(encoding="utf-8")) == source_payload
 
     with Database(database_path).session() as connection:
