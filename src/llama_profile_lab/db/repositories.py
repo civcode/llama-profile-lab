@@ -18,6 +18,7 @@ from llama_profile_lab.db.records import (
     BenchmarkRunRecord,
     BinaryRecord,
     CandidateEvaluationRecord,
+    ConcurrentWorkloadCaseRecord,
     DeploymentCandidateRecord,
     DeploymentDeviceAllocationRecord,
     DeploymentInstanceRecord,
@@ -28,6 +29,8 @@ from llama_profile_lab.db.records import (
     DeploymentRejectionRecord,
     DeploymentRunMemberRecord,
     DeploymentRunRecord,
+    DeploymentWorkloadMemberRecord,
+    DeploymentWorkloadRunRecord,
     ExperimentRecord,
     ExperimentStatus,
     MemoryEstimateAttemptRecord,
@@ -43,10 +46,15 @@ from llama_profile_lab.db.records import (
     ServerBenchmarkStatus,
     ServerRunRecord,
     ServerRunStatus,
+    StandaloneBaselineRecord,
 )
 from llama_profile_lab.domain import (
     AcceleratorDevice,
     Candidate,
+    ConcurrentMemberResult,
+    ConcurrentQuality,
+    ConcurrentRunStatus,
+    ConcurrentWorkloadCase,
     DeploymentCandidate,
     DeploymentFailureKind,
     DeploymentPlacement,
@@ -3419,6 +3427,494 @@ class DeploymentPlanRepository:
                 deployment_candidate_id=str(row["deployment_candidate_id"]),
                 deployment_placement_id=str(row["deployment_placement_id"]),
                 generation=_loads_object(str(row["generation_json"])),
+            )
+            for row in rows
+        )
+
+
+class StandaloneBaselineRepository:
+    """Exact standalone throughput denominators for concurrent retention."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def add(
+        self,
+        *,
+        candidate_id: str,
+        resolved_placement_id: str,
+        host_id: str,
+        binary_id: str,
+        mode: str,
+        prompt_tokens: int,
+        generate_tokens: int,
+        depth_tokens: int,
+        throughput_tps: float,
+        latency_ms: float | None = None,
+        source: Mapping[str, Any] | None = None,
+    ) -> str:
+        identifier = _event_id("standalone")
+        self.connection.execute(
+            """
+            INSERT INTO deployment_standalone_baseline(
+                id, candidate_id, resolved_placement_id, host_id, binary_id,
+                mode, prompt_tokens, generate_tokens, depth_tokens,
+                throughput_tps, latency_ms, source_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identifier,
+                candidate_id,
+                resolved_placement_id,
+                host_id,
+                binary_id,
+                mode,
+                prompt_tokens,
+                generate_tokens,
+                depth_tokens,
+                throughput_tps,
+                latency_ms,
+                canonical_json(dict(source or {})),
+            ),
+        )
+        return identifier
+
+    def lookup_exact(
+        self,
+        *,
+        candidate_id: str,
+        resolved_placement_id: str,
+        host_id: str,
+        binary_id: str,
+        mode: str,
+        prompt_tokens: int,
+        generate_tokens: int,
+        depth_tokens: int,
+    ) -> tuple[StandaloneBaselineRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT id, candidate_id, resolved_placement_id, host_id, binary_id,
+                   mode, prompt_tokens, generate_tokens, depth_tokens,
+                   throughput_tps, latency_ms, source_json, created_at
+            FROM deployment_standalone_baseline
+            WHERE candidate_id = ?
+              AND resolved_placement_id = ?
+              AND host_id = ?
+              AND binary_id = ?
+              AND mode = ?
+              AND prompt_tokens = ?
+              AND generate_tokens = ?
+              AND depth_tokens = ?
+            ORDER BY created_at, id
+            """,
+            (
+                candidate_id,
+                resolved_placement_id,
+                host_id,
+                binary_id,
+                mode,
+                prompt_tokens,
+                generate_tokens,
+                depth_tokens,
+            ),
+        ).fetchall()
+        return tuple(
+            StandaloneBaselineRecord(
+                id=str(row["id"]),
+                candidate_id=str(row["candidate_id"]),
+                resolved_placement_id=str(row["resolved_placement_id"]),
+                host_id=str(row["host_id"]),
+                binary_id=str(row["binary_id"]),
+                mode=row["mode"],
+                prompt_tokens=int(row["prompt_tokens"]),
+                generate_tokens=int(row["generate_tokens"]),
+                depth_tokens=int(row["depth_tokens"]),
+                throughput_tps=float(row["throughput_tps"]),
+                latency_ms=(
+                    None
+                    if row["latency_ms"] is None
+                    else float(row["latency_ms"])
+                ),
+                source=_loads_object(str(row["source_json"])),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
+        )
+
+
+class ConcurrentWorkloadRepository:
+    """Concurrent workload cases, synchronized phase runs, and member results."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def put_case(
+        self,
+        deployment_candidate_id: str,
+        workload: ConcurrentWorkloadCase,
+    ) -> str:
+        digest = workload.content_hash()
+        identifier = _content_id(
+            "concwork",
+            sha256_json(
+                {
+                    "deployment_candidate_id": deployment_candidate_id,
+                    "case_hash": digest,
+                }
+            ),
+        )
+        self.connection.execute(
+            """
+            INSERT INTO deployment_concurrent_workload_case(
+                id, deployment_candidate_id, case_hash, phase, definition_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(deployment_candidate_id, case_hash) DO NOTHING
+            """,
+            (
+                identifier,
+                deployment_candidate_id,
+                digest,
+                workload.phase,
+                canonical_json(workload),
+            ),
+        )
+        return identifier
+
+    def get_case(
+        self,
+        identifier: str,
+    ) -> ConcurrentWorkloadCase | None:
+        row = self.connection.execute(
+            """
+            SELECT definition_json
+            FROM deployment_concurrent_workload_case
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ConcurrentWorkloadCase.model_validate_json(
+            str(row["definition_json"])
+        )
+
+    def case_record(
+        self,
+        identifier: str,
+    ) -> ConcurrentWorkloadCaseRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, deployment_candidate_id, case_hash, phase,
+                   definition_json, created_at
+            FROM deployment_concurrent_workload_case
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ConcurrentWorkloadCaseRecord(
+            id=str(row["id"]),
+            deployment_candidate_id=str(row["deployment_candidate_id"]),
+            case_hash=str(row["case_hash"]),
+            phase=str(row["phase"]),
+            definition=_loads_object(str(row["definition_json"])),
+            created_at=str(row["created_at"]),
+        )
+
+    def create_run(
+        self,
+        *,
+        deployment_run_id: str,
+        workload_case_id: str,
+        phase: str,
+    ) -> str:
+        identifier = _event_id("concworkrun")
+        self.connection.execute(
+            """
+            INSERT INTO deployment_workload_run(
+                id, deployment_run_id, workload_case_id, phase, status
+            )
+            VALUES (?, ?, ?, ?, 'running')
+            """,
+            (identifier, deployment_run_id, workload_case_id, phase),
+        )
+        return identifier
+
+    def finish_run(
+        self,
+        identifier: str,
+        *,
+        status: ConcurrentRunStatus,
+        quality: ConcurrentQuality,
+        correctness_valid: bool,
+        barrier_release_ns: int | None,
+        overlap_start_ns: int | None,
+        overlap_end_ns: int | None,
+        overlap_duration_ns: int | None,
+        prompt_tokens: int,
+        decode_tokens: int,
+        combined_prompt_tps: float | None,
+        combined_decode_tps: float | None,
+        min_retention: float | None,
+        failure_kind: str | None = None,
+        failure_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if status == "running":
+            raise ValueError("finished concurrent workload run must be terminal")
+        cursor = self.connection.execute(
+            """
+            UPDATE deployment_workload_run
+            SET status = ?, quality = ?, correctness_valid = ?,
+                barrier_release_ns = ?, overlap_start_ns = ?,
+                overlap_end_ns = ?, overlap_duration_ns = ?,
+                prompt_tokens = ?, decode_tokens = ?,
+                combined_prompt_tps = ?, combined_decode_tps = ?,
+                min_retention = ?, failure_kind = ?,
+                failure_details_json = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (
+                status,
+                quality,
+                int(correctness_valid),
+                barrier_release_ns,
+                overlap_start_ns,
+                overlap_end_ns,
+                overlap_duration_ns,
+                prompt_tokens,
+                decode_tokens,
+                combined_prompt_tps,
+                combined_decode_tps,
+                min_retention,
+                failure_kind,
+                (
+                    None
+                    if failure_details is None
+                    else canonical_json(dict(failure_details))
+                ),
+                identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "concurrent workload run does not exist or is already terminal"
+            )
+
+    def add_member(
+        self,
+        run_id: str,
+        *,
+        ordinal: int,
+        result: ConcurrentMemberResult,
+        overlap_prompt_tokens: int,
+        overlap_decode_tokens: int,
+        overlap_prompt_tps: float | None,
+        overlap_decode_tps: float | None,
+        standalone_baseline_id: str | None,
+        standalone_tps: float | None,
+        retention: float | None,
+        throughput_loss_pct: float | None,
+        failure_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO deployment_workload_member(
+                deployment_workload_run_id, instance_id, ordinal, mode,
+                status, client_ready_ns, barrier_release_ns,
+                first_request_ns, first_token_ns, last_token_ns, finished_ns,
+                prompt_tokens, decode_tokens, native_prompt_tps,
+                native_decode_tps, overlap_prompt_tokens,
+                overlap_decode_tokens, overlap_prompt_tps,
+                overlap_decode_tps, latency_ms, standalone_baseline_id,
+                standalone_tps, retention, throughput_loss_pct,
+                correctness_valid, raw_json, failure_details_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                result.instance_id,
+                ordinal,
+                result.mode,
+                result.status,
+                result.client_ready_ns,
+                result.barrier_release_ns,
+                result.first_request_ns,
+                result.first_token_ns,
+                result.last_token_ns,
+                result.finished_ns,
+                result.prompt_tokens,
+                result.decode_tokens,
+                result.native_prompt_tps,
+                result.native_decode_tps,
+                overlap_prompt_tokens,
+                overlap_decode_tokens,
+                overlap_prompt_tps,
+                overlap_decode_tps,
+                result.latency_ms,
+                standalone_baseline_id,
+                standalone_tps,
+                retention,
+                throughput_loss_pct,
+                int(result.correctness_valid),
+                canonical_json(dict(result.raw)),
+                (
+                    None
+                    if failure_details is None
+                    else canonical_json(dict(failure_details))
+                ),
+            ),
+        )
+
+    def get_run(
+        self,
+        identifier: str,
+    ) -> DeploymentWorkloadRunRecord | None:
+        row = self.connection.execute(
+            """
+            SELECT id, deployment_run_id, workload_case_id, phase, status,
+                   quality, correctness_valid, barrier_release_ns,
+                   overlap_start_ns, overlap_end_ns, overlap_duration_ns,
+                   prompt_tokens, decode_tokens, combined_prompt_tps,
+                   combined_decode_tps, min_retention, failure_kind,
+                   failure_details_json, created_at
+            FROM deployment_workload_run
+            WHERE id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DeploymentWorkloadRunRecord(
+            id=str(row["id"]),
+            deployment_run_id=str(row["deployment_run_id"]),
+            workload_case_id=str(row["workload_case_id"]),
+            phase=str(row["phase"]),
+            status=row["status"],
+            quality=row["quality"],
+            correctness_valid=bool(row["correctness_valid"]),
+            barrier_release_ns=row["barrier_release_ns"],
+            overlap_start_ns=row["overlap_start_ns"],
+            overlap_end_ns=row["overlap_end_ns"],
+            overlap_duration_ns=row["overlap_duration_ns"],
+            prompt_tokens=int(row["prompt_tokens"]),
+            decode_tokens=int(row["decode_tokens"]),
+            combined_prompt_tps=(
+                None
+                if row["combined_prompt_tps"] is None
+                else float(row["combined_prompt_tps"])
+            ),
+            combined_decode_tps=(
+                None
+                if row["combined_decode_tps"] is None
+                else float(row["combined_decode_tps"])
+            ),
+            min_retention=(
+                None
+                if row["min_retention"] is None
+                else float(row["min_retention"])
+            ),
+            failure_kind=row["failure_kind"],
+            failure_details=(
+                None
+                if row["failure_details_json"] is None
+                else _loads_object(str(row["failure_details_json"]))
+            ),
+            created_at=str(row["created_at"]),
+        )
+
+    def members(
+        self,
+        run_id: str,
+    ) -> tuple[DeploymentWorkloadMemberRecord, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT deployment_workload_run_id, instance_id, ordinal, mode,
+                   status, client_ready_ns, barrier_release_ns,
+                   first_request_ns, first_token_ns, last_token_ns, finished_ns,
+                   prompt_tokens, decode_tokens, native_prompt_tps,
+                   native_decode_tps, overlap_prompt_tokens,
+                   overlap_decode_tokens, overlap_prompt_tps,
+                   overlap_decode_tps, latency_ms, standalone_baseline_id,
+                   standalone_tps, retention, throughput_loss_pct,
+                   correctness_valid, raw_json, failure_details_json
+            FROM deployment_workload_member
+            WHERE deployment_workload_run_id = ?
+            ORDER BY ordinal
+            """,
+            (run_id,),
+        ).fetchall()
+        return tuple(
+            DeploymentWorkloadMemberRecord(
+                deployment_workload_run_id=str(
+                    row["deployment_workload_run_id"]
+                ),
+                instance_id=str(row["instance_id"]),
+                ordinal=int(row["ordinal"]),
+                mode=row["mode"],
+                status=row["status"],
+                client_ready_ns=int(row["client_ready_ns"]),
+                barrier_release_ns=int(row["barrier_release_ns"]),
+                first_request_ns=row["first_request_ns"],
+                first_token_ns=row["first_token_ns"],
+                last_token_ns=row["last_token_ns"],
+                finished_ns=row["finished_ns"],
+                prompt_tokens=int(row["prompt_tokens"]),
+                decode_tokens=int(row["decode_tokens"]),
+                native_prompt_tps=(
+                    None
+                    if row["native_prompt_tps"] is None
+                    else float(row["native_prompt_tps"])
+                ),
+                native_decode_tps=(
+                    None
+                    if row["native_decode_tps"] is None
+                    else float(row["native_decode_tps"])
+                ),
+                overlap_prompt_tokens=int(row["overlap_prompt_tokens"]),
+                overlap_decode_tokens=int(row["overlap_decode_tokens"]),
+                overlap_prompt_tps=(
+                    None
+                    if row["overlap_prompt_tps"] is None
+                    else float(row["overlap_prompt_tps"])
+                ),
+                overlap_decode_tps=(
+                    None
+                    if row["overlap_decode_tps"] is None
+                    else float(row["overlap_decode_tps"])
+                ),
+                latency_ms=(
+                    None
+                    if row["latency_ms"] is None
+                    else float(row["latency_ms"])
+                ),
+                standalone_baseline_id=row["standalone_baseline_id"],
+                standalone_tps=(
+                    None
+                    if row["standalone_tps"] is None
+                    else float(row["standalone_tps"])
+                ),
+                retention=(
+                    None
+                    if row["retention"] is None
+                    else float(row["retention"])
+                ),
+                throughput_loss_pct=(
+                    None
+                    if row["throughput_loss_pct"] is None
+                    else float(row["throughput_loss_pct"])
+                ),
+                correctness_valid=bool(row["correctness_valid"]),
+                raw=_loads_object(str(row["raw_json"])),
+                failure_details=(
+                    None
+                    if row["failure_details_json"] is None
+                    else _loads_object(str(row["failure_details_json"]))
+                ),
             )
             for row in rows
         )
