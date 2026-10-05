@@ -117,6 +117,19 @@ llprof deployment export DEPLOYMENT_ID \
 
 This export is different from `llprof deployment results`: it includes immutable definitions, planning/rejections, placements, estimator evidence, raw run/member/workload evidence, GPU telemetry, durable operations, environment records, and promotion proposals.
 
+For target-workstation sign-off, also generate a read-only machine-checkable report:
+
+```bash
+llprof deployment acceptance-report DEPLOYMENT_ID \
+  --minimum-devices 2 \
+  --minimum-phase-repetitions 3 \
+  --format json \
+  --output workstation-acceptance.json \
+  --database data/benchmarks.db
+```
+
+The report intentionally cannot mark the release ready until Pareto finalist selection, exact target identity confirmation, and the clean-checkout backend/frontend gates are completed separately.
+
 Take a full SQLite archive for restore/recovery with the existing `llprof archive` command. Schema 15 archives retain all V2 tables and coordinated promotion records.
 
 See also:
