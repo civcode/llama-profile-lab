@@ -123,6 +123,7 @@ class _MemberPlan:
 class _RuntimeMemoryCheck:
     details: dict[str, object]
     violations: tuple[dict[str, object], ...]
+    missing_devices: tuple[str, ...] = ()
 
 
 class DeploymentProcessRegistry:
@@ -324,6 +325,7 @@ class DeploymentExecutor:
         runtime_check = _RuntimeMemoryCheck(
             details={"validated_devices": [], "missing_devices": []},
             violations=(),
+            missing_devices=(),
         )
 
         try:
@@ -410,7 +412,13 @@ class DeploymentExecutor:
                         f"runtime memory telemetry failed: {exc}"
                     )
                 else:
-                    if runtime_check.violations:
+                    if runtime_check.missing_devices:
+                        failure_kind = "telemetry_incomplete"
+                        failure_message = (
+                            "runtime GPU memory telemetry is missing planned "
+                            "devices"
+                        )
+                    elif runtime_check.violations:
                         failure_kind = "runtime_memory_margin_violated"
                         failure_message = (
                             "runtime GPU memory headroom violated planned margin"
@@ -942,6 +950,7 @@ def _validate_runtime_margins(
             "violations": violations,
         },
         violations=tuple(violations),
+        missing_devices=tuple(missing),
     )
 
 
