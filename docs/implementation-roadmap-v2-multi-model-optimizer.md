@@ -176,7 +176,6 @@ Recommended shape:
 DeploymentCandidate
   schema = "llama-profile-deployment-candidate"
   version = 1
-  name
   instances[]
   resource_policy
   workload_mix
