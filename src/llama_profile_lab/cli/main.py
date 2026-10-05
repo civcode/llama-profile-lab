@@ -25,6 +25,7 @@ from llama_profile_lab.analysis import (
 from llama_profile_lab.api.deployment_operations import (
     DeploymentOperationError,
     DeploymentOperationManager,
+    DeploymentOperationSnapshot,
     DeploymentOperationSpec,
 )
 from llama_profile_lab.api.dto import DeploymentCreateRequest
@@ -1648,7 +1649,9 @@ def _operation_spec_from_path(path: Path) -> DeploymentOperationSpec:
     )
 
 
-def _render_deployment_operation(snapshot) -> str:
+def _render_deployment_operation(
+    snapshot: DeploymentOperationSnapshot,
+) -> str:
     return (
         f"Operation: {snapshot.id}\n"
         f"Deployment: {snapshot.deployment_candidate_id}\n"
@@ -2655,6 +2658,64 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
     if args.command == "deployment":
+        if args.deployment_command == "create":
+            return _deployment_create_command(
+                args.database,
+                args.spec,
+            )
+        if args.deployment_command == "show":
+            return _deployment_show_command(
+                args.database,
+                args.deployment_id,
+                format_name=args.format_name,
+            )
+        if args.deployment_command == "placement":
+            return _deployment_placement_command(
+                args.database,
+                args.deployment_id,
+                format_name=args.format_name,
+            )
+        if args.deployment_command == "run":
+            return _deployment_run_command(
+                args.database,
+                args.deployment_id,
+                args.spec,
+            )
+        if args.deployment_command == "pause":
+            return _deployment_control_command(
+                args.database,
+                args.deployment_id,
+                action="pause",
+            )
+        if args.deployment_command == "resume":
+            return _deployment_resume_command(
+                args.database,
+                args.deployment_id,
+                args.spec,
+            )
+        if args.deployment_command == "cancel":
+            return _deployment_control_command(
+                args.database,
+                args.deployment_id,
+                action="cancel",
+            )
+        if args.deployment_command == "results":
+            return _deployment_results_command(
+                args.database,
+                args.deployment_id,
+                filter_args=args.filter,
+                format_name=args.format_name,
+                output=args.output,
+            )
+        if args.deployment_command == "pareto":
+            return _deployment_pareto_command(
+                args.database,
+                args.deployment_id,
+                objective_args=args.objective,
+                constraint_args=args.constraint,
+                filter_args=args.filter,
+                format_name=args.format_name,
+            )
         if args.deployment_command == "preview":
             return _deployment_plan_command(
                 args.database,
