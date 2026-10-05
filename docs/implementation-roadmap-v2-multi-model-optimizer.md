@@ -1257,7 +1257,7 @@ The container still cannot resolve GitHub, so the full repository Ruff, mypy, co
 
 ## 12. V2-M8 — CLI, HTTP API, and SSE
 
-**Status: Planned**
+**Status: Implemented — targeted branch-side validation complete; full repository lint/type/full-test gate pending**
 
 ### Objective
 
@@ -1339,17 +1339,17 @@ Human-readable CLI should clearly distinguish:
 
 ### Work items
 
-- [ ] Add application service methods.
-- [ ] Add API DTOs.
-- [ ] Add API routes.
-- [ ] Add error mapping.
-- [ ] Add SSE deployment snapshots.
-- [ ] Add CLI parser tree.
-- [ ] Add CLI rendering.
-- [ ] Add JSON-friendly output where existing CLI convention supports it.
-- [ ] Reuse V1 result/analysis services where semantics match.
-- [ ] Add API/CLI tests.
-- [ ] Verify V1 routes unchanged.
+- [x] Add application service methods.
+- [x] Add API DTOs.
+- [x] Add API routes.
+- [x] Add error mapping.
+- [x] Add SSE deployment snapshots.
+- [x] Add CLI parser tree.
+- [x] Add CLI rendering.
+- [x] Add JSON-friendly output where existing CLI convention supports it.
+- [x] Reuse V1 result/analysis services where semantics match.
+- [x] Add API/CLI tests.
+- [x] Verify V1 routes unchanged.
 
 ### Tests
 
@@ -1378,6 +1378,27 @@ CLI:
 The complete V2 workflow through M7 can be driven without importing internal Python modules, using only CLI or HTTP APIs.
 
 All V1 CLI/API tests remain green.
+
+Implementation notes and validation:
+
+- M8 keeps the immutable base deployment ID distinct from generated deployment Candidate IDs and placement IDs across CLI/HTTP responses;
+- CLI adds `create`, `show`, `placement`, `run`, `pause`, `resume`, `cancel`, `results`, and `pareto` while preserving the existing `preview`, `plan`, `execute`, and `benchmark` commands;
+- HTTP adds create/plan/run/pause/resume/cancel plus deployment/progress/SSE/candidates/placements/runs/results/Pareto resources under `/api/deployments`;
+- typed DTOs cover deployment definitions, planning/pruning counts, generated Candidate rejection details, projected/runtime memory, run/member/phase state, latest completed phase PP/TG/min-retention metrics, raw M7 rows, and scoped Pareto results;
+- M7 export and Pareto calls accept an explicit placement scope so unrelated deployments in the same SQLite database cannot affect one deployment's HTTP/CLI analysis;
+- schema migration 014 adds durable deployment operation state and the exact execution request, allowing a running foreground CLI/API operation to be paused/cancelled from another process and a terminal paused operation to be resumed from persisted request data;
+- resume requires the latest operation to be `paused` even when the caller supplies a replacement spec; a late control request cannot overwrite an already successful benchmark result;
+- cooperative pause ends the underlying execution attempt as cancelled while the higher-level durable operation becomes paused; resume creates a new deployment run;
+- automatic stale-operation recovery after abrupt process death is intentionally not claimed yet because M8 has no heartbeat/lease mechanism;
+- deployment progress reports planned/completed/failed candidates without double-counting a placement that failed before later succeeding, active run, member states, current phase, and latest completed phase throughput/retention;
+- SSE emits only changed progress snapshots and terminates for completed, paused, cancelled, or failed operation states;
+- JSON-friendly CLI rendering is available for show/placement/results/Pareto, CSV results encode nested values as JSON, and human placement output labels projected versus runtime rows;
+- new tests cover HTTP create/plan/get, invalid references, plan summary, placement memory, scoped results/Pareto, SSE changes, run/pause/resume/cancel, member failure propagation, durable cross-manager pause/resume/cancel, resume-state validation, CLI help/workflow/analysis, and nonzero missing-resource behavior;
+- migration 014 applies cleanly in an executable SQLite harness with `PRAGMA integrity_check = ok`, no foreign-key violations, valid running→pausing→paused persistence, and CHECK rejection of invalid operation states;
+- changed M8 Python/test files pass branch-side line-length, trailing-whitespace, blank-run, and imported-symbol-use scans;
+- the M8 diff is additive to the existing V1 route/CLI namespaces; no existing V1 route was removed or renamed and no workflow file was changed.
+
+The container still has no local repository checkout and cannot resolve GitHub, so the complete Ruff, strict mypy, pytest, frontend, and real workstation gates could not be executed here. The manual GitHub Actions workflow has not been dispatched.
 
 ### Suggested checkpoint commits
 
