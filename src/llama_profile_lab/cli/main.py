@@ -2869,10 +2869,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.database,
                 args.spec,
             )
-        if args.deployment_command in {"benchmark", "run", "resume"}:
+        if args.deployment_command == "benchmark":
             return _deployment_benchmark_command(
                 args.database,
                 args.spec,
+            )
+        if args.deployment_command in {"run", "resume"}:
+            return _deployment_benchmark_command(
+                args.database,
+                args.spec,
+                watch_control=True,
+            )
+        if args.deployment_command in {"pause", "cancel"}:
+            return _deployment_control_command(
+                args.database,
+                args.deployment_id,
+                action=args.deployment_command,
             )
         if args.deployment_command == "results":
             return _deployment_results_command(
