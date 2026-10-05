@@ -1,5 +1,9 @@
 """Experiment planning and search-space expansion."""
 
+from llama_profile_lab.planning.concurrent_workloads import (
+    ConcurrentWorkloadPlanningError,
+    generate_concurrent_workloads,
+)
 from llama_profile_lab.planning.constraints import (
     ConstraintError,
     evaluate_constraint,
@@ -47,7 +51,9 @@ from llama_profile_lab.planning.workloads import (
 
 __all__ = [
     "CandidatePoint",
+    "ConcurrentWorkloadPlanningError",
     "expand_deployment_search",
+    "generate_concurrent_workloads",
     "effective_placement_constraints",
     "DeploymentSearchExpansion",
     "DeploymentPoint",
