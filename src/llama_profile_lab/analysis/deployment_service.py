@@ -790,16 +790,21 @@ def _load_placement_context(
             str(row["logical_device_name"]): str(row["backend"])
             for row in backend_rows
         }
-        if placement_record.devices == "auto":
+        devices = placement_record.devices
+        if devices == "auto":
             backends[instance.instance_id] = tuple(
                 backend_by_device[name]
                 for name in sorted(backend_by_device)
             )
-        else:
+        elif isinstance(devices, tuple):
             backends[instance.instance_id] = tuple(
                 backend_by_device[name]
-                for name in placement_record.devices
+                for name in devices
                 if name in backend_by_device
+            )
+        else:
+            raise DeploymentAnalysisError(
+                "persisted resolved placement devices are invalid"
             )
     return _PlacementContext(
         placement_id=placement_id,
