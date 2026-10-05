@@ -455,6 +455,33 @@ def _seed(tmp_path: Path) -> tuple[Database, dict[str, tuple[str, ...]]]:
             gpus=[],
             os_info={},
         )
+        connection.executemany(
+            """
+            INSERT INTO accelerator_device(
+                id, host_id, binary_id, logical_device_name, backend,
+                mapping_status, physical_device_key
+            )
+            VALUES (?, ?, ?, ?, ?, 'mapped', ?)
+            """,
+            (
+                (
+                    "accel_cuda0",
+                    host_id,
+                    binary_id,
+                    "CUDA0",
+                    "cuda",
+                    "gpu0",
+                ),
+                (
+                    "accel_vulkan0",
+                    host_id,
+                    binary_id,
+                    "Vulkan0",
+                    "vulkan",
+                    "gpu1",
+                ),
+            ),
+        )
         suite_id = WorkloadSuiteRepository(connection).put(
             WorkloadSuite(
                 id="deployment-analysis-suite",
@@ -664,6 +691,8 @@ def test_exact_hidden_workload_dimension_must_be_filtered(
         filters=(
             *common,
             _filter("workload.member.qwen.depth_tokens", 128),
+            _filter("instance.qwen.resolved.backends.0", "cuda"),
+            _filter("instance.qwen.resolved.backends.1", "vulkan"),
         ),
     )
     assert matrix.facets[0].cells[0].value == pytest.approx(20.0)
