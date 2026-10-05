@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 import llama_profile_lab.api.service as api_service_module
 from llama_profile_lab.api import create_app
 from llama_profile_lab.api.deployment_operations import (
