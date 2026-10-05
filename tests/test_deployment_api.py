@@ -259,6 +259,24 @@ def test_deployment_list_returns_persisted_definitions(tmp_path: Path) -> None:
     assert subjects["b"][0] in ids
 
 
+def test_deployment_list_hides_generated_plan_candidates(tmp_path: Path) -> None:
+    database, subjects = _seed(tmp_path)
+    base_id = subjects["a"][0]
+    _link_plan(database, base_id, subjects)
+    app = create_app(
+        database.path,
+        deployment_operation_manager=SequencedDeploymentOperations(),
+    )
+
+    response = api_request(app, "GET", "/api/deployments")
+    assert response.status_code == 200
+    ids = {item["id"] for item in response.json()["items"]}
+    assert base_id in ids
+    assert subjects["b"][0] not in ids
+    assert subjects["c"][0] not in ids
+    assert subjects["d"][0] not in ids
+
+
 def test_deployment_create_plan_get_and_invalid_reference(
     tmp_path: Path,
     monkeypatch,
