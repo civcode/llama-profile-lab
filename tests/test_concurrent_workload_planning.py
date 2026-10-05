@@ -25,7 +25,7 @@ from llama_profile_lab.planning import generate_concurrent_workloads
 def _candidate(model_id: str, context: int = 4096) -> Candidate:
     return Candidate(
         model=ModelSelection(target_model_id=model_id),
-        context=ContextConfig(size=context),
+        context=ContextConfig(size=context, cache_type_k="f16", cache_type_v="f16"),
         compute=ComputeConfig(batch_size=512, ubatch_size=128),
         placement=PlacementConfig(
             mode="fit",
