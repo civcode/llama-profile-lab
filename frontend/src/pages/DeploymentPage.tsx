@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, deploymentProgressEvents } from "../api";
 import {
+  DeploymentParetoPlot,
   EmptyState,
   ErrorBanner,
   JsonDetails,
@@ -151,6 +152,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
   const [paretoDirectionB, setParetoDirectionB] = useState<"max" | "min">("max");
   const [paretoPhaseB, setParetoPhaseB] = useState("pp");
   const [retentionFloor, setRetentionFloor] = useState("");
+  const [paretoFilters, setParetoFilters] = useState("");
   const [readinessTimeout, setReadinessTimeout] = useState(300);
   const [error, setError] = useState<unknown>(null);
 
@@ -451,10 +453,15 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
         retentionFloor.trim() === ""
           ? []
           : ["deployment.min_retention:ge:" + retentionFloor.trim()];
+      const filters = paretoFilters
+        .split("\n")
+        .map((item) => item.trim())
+        .filter(Boolean);
       setPareto(
         await api.deploymentPareto(deploymentId, {
           objectives,
-          constraints
+          constraints,
+          ...(filters.length > 0 ? { filters } : {})
         })
       );
     } catch (reason) {
@@ -1075,18 +1082,32 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                 onChange={(event) => setRetentionFloor(event.target.value)}
               />
             </label>
-            <div className="button-row self-end">
-              <button className="button button-primary" onClick={() => void loadPareto()}>
-                Calculate frontier
-              </button>
-            </div>
+            <label className="field">
+              <span>Exact filters · one PATH=VALUE per line</span>
+              <textarea
+                className="planner-textarea pareto-filter-input"
+                value={paretoFilters}
+                onChange={(event) => setParetoFilters(event.target.value)}
+                placeholder={
+                  "workload.correctness_valid=true\n" +
+                  "instance.model_a.candidate.context.cache_type_k=q8_0"
+                }
+              />
+            </label>
+          </div>
+          <div className="button-row pareto-actions">
+            <button className="button button-primary" onClick={() => void loadPareto()}>
+              Calculate frontier
+            </button>
           </div>
           <ErrorBanner error={paretoError} />
           {pareto ? (
             pareto.result.frontier.length === 0 ? (
               <EmptyState title="No placement satisfies the selected objective evidence." />
             ) : (
-              <div className="candidate-table-wrap">
+              <>
+                <DeploymentParetoPlot result={pareto.result} />
+                <div className="candidate-table-wrap">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -1119,7 +1140,8 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                     ))}
                   </tbody>
                 </table>
-              </div>
+                </div>
+              </>
             )
           ) : null}
         </div>
