@@ -250,7 +250,7 @@ def test_health_profiles_binary_registration_and_experiment_planning(
 
     health = api_request(app, "GET", "/api/health")
     assert health.status_code == 200
-    assert health.json()["schema_version"] == 8
+    assert health.json()["schema_version"] == 9
 
     profiles = api_request(app, "GET", "/api/profiles")
     assert profiles.status_code == 200
@@ -258,8 +258,8 @@ def test_health_profiles_binary_registration_and_experiment_planning(
     assert profile["id"] == "demo"
     assert profile["args"]["--host"] == "127.0.0.1"
     assert profile["args"]["--flash-attn"] == "on"
-    assert profile["args"]["--ctx-size"] == 8192
-    assert profile["candidate"]["context"]["size"] == 8192
+    assert profile["args"]["--ctx-size"] == 9192
+    assert profile["candidate"]["context"]["size"] == 9192
     assert profile["candidate"]["compute"]["flash_attn"] == "on"
     assert profile["candidate"]["model"]["target_model_id"] == "launcher-profile:demo"
 
