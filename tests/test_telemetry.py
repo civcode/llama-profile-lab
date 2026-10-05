@@ -135,3 +135,17 @@ def test_missing_process_cpu_marks_telemetry_incomplete() -> None:
 
     assert assessment.quality == "telemetry_incomplete"
     assert not assessment.telemetry_complete
+
+def test_high_during_gpu_load_is_not_external_gpu_contamination() -> None:
+    assessment = classify_run_quality(
+        (
+            sample(1, phase="before", system_cpu=5, process_cpu=None, gpu=0),
+            sample(2, system_cpu=50, process_cpu=45, gpu=99),
+            sample(3, phase="after", system_cpu=5, process_cpu=None, gpu=0),
+        ),
+        expect_gpu=True,
+    )
+
+    assert assessment.quality == "clean"
+    assert assessment.telemetry_complete
+
