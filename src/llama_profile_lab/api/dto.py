@@ -664,6 +664,9 @@ class DeploymentProgressDTO(ApiModel):
     current_workload_phase: str | None
     combined_prompt_tps: float | None = None
     combined_decode_tps: float | None = None
+    current_combined_prompt_tps: float | None = None
+    current_combined_decode_tps: float | None = None
+    current_min_retention: float | None = None
     memory: DeploymentMemoryMatrix | None = None
     failure_kind: str | None = None
     failure_details: dict[str, Any] | None = None
