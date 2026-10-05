@@ -3717,6 +3717,8 @@ class ConcurrentWorkloadRepository:
         standalone_tps: float | None,
         retention: float | None,
         throughput_loss_pct: float | None,
+        baseline_latency_ms: float | None,
+        latency_increase_pct: float | None,
         failure_details: Mapping[str, Any] | None = None,
     ) -> None:
         self.connection.execute(
@@ -3730,10 +3732,11 @@ class ConcurrentWorkloadRepository:
                 overlap_decode_tokens, overlap_prompt_tps,
                 overlap_decode_tps, latency_ms, standalone_baseline_id,
                 standalone_tps, retention, throughput_loss_pct,
+                baseline_latency_ms, latency_increase_pct,
                 correctness_valid, raw_json, failure_details_json
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -3760,6 +3763,8 @@ class ConcurrentWorkloadRepository:
                 standalone_tps,
                 retention,
                 throughput_loss_pct,
+                baseline_latency_ms,
+                latency_increase_pct,
                 int(result.correctness_valid),
                 canonical_json(dict(result.raw)),
                 (
@@ -3841,6 +3846,7 @@ class ConcurrentWorkloadRepository:
                    overlap_decode_tokens, overlap_prompt_tps,
                    overlap_decode_tps, latency_ms, standalone_baseline_id,
                    standalone_tps, retention, throughput_loss_pct,
+                   baseline_latency_ms, latency_increase_pct,
                    correctness_valid, raw_json, failure_details_json
             FROM deployment_workload_member
             WHERE deployment_workload_run_id = ?
@@ -3907,6 +3913,16 @@ class ConcurrentWorkloadRepository:
                     None
                     if row["throughput_loss_pct"] is None
                     else float(row["throughput_loss_pct"])
+                ),
+                baseline_latency_ms=(
+                    None
+                    if row["baseline_latency_ms"] is None
+                    else float(row["baseline_latency_ms"])
+                ),
+                latency_increase_pct=(
+                    None
+                    if row["latency_increase_pct"] is None
+                    else float(row["latency_increase_pct"])
                 ),
                 correctness_valid=bool(row["correctness_valid"]),
                 raw=_loads_object(str(row["raw_json"])),
