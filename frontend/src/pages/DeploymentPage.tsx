@@ -13,6 +13,7 @@ import type {
   Deployment,
   DeploymentCandidateItem,
   DeploymentMemoryMatrix,
+  DeploymentParetoResult,
   DeploymentPlacement,
   DeploymentPlanRequest,
   DeploymentPlanResponse,
@@ -20,6 +21,16 @@ import type {
   DeploymentRun,
   ModelRecord
 } from "../types";
+
+function resultNumber(row: Record<string, unknown>, key: string): number | null {
+  const value = row[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function resultText(row: Record<string, unknown>, key: string): string | null {
+  const value = row[key];
+  return typeof value === "string" ? value : null;
+}
 
 function bytes(value: number | null): string {
   if (value === null) return "—";
@@ -121,6 +132,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
   const [candidates, setCandidates] = useState<DeploymentCandidateItem[]>([]);
   const [placements, setPlacements] = useState<DeploymentPlacement[]>([]);
   const [runs, setRuns] = useState<DeploymentRun[]>([]);
+  const [results, setResults] = useState<Record<string, unknown>[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [binaries, setBinaries] = useState<BinaryRecord[]>([]);
   const [selectedPlacementId, setSelectedPlacementId] = useState("");
@@ -130,6 +142,15 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
   const [planPreview, setPlanPreview] = useState<DeploymentPlanResponse | null>(null);
   const [plannerError, setPlannerError] = useState<unknown>(null);
   const [planning, setPlanning] = useState<"preview" | "plan" | null>(null);
+  const [pareto, setPareto] = useState<DeploymentParetoResult | null>(null);
+  const [paretoError, setParetoError] = useState<unknown>(null);
+  const [paretoMetricA, setParetoMetricA] = useState("deployment.combined_tg_tps");
+  const [paretoDirectionA, setParetoDirectionA] = useState<"max" | "min">("max");
+  const [paretoPhaseA, setParetoPhaseA] = useState("dd");
+  const [paretoMetricB, setParetoMetricB] = useState("deployment.combined_pp_tps");
+  const [paretoDirectionB, setParetoDirectionB] = useState<"max" | "min">("max");
+  const [paretoPhaseB, setParetoPhaseB] = useState("pp");
+  const [retentionFloor, setRetentionFloor] = useState("");
   const [readinessTimeout, setReadinessTimeout] = useState(300);
   const [error, setError] = useState<unknown>(null);
 
@@ -141,6 +162,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
         candidateValues,
         placementValues,
         runValues,
+        resultValues,
         modelValues,
         binaryValues
       ] = await Promise.all([
@@ -149,6 +171,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
         api.deploymentCandidates(deploymentId),
         api.deploymentPlacements(deploymentId),
         api.deploymentRuns(deploymentId),
+        api.deploymentResults(deploymentId),
         api.models(),
         api.binaries()
       ]);
@@ -157,6 +180,7 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
       setCandidates(candidateValues);
       setPlacements(placementValues);
       setRuns(runValues);
+      setResults(resultValues);
       setModels(modelValues);
       setBinaries(binaryValues);
       const helpers = binaryValues.filter(
@@ -200,12 +224,14 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
       void Promise.all([
         api.deploymentProgress(deploymentId),
         api.deploymentRuns(deploymentId),
-        api.deploymentPlacements(deploymentId)
+        api.deploymentPlacements(deploymentId),
+        api.deploymentResults(deploymentId)
       ])
-        .then(([progressValue, runValues, placementValues]) => {
+        .then(([progressValue, runValues, placementValues, resultValues]) => {
           setProgress(progressValue);
           setRuns(runValues);
           setPlacements(placementValues);
+          setResults(resultValues);
         })
         .catch(() => undefined);
     }, 2500);
@@ -223,10 +249,12 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
         setProgress(next);
         void Promise.all([
           api.deploymentRuns(deploymentId),
-          api.deploymentPlacements(deploymentId)
-        ]).then(([runValues, placementValues]) => {
+          api.deploymentPlacements(deploymentId),
+          api.deploymentResults(deploymentId)
+        ]).then(([runValues, placementValues, resultValues]) => {
           setRuns(runValues);
           setPlacements(placementValues);
+          setResults(resultValues);
         });
       },
       () => void refresh()
@@ -401,6 +429,37 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
       setProgress(await api.cancelDeployment(deploymentId));
     } catch (reason) {
       setError(reason);
+    }
+  }
+
+  async function loadPareto() {
+    try {
+      setParetoError(null);
+      const objectives = [
+        "x:" +
+          paretoDirectionA +
+          ":" +
+          paretoMetricA +
+          (paretoPhaseA ? "@workload.phase=" + paretoPhaseA : ""),
+        "y:" +
+          paretoDirectionB +
+          ":" +
+          paretoMetricB +
+          (paretoPhaseB ? "@workload.phase=" + paretoPhaseB : "")
+      ];
+      const constraints =
+        retentionFloor.trim() === ""
+          ? []
+          : ["deployment.min_retention:ge:" + retentionFloor.trim()];
+      setPareto(
+        await api.deploymentPareto(deploymentId, {
+          objectives,
+          constraints
+        })
+      );
+    } catch (reason) {
+      setPareto(null);
+      setParetoError(reason);
     }
   }
 
@@ -803,7 +862,19 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
                 <tbody>
                   {candidates.map((candidate) => (
                     <tr key={candidate.id}>
-                      <td><code>{candidate.id}</code></td>
+                      <td>
+                        <a
+                          className="text-link"
+                          href={
+                            "#/deployments/" +
+                            deploymentId +
+                            "/candidates/" +
+                            candidate.id
+                          }
+                        >
+                          <code>{candidate.id}</code>
+                        </a>
+                      </td>
                       <td>{candidate.placement_ids.length}</td>
                       <td>{candidate.rejection_count}</td>
                       <td><JsonDetails label="Coordinates" value={candidate.generation} /></td>
@@ -813,6 +884,244 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
               </table>
             </div>
           )}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-body">
+          <div className="section-heading-row">
+            <div>
+              <div className="eyebrow">Concurrent results</div>
+              <h2>DD / PP / PD / DP observations</h2>
+              <p className="section-copy">
+                Aggregate overlap throughput stays next to correctness and retention.
+                Open a Candidate for per-instance interference evidence.
+              </p>
+            </div>
+          </div>
+          {results.length === 0 ? (
+            <EmptyState title="No concurrent results yet." />
+          ) : (
+            <div className="candidate-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Phase</th>
+                    <th>Candidate</th>
+                    <th>Placement</th>
+                    <th>Status</th>
+                    <th>PP t/s</th>
+                    <th>TG t/s</th>
+                    <th>Min retention</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.slice().reverse().slice(0, 32).map((row, index) => {
+                    const candidateId = resultText(row, "deployment_candidate_id");
+                    const placementId = resultText(row, "deployment_placement_id");
+                    const retention = resultNumber(row, "min_retention");
+                    return (
+                      <tr key={(resultText(row, "workload_run_id") ?? "row") + ":" + index}>
+                        <td><strong>{(resultText(row, "phase") ?? "—").toUpperCase()}</strong></td>
+                        <td>
+                          {candidateId ? (
+                            <a
+                              className="text-link"
+                              href={
+                                "#/deployments/" +
+                                deploymentId +
+                                "/candidates/" +
+                                candidateId
+                              }
+                            >
+                              <code>{candidateId}</code>
+                            </a>
+                          ) : "—"}
+                        </td>
+                        <td><code>{placementId ?? "—"}</code></td>
+                        <td>
+                          <StatusBadge status={resultText(row, "workload_status") ?? "unknown"} />
+                        </td>
+                        <td>
+                          {resultNumber(row, "combined_pp_tps")?.toFixed(2) ?? "—"}
+                        </td>
+                        <td>
+                          {resultNumber(row, "combined_tg_tps")?.toFixed(2) ?? "—"}
+                        </td>
+                        <td>
+                          {retention === null ? "—" : (retention * 100).toFixed(1) + "%"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-body">
+          <div className="section-heading-row">
+            <div>
+              <div className="eyebrow">Optimization</div>
+              <h2>Deployment Pareto frontier</h2>
+              <p className="section-copy">
+                Constraints are applied before dominance. Failed or correctness-invalid
+                placements remain in raw results but never enter the valid frontier.
+              </p>
+            </div>
+          </div>
+          <div className="pareto-controls">
+            <div className="pareto-objective-card">
+              <strong>Objective X</strong>
+              <label className="field">
+                <span>Metric</span>
+                <select
+                  aria-label="Deployment objective X metric"
+                  value={paretoMetricA}
+                  onChange={(event) => setParetoMetricA(event.target.value)}
+                >
+                  <option value="deployment.combined_tg_tps">Combined decode TPS</option>
+                  <option value="deployment.combined_pp_tps">Combined prefill TPS</option>
+                  <option value="deployment.min_retention">Minimum retention</option>
+                  <option value="deployment.total_validated_context_tokens">Validated context</option>
+                  <option value="deployment.min_device_headroom_bytes">Runtime headroom</option>
+                  <option value="deployment.total_power_avg_w">Average power</option>
+                </select>
+              </label>
+              <div className="control-grid two">
+                <label className="field">
+                  <span>Direction</span>
+                  <select
+                    value={paretoDirectionA}
+                    onChange={(event) =>
+                      setParetoDirectionA(event.target.value as "max" | "min")
+                    }
+                  >
+                    <option value="max">Maximize</option>
+                    <option value="min">Minimize</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Phase filter</span>
+                  <select
+                    value={paretoPhaseA}
+                    onChange={(event) => setParetoPhaseA(event.target.value)}
+                  >
+                    <option value="">All phases</option>
+                    {deployment.definition.workload_mix.phases.map((phase) => (
+                      <option key={phase} value={phase}>{phase.toUpperCase()}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div className="pareto-objective-card">
+              <strong>Objective Y</strong>
+              <label className="field">
+                <span>Metric</span>
+                <select
+                  aria-label="Deployment objective Y metric"
+                  value={paretoMetricB}
+                  onChange={(event) => setParetoMetricB(event.target.value)}
+                >
+                  <option value="deployment.combined_tg_tps">Combined decode TPS</option>
+                  <option value="deployment.combined_pp_tps">Combined prefill TPS</option>
+                  <option value="deployment.min_retention">Minimum retention</option>
+                  <option value="deployment.total_validated_context_tokens">Validated context</option>
+                  <option value="deployment.min_device_headroom_bytes">Runtime headroom</option>
+                  <option value="deployment.total_power_avg_w">Average power</option>
+                </select>
+              </label>
+              <div className="control-grid two">
+                <label className="field">
+                  <span>Direction</span>
+                  <select
+                    value={paretoDirectionB}
+                    onChange={(event) =>
+                      setParetoDirectionB(event.target.value as "max" | "min")
+                    }
+                  >
+                    <option value="max">Maximize</option>
+                    <option value="min">Minimize</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Phase filter</span>
+                  <select
+                    value={paretoPhaseB}
+                    onChange={(event) => setParetoPhaseB(event.target.value)}
+                  >
+                    <option value="">All phases</option>
+                    {deployment.definition.workload_mix.phases.map((phase) => (
+                      <option key={phase} value={phase}>{phase.toUpperCase()}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div className="control-grid two pareto-constraint-row">
+            <label className="field">
+              <span>Minimum retention constraint · optional</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={retentionFloor}
+                placeholder="0.75"
+                onChange={(event) => setRetentionFloor(event.target.value)}
+              />
+            </label>
+            <div className="button-row self-end">
+              <button className="button button-primary" onClick={() => void loadPareto()}>
+                Calculate frontier
+              </button>
+            </div>
+          </div>
+          <ErrorBanner error={paretoError} />
+          {pareto ? (
+            pareto.result.frontier.length === 0 ? (
+              <EmptyState title="No placement satisfies the selected objective evidence." />
+            ) : (
+              <div className="candidate-table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Candidate</th>
+                      <th>Placement</th>
+                      <th>X</th>
+                      <th>Y</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pareto.result.frontier.map((point) => (
+                      <tr key={point.deployment_placement_id}>
+                        <td>
+                          <a
+                            className="text-link"
+                            href={
+                              "#/deployments/" +
+                              deploymentId +
+                              "/candidates/" +
+                              point.deployment_candidate_id
+                            }
+                          >
+                            <code>{point.deployment_candidate_id}</code>
+                          </a>
+                        </td>
+                        <td><code>{point.deployment_placement_id}</code></td>
+                        <td>{point.values.x?.toFixed(3) ?? "—"}</td>
+                        <td>{point.values.y?.toFixed(3) ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : null}
         </div>
       </section>
 
