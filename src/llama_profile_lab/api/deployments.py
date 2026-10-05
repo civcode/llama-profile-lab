@@ -256,8 +256,15 @@ class DeploymentProgressDTO(ApiModel):
     completed_candidates: NonNegativeInt
     failed_candidates: NonNegativeInt
     active_deployment_run: str | None
+    current_deployment_candidate_id: str | None
+    current_placement_id: str | None
     member_states: tuple[DeploymentRunMemberDTO, ...]
     current_workload_phase: str | None
+    combined_prompt_tps: float | None
+    combined_decode_tps: float | None
+    memory: DeploymentMemoryMatrix | None
+    failure_kind: str | None
+    failure_details: dict[str, Any] | None
     operation: DeploymentOperationDTO | None
 
 
@@ -594,7 +601,9 @@ class DeploymentApiService:
             ).fetchone()
             run_row = connection.execute(
                 f"""
-                SELECT id, status
+                SELECT id, deployment_candidate_id,
+                       deployment_placement_id, status,
+                       failure_kind, failure_details_json
                 FROM deployment_run
                 WHERE deployment_candidate_id IN ({placeholders})
                 ORDER BY created_at DESC, id DESC
@@ -608,7 +617,9 @@ class DeploymentApiService:
                 if run_id is None
                 else connection.execute(
                     """
-                    SELECT phase
+                    SELECT phase, combined_prompt_tps,
+                           combined_decode_tps, failure_kind,
+                           failure_details_json
                     FROM deployment_workload_run
                     WHERE deployment_run_id = ?
                     ORDER BY created_at DESC, id DESC
@@ -644,6 +655,48 @@ class DeploymentApiService:
             "running",
         }:
             active_run = run_id
+
+        current_candidate_id = (
+            None
+            if run_row is None
+            else str(run_row["deployment_candidate_id"])
+        )
+        current_placement_id = (
+            None
+            if run_row is None
+            or run_row["deployment_placement_id"] is None
+            else str(run_row["deployment_placement_id"])
+        )
+        memory = None
+        if current_placement_id is not None and run_id is not None:
+            try:
+                memory = self.analysis.memory_matrix(
+                    current_placement_id,
+                    deployment_run_id=run_id,
+                )
+            except DeploymentAnalysisError:
+                memory = None
+
+        workload_failure_kind = (
+            None
+            if phase_row is None
+            else phase_row["failure_kind"]
+        )
+        workload_failure_details = (
+            None
+            if phase_row is None
+            or phase_row["failure_details_json"] is None
+            else _json_object(phase_row["failure_details_json"])
+        )
+        run_failure_kind = (
+            None if run_row is None else run_row["failure_kind"]
+        )
+        run_failure_details = (
+            None
+            if run_row is None
+            or run_row["failure_details_json"] is None
+            else _json_object(run_row["failure_details_json"])
+        )
         return DeploymentProgressDTO(
             deployment_candidate_id=deployment_id,
             deployment_status=deployment_status,
@@ -651,9 +704,39 @@ class DeploymentApiService:
             completed_candidates=int(counts["completed"]),
             failed_candidates=int(counts["failed"]),
             active_deployment_run=active_run,
+            current_deployment_candidate_id=current_candidate_id,
+            current_placement_id=current_placement_id,
             member_states=members,
             current_workload_phase=(
                 None if phase_row is None else str(phase_row["phase"])
+            ),
+            combined_prompt_tps=(
+                None
+                if phase_row is None
+                or phase_row["combined_prompt_tps"] is None
+                else float(phase_row["combined_prompt_tps"])
+            ),
+            combined_decode_tps=(
+                None
+                if phase_row is None
+                or phase_row["combined_decode_tps"] is None
+                else float(phase_row["combined_decode_tps"])
+            ),
+            memory=memory,
+            failure_kind=(
+                None
+                if workload_failure_kind is None
+                and run_failure_kind is None
+                else str(
+                    workload_failure_kind
+                    if workload_failure_kind is not None
+                    else run_failure_kind
+                )
+            ),
+            failure_details=(
+                workload_failure_details
+                if workload_failure_details is not None
+                else run_failure_details
             ),
             operation=_operation_dto(operation),
         )
