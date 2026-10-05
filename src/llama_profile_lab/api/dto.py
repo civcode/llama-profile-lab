@@ -384,6 +384,33 @@ class PromotionResponse(ApiModel):
     validation: dict[str, Any]
 
 
+class DeploymentPromotionSourceDTO(ApiModel):
+    instance_id: Annotated[str, Field(min_length=1)]
+    experiment_id: Annotated[str, Field(min_length=1)]
+    source_profile_id: Annotated[str, Field(min_length=1)] | None = None
+
+
+class DeploymentPromotionRequest(ApiModel):
+    deployment_placement_id: Annotated[str, Field(min_length=1)]
+    sources: Annotated[
+        tuple[DeploymentPromotionSourceDTO, ...],
+        Field(min_length=2),
+    ]
+
+
+class DeploymentPromotionResponse(ApiModel):
+    id: str
+    base_deployment_candidate_id: str
+    deployment_candidate_id: str
+    deployment_placement_id: str
+    sources: tuple[dict[str, Any], ...]
+    changes: tuple[dict[str, Any], ...]
+    patch: str
+    source_snapshot: dict[str, Any]
+    proposed_snapshot: dict[str, Any]
+    evidence: dict[str, Any]
+
+
 class ParameterDefinitionDTO(ApiModel):
     path: str
     label: str
