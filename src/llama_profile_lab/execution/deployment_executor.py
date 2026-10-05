@@ -9,7 +9,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from typing import Protocol
 
 from llama_profile_lab.db import (
@@ -171,6 +171,51 @@ class _RuntimeMemoryCheck:
     missing_devices: tuple[str, ...] = ()
 
 
+class _DeploymentGpuSampler:
+    """Collect GPU snapshots across the resident deployment interval."""
+
+    def __init__(
+        self,
+        provider: GpuSnapshotProvider,
+        *,
+        interval_seconds: float,
+    ) -> None:
+        self.provider = provider
+        self.interval_seconds = interval_seconds
+        self._stop = Event()
+        self._thread: Thread | None = None
+        self._samples: list[tuple[int, tuple[GpuTelemetrySample, ...]]] = []
+
+    def start(self) -> None:
+        self._capture()
+        self._thread = Thread(
+            target=self._run,
+            name="llprof-deployment-gpu-sampler",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(
+        self,
+    ) -> tuple[tuple[int, tuple[GpuTelemetrySample, ...]], ...]:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        self._capture()
+        return tuple(self._samples)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            self._capture()
+
+    def _capture(self) -> None:
+        try:
+            samples = self.provider.sample()
+        except Exception:
+            return
+        self._samples.append((time.monotonic_ns(), samples))
+
+
 class DeploymentProcessRegistry:
     """Track all member processes and stop every registered process group."""
 
@@ -258,6 +303,7 @@ class DeploymentExecutor:
         ] | None = None,
         host_detector: Callable[[], BasicHostInfo] = detect_basic_host,
         gpu_provider: GpuSnapshotProvider | None = None,
+        gpu_sample_interval_seconds: float = 1.0,
     ) -> None:
         self.database = database
         self.server_adapter = server_adapter or LlamaServerAdapter()
@@ -266,6 +312,9 @@ class DeploymentExecutor:
         )
         self.host_detector = host_detector
         self.gpu_provider = gpu_provider or AutoGpuTelemetryProvider()
+        if gpu_sample_interval_seconds <= 0:
+            raise ValueError("GPU sample interval must be positive")
+        self.gpu_sample_interval_seconds = gpu_sample_interval_seconds
 
     def execute(
         self,
@@ -376,6 +425,7 @@ class DeploymentExecutor:
             missing_devices=(),
         )
         resident_result: Mapping[str, object] = {}
+        gpu_sampler: _DeploymentGpuSampler | None = None
 
         try:
             member_plans = self._prepare_members(
@@ -473,6 +523,13 @@ class DeploymentExecutor:
                             "runtime GPU memory headroom violated planned margin"
                         )
 
+            if failure_message is None:
+                gpu_sampler = _DeploymentGpuSampler(
+                    self.gpu_provider,
+                    interval_seconds=self.gpu_sample_interval_seconds,
+                )
+                gpu_sampler.start()
+
             if failure_message is None and resident_action is not None:
                 with self.database.session() as connection:
                     DeploymentRunRepository(connection).set_status(
@@ -527,6 +584,23 @@ class DeploymentExecutor:
         finally:
             if reservations is not None:
                 reservations.close()
+            if gpu_sampler is not None:
+                try:
+                    gpu_samples = gpu_sampler.stop()
+                    with self.database.session() as connection:
+                        runs = DeploymentRunRepository(connection)
+                        for timestamp_ns, samples in gpu_samples:
+                            runs.add_gpu_sample(
+                                run_id,
+                                timestamp_ns=timestamp_ns,
+                                gpus=samples,
+                            )
+                except Exception as exc:
+                    if failure_message is None:
+                        failure_kind = "telemetry_incomplete"
+                        failure_message = (
+                            f"deployment GPU telemetry persistence failed: {exc}"
+                        )
 
         cleanup = registry.stop_all()
         cleanup_failed = any(error is not None for _, error in cleanup.values())
