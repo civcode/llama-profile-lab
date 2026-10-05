@@ -412,17 +412,16 @@ class AutoGpuTelemetryProvider:
 
     def __init__(self, *, sys_root: Path = Path("/sys")) -> None:
         executable = shutil.which("nvidia-smi")
-        providers: list[tuple[str, GpuTelemetryProvider]] = []
-        if executable is not None:
-            providers.append(
-                (
-                    "nvidia-smi",
-                    NvidiaSmiGpuTelemetryProvider(Path(executable)),
-                )
-            )
-        providers.append(
-            ("sysfs", SysfsGpuTelemetryProvider(sys_root=sys_root))
+        self.nvidia = (
+            NvidiaSmiGpuTelemetryProvider(Path(executable))
+            if executable is not None
+            else None
         )
+        self.sysfs = SysfsGpuTelemetryProvider(sys_root=sys_root)
+        providers: list[tuple[str, GpuTelemetryProvider]] = []
+        if self.nvidia is not None:
+            providers.append(("nvidia-smi", self.nvidia))
+        providers.append(("sysfs", self.sysfs))
         self.composite = CompositeGpuTelemetryProvider(tuple(providers))
 
     def sample(self) -> tuple[GpuTelemetrySample, ...]:
