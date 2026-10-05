@@ -35,10 +35,14 @@ from llama_profile_lab.db.records import BinaryRecord
 from llama_profile_lab.diagnostics import inspect_database
 from llama_profile_lab.domain.base import JsonScalar
 from llama_profile_lab.execution import (
+    DeviceInventoryError,
+    DeviceInventoryService,
     ExecutionError,
     ExecutionSummary,
     ExperimentExecutor,
     HostLockError,
+    MemoryEstimatorError,
+    MemoryEstimatorService,
     ServerValidationError,
     ServerValidationService,
 )
@@ -58,6 +62,7 @@ _BINARY_KIND_CHOICES = (
     "auto",
     "llama-bench",
     "llama-fit-params",
+    "llama-memory-estimator",
     "llama-server",
     "speed-bench",
 )
@@ -260,6 +265,14 @@ def _add_binary_parser(
     compare.add_argument("right_id")
     _add_database_argument(compare)
 
+    devices = binary_commands.add_parser(
+        "devices",
+        help="Discover logical devices exposed by one exact registered binary.",
+    )
+    devices.add_argument("binary_id")
+    devices.add_argument("--timeout-seconds", type=float, default=30.0)
+    _add_database_argument(devices)
+
 
 def _add_run_parser(
     commands: argparse._SubParsersAction[argparse.ArgumentParser],
@@ -303,6 +316,28 @@ def _add_placement_parser(
     )
     show.add_argument("placement_id")
     _add_database_argument(show)
+
+    estimate = placement_commands.add_parser(
+        "estimate",
+        help="Run or reuse a structured per-device memory estimate.",
+    )
+    estimate.add_argument("candidate_id")
+    estimate.add_argument(
+        "--helper-binary",
+        required=True,
+        dest="helper_binary_id",
+        help="Registered llama-memory-estimator binary ID.",
+    )
+    estimate.add_argument("--model-path", required=True, type=Path)
+    estimate.add_argument(
+        "--device",
+        action="append",
+        default=None,
+        dest="devices",
+        help="Ordered logical device name; repeat to select multiple devices.",
+    )
+    estimate.add_argument("--timeout-seconds", type=float, default=300.0)
+    _add_database_argument(estimate)
 
 
 def _add_results_parser(
@@ -1388,6 +1423,84 @@ def _binary_compare_command(
     return 0
 
 
+def _binary_devices_command(
+    database_path: Path,
+    binary_id: str,
+    *,
+    timeout_seconds: float,
+) -> int:
+    try:
+        result = DeviceInventoryService(Database(database_path)).inspect(
+            binary_id,
+            timeout_seconds=timeout_seconds,
+        )
+    except DeviceInventoryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Host: {result.host_id}")
+    print(f"Binary: {result.binary_id}")
+    for device in result.devices:
+        total = (
+            "-"
+            if device.total_memory_bytes is None
+            else str(device.total_memory_bytes)
+        )
+        free = (
+            "-"
+            if device.free_memory_bytes is None
+            else str(device.free_memory_bytes)
+        )
+        physical = device.physical_device_key or "unresolved"
+        print(
+            f"{device.logical_device_name}\t{device.backend}\t"
+            f"{device.product_name or '-'}\t"
+            f"total={total}\tfree={free}\tphysical={physical}"
+        )
+    return 0
+
+
+def _placement_estimate_command(
+    database_path: Path,
+    candidate_id: str,
+    *,
+    helper_binary_id: str,
+    model_path: Path,
+    devices: Sequence[str] | None,
+    timeout_seconds: float,
+) -> int:
+    try:
+        result = MemoryEstimatorService(Database(database_path)).estimate(
+            candidate_id,
+            helper_binary_id=helper_binary_id,
+            model_path=model_path,
+            selected_devices=(
+                None if devices is None else tuple(devices)
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+    except MemoryEstimatorError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Estimate: {result.estimate_id}")
+    print(f"Attempt: {result.attempt_id}")
+    print(f"Cache: {'hit' if result.cache_hit else 'miss'}")
+    print(f"GPU layers: {result.output.resolved.n_gpu_layers}")
+    print(f"Devices: {','.join(result.output.resolved.devices)}")
+    for device in result.output.devices:
+        print(
+            f"{device.logical_device_name}\t"
+            f"model={device.model_bytes}\t"
+            f"context={device.context_bytes}\t"
+            f"compute={device.compute_bytes}\t"
+            f"total={device.total_bytes}\t"
+            f"free={device.device_free_bytes}/"
+            f"{device.device_total_bytes}"
+        )
+    return 0
+
+
 def _persist_probe(repository: EnvironmentRepository, probe: BinaryProbe) -> str:
     return repository.put_binary(
         sha256=probe.sha256,
@@ -1425,7 +1538,13 @@ def _capabilities_from_record(record: BinaryRecord) -> CapabilitySet:
 
 
 def _record_kind(value: str) -> BinaryKind:
-    if value not in {"llama-bench", "llama-fit-params", "llama-server", "speed-bench"}:
+    if value not in {
+        "llama-bench",
+        "llama-fit-params",
+        "llama-memory-estimator",
+        "llama-server",
+        "speed-bench",
+    }:
         raise ValueError(f"unknown persisted binary kind: {value}")
     return cast(BinaryKind, value)
 
@@ -1495,6 +1614,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _binary_list_command(args.database)
         if args.binary_command == "compare":
             return _binary_compare_command(args.database, args.left_id, args.right_id)
+        if args.binary_command == "devices":
+            return _binary_devices_command(
+                args.database,
+                args.binary_id,
+                timeout_seconds=args.timeout_seconds,
+            )
 
     if args.command == "run" and args.run_command == "show":
         return _run_show_command(args.database, args.run_id, include_logs=args.logs)
@@ -1504,6 +1629,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _placement_list_command(args.database)
         if args.placement_command == "show":
             return _placement_show_command(args.database, args.placement_id)
+        if args.placement_command == "estimate":
+            return _placement_estimate_command(
+                args.database,
+                args.candidate_id,
+                helper_binary_id=args.helper_binary_id,
+                model_path=args.model_path,
+                devices=args.devices,
+                timeout_seconds=args.timeout_seconds,
+            )
 
     if args.command == "server":
         if args.server_command == "validate":
