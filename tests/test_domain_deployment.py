@@ -6,6 +6,9 @@ from pydantic import ValidationError
 from llama_profile_lab.domain import (
     BackendPair,
     DeploymentCandidate,
+    DeploymentDeviceAllocation,
+    DeploymentInstancePlacement,
+    DeploymentPlacement,
     DeploymentPlacementRequest,
     DeploymentWorkloadMix,
     HostResourcePolicy,
@@ -150,4 +153,53 @@ def test_deployment_round_trips_through_canonical_json() -> None:
 def test_resource_policy_rejects_duplicate_devices() -> None:
     with pytest.raises(ValidationError, match="allowed_devices"):
         HostResourcePolicy(allowed_devices=("CUDA0", "CUDA0"))
+
+def test_placement_identity_ignores_measurement_time_and_provenance() -> None:
+    base_memory = PlacementDeviceMemory(
+        instance_id="qwen",
+        device_id="CUDA0",
+        model_bytes=4,
+        context_bytes=3,
+        compute_bytes=2,
+        total_bytes=9,
+        device_total_bytes=100,
+        device_free_bytes=50,
+        source="fixture",
+        measured_at="2026-10-05T12:00:00Z",
+    )
+    left = DeploymentPlacement(
+        deployment_candidate_id="deploy_1",
+        host_id="host_1",
+        instance_placements=(
+            DeploymentInstancePlacement(
+                instance_id="qwen",
+                resolved_placement_id="place_1",
+            ),
+        ),
+        device_memory=(base_memory,),
+        device_allocations=(
+            DeploymentDeviceAllocation(
+                device_id="CUDA0",
+                projected_bytes=9,
+                reserved_margin_bytes=10,
+                device_total_bytes=100,
+                projected_free_bytes=81,
+            ),
+        ),
+        feasibility="feasible",
+        provenance={"estimator": "first"},
+    )
+    right = left.model_copy(
+        update={
+            "device_memory": (
+                base_memory.model_copy(
+                    update={"measured_at": "2026-10-05T12:01:00Z"}
+                ),
+            ),
+            "provenance": {"estimator": "second"},
+        }
+    )
+
+    assert left != right
+    assert left.content_hash() == right.content_hash()
 
