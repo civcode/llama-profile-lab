@@ -15,11 +15,11 @@ from llama_profile_lab.execution.concurrent_workloads import (
 )
 from llama_profile_lab.execution.deployment_executor import (
     DeploymentExecutionError,
-    DeploymentResidentActionError,
     DeploymentExecutionMember,
     DeploymentExecutionSummary,
     DeploymentExecutor,
     DeploymentProcessRegistry,
+    DeploymentResidentActionError,
     DeploymentServerInput,
     ResidentDeployment,
     ResidentDeploymentAction,
