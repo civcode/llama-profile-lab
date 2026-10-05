@@ -6,6 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 from statistics import fmean
+from typing import Literal, cast
 
 from llama_profile_lab.analysis import (
     DEFAULT_METRIC_REGISTRY,
@@ -1620,7 +1621,10 @@ def parse_deployment_objectives(
                 "KEY:DIRECTION:METRIC[@PATH=VALUE;...]"
             )
         key, raw_direction, metric = parts
-        direction_map = {
+        direction_map: dict[
+            str,
+            Literal["maximize", "minimize"],
+        ] = {
             "max": "maximize",
             "maximize": "maximize",
             "min": "minimize",
@@ -1673,6 +1677,10 @@ def parse_deployment_constraints(
             raise ValueError(
                 "deployment constraint operator must be ge/gt/le/lt/eq"
             )
+        typed_operator = cast(
+            Literal["ge", "gt", "le", "lt", "eq"],
+            operator,
+        )
         try:
             threshold = float(raw_value)
         except ValueError as exc:
@@ -1693,7 +1701,7 @@ def parse_deployment_constraints(
         constraints.append(
             DeploymentMetricConstraint(
                 metric=metric,
-                operator=operator,
+                operator=typed_operator,
                 value=threshold,
                 filters=filters,
             )
