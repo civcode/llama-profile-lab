@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import Field, NonNegativeInt
 
 from llama_profile_lab.analysis import (
@@ -17,6 +19,12 @@ from llama_profile_lab.analysis import (
     DeploymentMetricConstraint,
     DeploymentParetoObjective,
     DeploymentParetoResult,
+)
+from llama_profile_lab.api.deployment_operations import (
+    DeploymentExecutionSpec,
+    DeploymentOperationError,
+    DeploymentOperationManager,
+    DeploymentOperationSnapshot,
 )
 from llama_profile_lab.api.dto import ApiModel
 from llama_profile_lab.api.service import ApiConflictError, ApiNotFoundError
@@ -30,6 +38,10 @@ from llama_profile_lab.domain import (
     DeploymentCandidate,
     DeploymentPlacement,
     DeploymentSearchSpace,
+)
+from llama_profile_lab.execution import (
+    DeploymentServerInput,
+    StandaloneBaselineInput,
 )
 from llama_profile_lab.planning import (
     DeploymentEstimatorInput,
@@ -191,13 +203,77 @@ class DeploymentParetoRequest(ApiModel):
     filters: tuple[DeploymentAnalysisFilter, ...] = ()
 
 
+class DeploymentServerInputDTO(ApiModel):
+    """Filesystem inputs required for one deployment server."""
+
+    instance_id: Annotated[str, Field(min_length=1)]
+    model_path: Annotated[str, Field(min_length=1)]
+    draft_model_path: Annotated[str, Field(min_length=1)] | None = None
+
+
+class StandaloneBaselineInputDTO(ApiModel):
+    """Exact standalone denominator supplied to concurrent execution."""
+
+    instance_id: Annotated[str, Field(min_length=1)]
+    mode: str
+    prompt_tokens: NonNegativeInt
+    generate_tokens: NonNegativeInt
+    depth_tokens: NonNegativeInt
+    throughput_tps: Annotated[float, Field(gt=0)]
+    latency_ms: Annotated[float, Field(ge=0)] | None = None
+
+
+class DeploymentRunRequest(ApiModel):
+    """Start or replay one persisted deployment placement."""
+
+    deployment_placement_id: Annotated[str, Field(min_length=1)]
+    instances: Annotated[
+        tuple[DeploymentServerInputDTO, ...],
+        Field(min_length=1),
+    ]
+    standalone_baselines: tuple[StandaloneBaselineInputDTO, ...] = ()
+    host: Annotated[str, Field(min_length=1)] = "127.0.0.1"
+    readiness_timeout_seconds: Annotated[float, Field(gt=0)] = 300.0
+
+
+class DeploymentOperationDTO(ApiModel):
+    id: str
+    deployment_candidate_id: str
+    status: str
+    started_at: str
+    finished_at: str | None
+    requested_action: str | None
+    deployment_run_id: str | None
+    deployment_placement_id: str
+    phase_count: NonNegativeInt | None
+    error: str | None
+
+
+class DeploymentProgressDTO(ApiModel):
+    deployment_candidate_id: str
+    deployment_status: str
+    planned_candidates: NonNegativeInt
+    completed_candidates: NonNegativeInt
+    failed_candidates: NonNegativeInt
+    active_deployment_run: str | None
+    member_states: tuple[DeploymentRunMemberDTO, ...]
+    current_workload_phase: str | None
+    operation: DeploymentOperationDTO | None
+
+
 class DeploymentApiService:
     """Stable application boundary over V2 planning, persistence, and analysis."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        operations: DeploymentOperationManager | None = None,
+    ) -> None:
         self.database = database
         self.planner = DeploymentPlannerService(database)
         self.analysis = DeploymentAnalysisService(database)
+        self.operations = operations or DeploymentOperationManager(database)
 
     def create(self, request: DeploymentCreateRequest) -> DeploymentDTO:
         try:
@@ -434,6 +510,206 @@ class DeploymentApiService:
         except DeploymentAnalysisError as exc:
             raise ApiConflictError(str(exc)) from exc
 
+    def run(
+        self,
+        deployment_id: str,
+        request: DeploymentRunRequest,
+    ) -> DeploymentProgressDTO:
+        self.get(deployment_id)
+        spec = self._execution_spec(deployment_id, request)
+        try:
+            self.operations.start(deployment_id, spec=spec)
+        except DeploymentOperationError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return self.progress(deployment_id)
+
+    def resume(
+        self,
+        deployment_id: str,
+        request: DeploymentRunRequest | None = None,
+    ) -> DeploymentProgressDTO:
+        self.get(deployment_id)
+        spec = (
+            None
+            if request is None
+            else self._execution_spec(deployment_id, request)
+        )
+        try:
+            self.operations.resume(deployment_id, spec=spec)
+        except DeploymentOperationError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return self.progress(deployment_id)
+
+    def pause(self, deployment_id: str) -> DeploymentProgressDTO:
+        self.get(deployment_id)
+        try:
+            self.operations.pause(deployment_id)
+        except DeploymentOperationError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return self.progress(deployment_id)
+
+    def cancel(self, deployment_id: str) -> DeploymentProgressDTO:
+        self.get(deployment_id)
+        try:
+            self.operations.cancel(deployment_id)
+        except DeploymentOperationError as exc:
+            raise ApiConflictError(str(exc)) from exc
+        return self.progress(deployment_id)
+
+    def progress(self, deployment_id: str) -> DeploymentProgressDTO:
+        self.get(deployment_id)
+        operation = self.operations.snapshot(deployment_id)
+        with self.database.session() as connection:
+            counts = connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(DISTINCT dpc.deployment_candidate_id)
+                     FROM deployment_plan_case AS dpc
+                     JOIN deployment_plan AS dp
+                       ON dp.id = dpc.deployment_plan_id
+                     WHERE dp.base_deployment_candidate_id = ?) AS planned,
+                    (SELECT COUNT(DISTINCT deployment_placement_id)
+                     FROM deployment_run
+                     WHERE deployment_candidate_id = ?
+                       AND status = 'completed') AS completed,
+                    (SELECT COUNT(DISTINCT deployment_placement_id)
+                     FROM deployment_run
+                     WHERE deployment_candidate_id = ?
+                       AND status = 'failed') AS failed
+                """,
+                (deployment_id, deployment_id, deployment_id),
+            ).fetchone()
+            run_row = connection.execute(
+                """
+                SELECT id, status
+                FROM deployment_run
+                WHERE deployment_candidate_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (deployment_id,),
+            ).fetchone()
+            run_id = None if run_row is None else str(run_row["id"])
+            phase_row = (
+                None
+                if run_id is None
+                else connection.execute(
+                    """
+                    SELECT phase
+                    FROM deployment_workload_run
+                    WHERE deployment_run_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                ).fetchone()
+            )
+            members = (
+                ()
+                if run_id is None
+                else self._run_members(
+                    DeploymentRunRepository(connection),
+                    run_id,
+                )
+            )
+
+        if counts is None:
+            raise RuntimeError("deployment progress count query returned no row")
+        if operation is not None:
+            deployment_status = operation.status
+        elif run_row is not None:
+            deployment_status = str(run_row["status"])
+        elif int(counts["planned"]) > 0:
+            deployment_status = "planned"
+        else:
+            deployment_status = "draft"
+
+        active_run = None
+        if run_row is not None and str(run_row["status"]) in {
+            "starting",
+            "ready",
+            "running",
+        }:
+            active_run = run_id
+        return DeploymentProgressDTO(
+            deployment_candidate_id=deployment_id,
+            deployment_status=deployment_status,
+            planned_candidates=int(counts["planned"]),
+            completed_candidates=int(counts["completed"]),
+            failed_candidates=int(counts["failed"]),
+            active_deployment_run=active_run,
+            member_states=members,
+            current_workload_phase=(
+                None if phase_row is None else str(phase_row["phase"])
+            ),
+            operation=_operation_dto(operation),
+        )
+
+    def _execution_spec(
+        self,
+        deployment_id: str,
+        request: DeploymentRunRequest,
+    ) -> DeploymentExecutionSpec:
+        placement = self.placement(
+            deployment_id,
+            request.deployment_placement_id,
+        )
+        if placement.feasibility != "feasible":
+            raise ApiConflictError(
+                "only feasible deployment placements can be executed"
+            )
+        return DeploymentExecutionSpec(
+            deployment_placement_id=request.deployment_placement_id,
+            inputs=tuple(
+                DeploymentServerInput(
+                    instance_id=item.instance_id,
+                    model_path=Path(item.model_path),
+                    draft_model_path=(
+                        None
+                        if item.draft_model_path is None
+                        else Path(item.draft_model_path)
+                    ),
+                )
+                for item in request.instances
+            ),
+            standalone_baselines=tuple(
+                StandaloneBaselineInput(
+                    instance_id=item.instance_id,
+                    mode=item.mode,
+                    prompt_tokens=item.prompt_tokens,
+                    generate_tokens=item.generate_tokens,
+                    depth_tokens=item.depth_tokens,
+                    throughput_tps=item.throughput_tps,
+                    latency_ms=item.latency_ms,
+                )
+                for item in request.standalone_baselines
+            ),
+            host=request.host,
+            readiness_timeout_seconds=request.readiness_timeout_seconds,
+        )
+
+    @staticmethod
+    def _run_members(
+        repository: DeploymentRunRepository,
+        run_id: str,
+    ) -> tuple[DeploymentRunMemberDTO, ...]:
+        return tuple(
+            DeploymentRunMemberDTO(
+                instance_id=item.instance_id,
+                endpoint=item.endpoint,
+                status=item.member_status,
+                pid=item.pid,
+                started_at=item.started_at,
+                ready_at=item.ready_at,
+                finished_at=item.finished_at,
+                exit_code=item.exit_code,
+                forced_kill=item.forced_kill,
+                cleanup_error=item.cleanup_error,
+                result=dict(item.result),
+            )
+            for item in repository.members(run_id)
+        )
+
     @staticmethod
     def _placement_dto(
         repository: DeploymentPlacementRepository,
@@ -614,6 +890,73 @@ def register_deployment_routes(
             deployment_run_id=deployment_run_id,
         )
 
+    @app.post(
+        "/api/deployments/{deployment_id}/run",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def run_deployment(
+        deployment_id: str,
+        request: DeploymentRunRequest,
+    ) -> DeploymentProgressDTO:
+        return service.run(deployment_id, request)
+
+    @app.post(
+        "/api/deployments/{deployment_id}/pause",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def pause_deployment(deployment_id: str) -> DeploymentProgressDTO:
+        return service.pause(deployment_id)
+
+    @app.post(
+        "/api/deployments/{deployment_id}/resume",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def resume_deployment(
+        deployment_id: str,
+        request: DeploymentRunRequest | None = None,
+    ) -> DeploymentProgressDTO:
+        return service.resume(deployment_id, request)
+
+    @app.post(
+        "/api/deployments/{deployment_id}/cancel",
+        response_model=DeploymentProgressDTO,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def cancel_deployment(deployment_id: str) -> DeploymentProgressDTO:
+        return service.cancel(deployment_id)
+
+    @app.get(
+        "/api/deployments/{deployment_id}/progress",
+        response_model=DeploymentProgressDTO,
+    )
+    def deployment_progress(deployment_id: str) -> DeploymentProgressDTO:
+        return service.progress(deployment_id)
+
+    @app.get(
+        "/api/deployments/{deployment_id}/events",
+        response_class=StreamingResponse,
+    )
+    async def deployment_events(
+        deployment_id: str,
+        request: Request,
+    ) -> StreamingResponse:
+        service.get(deployment_id)
+        return StreamingResponse(
+            _deployment_progress_events(
+                service,
+                deployment_id,
+                request,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @app.get(
         "/api/deployments/{deployment_id}/runs",
         response_model=DeploymentRunListResponse,
@@ -637,6 +980,48 @@ def register_deployment_routes(
         request: DeploymentParetoRequest,
     ) -> DeploymentParetoResult:
         return service.pareto(deployment_id, request)
+
+
+async def _deployment_progress_events(
+    service: DeploymentApiService,
+    deployment_id: str,
+    request: Request,
+):
+    previous: str | None = None
+    while not await request.is_disconnected():
+        progress = service.progress(deployment_id)
+        payload = progress.model_dump_json()
+        if payload != previous:
+            yield f"event: progress\ndata: {payload}\n\n"
+            previous = payload
+        operation = progress.operation
+        if operation is None or operation.status in {
+            "completed",
+            "paused",
+            "cancelled",
+            "failed",
+        }:
+            return
+        await asyncio.sleep(0.25)
+
+
+def _operation_dto(
+    snapshot: DeploymentOperationSnapshot | None,
+) -> DeploymentOperationDTO | None:
+    if snapshot is None:
+        return None
+    return DeploymentOperationDTO(
+        id=snapshot.id,
+        deployment_candidate_id=snapshot.deployment_candidate_id,
+        status=snapshot.status,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        requested_action=snapshot.requested_action,
+        deployment_run_id=snapshot.deployment_run_id,
+        deployment_placement_id=snapshot.deployment_placement_id,
+        phase_count=snapshot.phase_count,
+        error=snapshot.error,
+    )
 
 
 def _json_object(raw: object) -> dict[str, Any]:
